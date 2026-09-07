@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.base.json",
+  // Browser code: the DOM, and none of node's globals, so an accidental import of a node
+  // module fails here rather than in someone's phone.
+  "compilerOptions": { "noEmit": true, "lib": ["ES2022", "DOM"], "types": [] },
+  "include": ["src", "test"]
+}

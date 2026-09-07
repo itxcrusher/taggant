@@ -14,10 +14,11 @@
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
-    "typescript": "5.7.2",
+    "@types/node": "22.10.2",
+    "playwright": "^1.63.0",
     "tsup": "8.3.5",
-    "vitest": "2.1.8",
-    "@types/node": "22.10.2"
+    "typescript": "5.7.2",
+    "vitest": "2.1.8"
   },
   "packageManager": "pnpm@11.1.3"
 }

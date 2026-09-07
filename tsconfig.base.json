@@ -15,7 +15,8 @@
     "baseUrl": ".",
     "paths": {
       "@taggant/manifest": ["packages/manifest/src/index.ts"],
-      "@taggant/vision": ["packages/vision/src/index.ts"]
+      "@taggant/vision": ["packages/vision/src/index.ts"],
+      "@taggant/runtime": ["packages/runtime/src/index.ts"]
     },
     "forceConsistentCasingInFileNames": true
   }

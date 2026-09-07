@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>taggant runtime harness</title>
+    <style>
+      body { margin: 0; background: #111; }
+      #stage { width: 640px; height: 480px; }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+    <script type="module">
+      import { mountExperience } from "/runtime.js";
+
+      const [manifest, target] = await Promise.all([
+        fetch("/manifest.json").then((r) => r.json()),
+        fetch("/target.json").then((r) => r.json()),
+      ]);
+
+      // The target file carries descriptors as plain arrays, because typed arrays do not
+      // survive JSON. This is the same rebuild any consumer has to do.
+      const tracking = {
+        id: target.id,
+        width: target.width,
+        height: target.height,
+        features: target.features.map((f) => ({ ...f, descriptor: Uint32Array.from(f.descriptor) })),
+      };
+
+      window.taggantStates = [];
+      try {
+        window.taggantExperience = await mountExperience({
+          manifest,
+          targets: [tracking],
+          container: document.getElementById("stage"),
+          options: {
+            resolve: (src) => `/${src}`,
+            onStateChange: (state) => window.taggantStates.push(state),
+          },
+        });
+      } catch (error) {
+        window.taggantError = String(error);
+      }
+    </script>
+  </body>
+</html>

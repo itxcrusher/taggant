@@ -20,5 +20,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r typecheck
       - run: pnpm check
+      # The runtime is browser code and its test drives a real Chromium against a
+      # synthetic camera, so the browser has to be here before the tests run. It also
+      # needs the runtime bundle, which is why that one package is built first.
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm --filter @taggant/runtime build
       - run: pnpm -r test
       - run: pnpm -r build

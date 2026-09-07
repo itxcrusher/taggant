@@ -1,0 +1,130 @@
+import type { GrayscaleImage } from "@taggant/vision";
+
+export interface CameraOptions {
+  /**
+   * Width the frames are tracked at.
+   *
+   * Not the width they are shown at. Recognition runs on every frame, and the cost is
+   * roughly the pixel count, so this is the one number that decides whether the loop keeps
+   * up. The pose is scaled back up before anything is drawn.
+   */
+  processWidth?: number;
+  /** Which camera to ask for. The back one, on anything that has two. */
+  facingMode?: "environment" | "user";
+}
+
+export type CameraFailure = "denied" | "unavailable" | "no-camera";
+
+export class CameraError extends Error {
+  constructor(
+    readonly reason: CameraFailure,
+    message: string,
+  ) {
+    super(message);
+    this.name = "CameraError";
+  }
+}
+
+/**
+ * The camera, reduced to the two things the tracker needs: a picture the viewer sees, and
+ * a small grayscale copy of it to work on.
+ */
+export class Camera {
+  private stream: MediaStream | null = null;
+  private canvas: HTMLCanvasElement | null = null;
+  private context: CanvasRenderingContext2D | null = null;
+
+  constructor(
+    private readonly video: HTMLVideoElement,
+    private readonly options: CameraOptions = {},
+  ) {}
+
+  async start(): Promise<void> {
+    const media = navigator.mediaDevices;
+    if (!media?.getUserMedia) {
+      throw new CameraError("unavailable", "this browser cannot open a camera from a page");
+    }
+    try {
+      this.stream = await media.getUserMedia({
+        video: { facingMode: this.options.facingMode ?? "environment" },
+        audio: false,
+      });
+    } catch (error) {
+      // The distinction matters to the viewer: a refusal is theirs to undo, a missing
+      // camera is not, and telling them the wrong one wastes their time.
+      const name = error instanceof Error ? error.name : "";
+      if (name === "NotAllowedError" || name === "SecurityError") {
+        throw new CameraError("denied", "the camera was not allowed for this page");
+      }
+      if (name === "NotFoundError" || name === "OverconstrainedError") {
+        throw new CameraError("no-camera", "no camera was found on this device");
+      }
+      throw new CameraError(
+        "unavailable",
+        error instanceof Error ? error.message : "the camera could not be opened",
+      );
+    }
+
+    this.video.srcObject = this.stream;
+    this.video.setAttribute("playsinline", "");
+    this.video.muted = true;
+    await this.video.play();
+    await this.ready();
+  }
+
+  /** Resolve once the video has a size, which is when frames can be read from it. */
+  private ready(): Promise<void> {
+    if (this.video.videoWidth > 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => {
+        this.video.removeEventListener("loadedmetadata", done);
+        resolve();
+      };
+      this.video.addEventListener("loadedmetadata", done);
+    });
+  }
+
+  stop(): void {
+    for (const track of this.stream?.getTracks() ?? []) track.stop();
+    this.stream = null;
+    this.video.srcObject = null;
+  }
+
+  /** Size the camera is actually delivering, which is not the size it is displayed at. */
+  get sourceSize(): { width: number; height: number } {
+    return { width: this.video.videoWidth, height: this.video.videoHeight };
+  }
+
+  /**
+   * The current frame, reduced and converted to grayscale.
+   *
+   * Rec. 601 luma weights, which is what the eye and every other part of this system mean
+   * by brightness.
+   */
+  grab(): GrayscaleImage | null {
+    const { videoWidth, videoHeight } = this.video;
+    if (videoWidth < 1 || videoHeight < 1) return null;
+
+    const processWidth = Math.min(this.options.processWidth ?? 480, videoWidth);
+    const width = Math.max(1, Math.round(processWidth));
+    const height = Math.max(1, Math.round((videoHeight / videoWidth) * width));
+
+    if (!this.canvas || this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas = this.canvas ?? document.createElement("canvas");
+      this.canvas.width = width;
+      this.canvas.height = height;
+      this.context = this.canvas.getContext("2d", { willReadFrequently: true });
+    }
+    const context = this.context;
+    if (!context) return null;
+
+    context.drawImage(this.video, 0, 0, width, height);
+    const { data } = context.getImageData(0, 0, width, height);
+    const gray = new Uint8Array(width * height);
+    for (let i = 0; i < gray.length; i++) {
+      const p = i * 4;
+      gray[i] = ((data[p] ?? 0) * 299 + (data[p + 1] ?? 0) * 587 + (data[p + 2] ?? 0) * 114) / 1000;
+    }
+    return { width, height, data: gray };
+  }
+}

@@ -10,4 +10,5 @@ import { fileURLToPath } from "node:url";
 export const workspaceAliases: Record<string, string> = {
   "@taggant/manifest": fileURLToPath(new URL("./packages/manifest/src/index.ts", import.meta.url)),
   "@taggant/vision": fileURLToPath(new URL("./packages/vision/src/index.ts", import.meta.url)),
+  "@taggant/runtime": fileURLToPath(new URL("./packages/runtime/src/index.ts", import.meta.url)),
 };
