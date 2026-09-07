@@ -1,11 +1,5 @@
+import type { GrayscaleImage } from "@taggant/vision";
 import sharp from "sharp";
-
-export interface GrayscaleImage {
-  width: number;
-  height: number;
-  /** One byte per pixel, row major. */
-  data: Uint8Array;
-}
 
 export interface LoadOptions {
   /** Longest edge in pixels after downscaling. Larger costs time and buys nothing. */

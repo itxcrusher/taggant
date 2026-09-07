@@ -29,6 +29,9 @@ importers:
       '@taggant/manifest':
         specifier: workspace:*
         version: link:../manifest
+      '@taggant/vision':
+        specifier: workspace:*
+        version: link:../vision
       sharp:
         specifier: 0.33.5
         version: 0.33.5
@@ -45,6 +48,8 @@ importers:
       json-schema-to-typescript:
         specifier: 15.0.3
         version: 15.0.3
+
+  packages/vision: {}
 
 packages:
 

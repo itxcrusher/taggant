@@ -1,5 +1,5 @@
+import type { Corner } from "@taggant/vision";
 import { describe, expect, it } from "vitest";
-import type { Corner } from "../src/features.js";
 import { buildReport } from "../src/report.js";
 
 function corners(count: number, spread = 100): Corner[] {

@@ -1,4 +1,4 @@
-import type { Corner } from "./features.js";
+import type { Corner } from "@taggant/vision";
 
 export interface ReportInput {
   image: { width: number; height: number };

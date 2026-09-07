@@ -1,5 +1,6 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "outDir": "dist", "rootDir": "." },
+  // tsc only typechecks here; tsup does the build, so there is nothing to root.
+  "compilerOptions": { "noEmit": true },
   "include": ["src", "test", "schema"]
 }

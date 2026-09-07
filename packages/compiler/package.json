@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@taggant/manifest": "workspace:*",
+    "@taggant/vision": "workspace:*",
     "sharp": "0.33.5"
   }
 }

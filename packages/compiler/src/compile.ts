@@ -1,4 +1,4 @@
-import { type Corner, detectCorners } from "./features.js";
+import { type Corner, detectCorners } from "@taggant/vision";
 import { loadGrayscale } from "./load.js";
 import { type Report, buildReport } from "./report.js";
 

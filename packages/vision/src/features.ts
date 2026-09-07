@@ -1,4 +1,4 @@
-import type { GrayscaleImage } from "./load.js";
+import type { GrayscaleImage } from "./image.js";
 
 export interface Corner {
   x: number;

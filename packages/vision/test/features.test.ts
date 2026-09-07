@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { detectCorners } from "../src/features.js";
-import type { GrayscaleImage } from "../src/load.js";
+import type { GrayscaleImage } from "../src/image.js";
 
 function blank(width: number, height: number, value = 128): GrayscaleImage {
   return { width, height, data: new Uint8Array(width * height).fill(value) };
