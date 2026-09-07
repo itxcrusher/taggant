@@ -10,14 +10,24 @@ export interface DescribedCorner extends Corner {
 }
 
 /**
- * Direction from the centre of the patch to its intensity centroid.
+ * Below this the patch has no direction worth calling dominant.
+ *
+ * Measured rather than picked: a rotationally symmetric mark reads 0, and the weakest
+ * corner on the test artwork reads 0.025.
+ */
+const MIN_ORIENTATION_BIAS = 0.01;
+
+/**
+ * Direction from the centre of the patch to its intensity centroid, and how strongly the
+ * patch commits to it.
  *
  * Without this the descriptor is only comparable when the print is held at the angle it
  * was compiled at, which no one does.
  */
-function orientation(image: GrayscaleImage, cx: number, cy: number): number {
+function orientation(image: GrayscaleImage, cx: number, cy: number): { angle: number; bias: number } {
   let mx = 0;
   let my = 0;
+  let total = 0;
   const r2 = PATCH_RADIUS * PATCH_RADIUS;
   for (let dy = -PATCH_RADIUS; dy <= PATCH_RADIUS; dy++) {
     for (let dx = -PATCH_RADIUS; dx <= PATCH_RADIUS; dx++) {
@@ -25,9 +35,13 @@ function orientation(image: GrayscaleImage, cx: number, cy: number): number {
       const v = sample(image, cx + dx, cy + dy);
       mx += dx * v;
       my += dy * v;
+      total += v;
     }
   }
-  return Math.atan2(my, mx);
+  // How far off centre the patch's mass sits, as a fraction of how far off centre it
+  // could sit. Near zero means the patch has no dominant direction at all.
+  const bias = total > 0 ? Math.hypot(mx, my) / (total * PATCH_RADIUS) : 0;
+  return { angle: Math.atan2(my, mx), bias };
 }
 
 /**
@@ -48,7 +62,12 @@ export function describeCorners(image: GrayscaleImage, corners: Corner[]): Descr
     ) {
       continue;
     }
-    const angle = orientation(image, corner.x, corner.y);
+    const { angle, bias } = orientation(image, corner.x, corner.y);
+    // A patch with no dominant direction has an arbitrary angle, and noise flips it from
+    // one frame to the next, so its descriptor matches nothing reliably. A filled circle
+    // or any rotationally symmetric mark reads exactly zero here; on real artwork the
+    // lowest measured was 0.025, so this drops the degenerate case and nothing else.
+    if (bias < MIN_ORIENTATION_BIAS) continue;
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
     const descriptor = new Uint32Array(DESCRIPTOR_BITS / 32);

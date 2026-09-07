@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
-import { argv, exit, stderr, stdout } from "node:process";
+import process, { argv, stderr, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import { type CompiledTarget, compileTarget, toTargetJson } from "./compile.js";
 
@@ -154,5 +154,9 @@ export async function main(args: string[]): Promise<number> {
 // converted to a URL before it can be compared with import.meta.url.
 const invokedDirectly = argv[1] !== undefined && import.meta.url === pathToFileURL(argv[1]).href;
 if (invokedDirectly) {
-  main(argv.slice(2)).then((code) => exit(code));
+  // exitCode rather than exit(), so node finishes flushing stdout before it goes. On
+  // Windows a write to a pipe is asynchronous, and exit() mid write truncates the report.
+  main(argv.slice(2)).then((code) => {
+    process.exitCode = code;
+  });
 }

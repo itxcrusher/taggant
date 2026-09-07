@@ -2,12 +2,31 @@ import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { compileTarget } from "../src/compile.js";
 
+/**
+ * Irregular artwork, deliberately not a checkerboard.
+ *
+ * A checkerboard is the canonical untrackable image target: every crossing looks like
+ * every other, so no matcher can tell them apart, and each one is symmetric, so no patch
+ * has a stable direction. Testing the compiler against one measured whether it produced
+ * numbers, not whether the numbers meant anything.
+ */
 async function noisyArtwork(width = 512, height = 512): Promise<Buffer> {
-  const pixels = Buffer.alloc(width * height);
-  for (let i = 0; i < pixels.length; i++) {
-    const x = i % width;
-    const y = Math.floor(i / width);
-    pixels[i] = ((x >> 4) + (y >> 4)) % 2 === 0 ? 30 : 220;
+  const pixels = Buffer.alloc(width * height, 210);
+  let seed = 20260907;
+  for (let i = 0; i < 220; i++) {
+    seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
+    const cx = seed % width;
+    seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
+    const cy = seed % height;
+    seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
+    const r = 5 + (seed % 14);
+    const value = seed % 3 === 0 ? 25 : seed % 3 === 1 ? 90 : 160;
+    for (let y = Math.max(0, cy - r); y < Math.min(height, cy + r); y++) {
+      for (let x = Math.max(0, cx - r); x < Math.min(width, cx + r); x++) {
+        // Half discs, so no blot is rotationally symmetric.
+        if ((x - cx) ** 2 + (y - cy) ** 2 <= r * r && x >= cx - r / 2) pixels[y * width + x] = value;
+      }
+    }
   }
   return sharp(pixels, { raw: { width, height, channels: 1 } })
     .png()
