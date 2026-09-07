@@ -5,6 +5,95 @@ import { argv, exit, stderr, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import { type CompiledTarget, compileTarget, toTargetJson } from "./compile.js";
 
+/**
+ * Exit codes, so a build script can read the outcome instead of parsing stderr.
+ *
+ * They used to be 1 for four different things, one of them returned after stdout had
+ * already printed "ready for press".
+ */
+export const EXIT = {
+  ok: 0,
+  usage: 1,
+  artworkNotReady: 2,
+  cannotRead: 3,
+  cannotWrite: 4,
+} as const;
+
+const USAGE = "usage: taggant-compile <artwork> [--id <id>] [--scan-distance <mm>] [--out <file>]\n";
+
+/** Distances a person can actually hold a phone at, or stand back to, in millimetres. */
+const MIN_SCAN_DISTANCE_MM = 50;
+const MAX_SCAN_DISTANCE_MM = 10_000;
+
+const FLAGS = new Set(["--id", "--scan-distance", "--out"]);
+
+export interface Arguments {
+  source: string;
+  id: string;
+  scanDistanceMm: number;
+  out?: string;
+}
+
+/**
+ * Read the arguments, refusing anything ambiguous rather than guessing.
+ *
+ * Every case handled here was found by an adversarial pass, and all four exited 0: a flag
+ * with no value fell through to the default and printed millimetres for a distance nobody
+ * asked for, a misspelled flag was ignored the same way, --out with no value wrote nothing
+ * and reported success, and --id followed by another flag wrote that flag into the
+ * compiled target as its id, where it then failed the manifest package's own id rule.
+ */
+export function parseArguments(args: string[]): { arguments: Arguments } | { error: string } {
+  const values = new Map<string, string>();
+  let source: string | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    const token = args[i];
+    if (token === undefined) continue;
+    if (!token.startsWith("--")) {
+      if (source !== undefined) return { error: `unexpected extra argument ${token}` };
+      source = token;
+      continue;
+    }
+    if (!FLAGS.has(token)) return { error: `unknown option ${token}` };
+    const value = args[i + 1];
+    if (value === undefined) return { error: `${token} needs a value` };
+    if (value.startsWith("--")) return { error: `${token} needs a value, and ${value} is another option` };
+    // Last wins, which is what every other command line does.
+    values.set(token, value);
+    i++;
+  }
+
+  if (source === undefined) return { error: "no artwork given" };
+
+  // Number() accepts hex, exponents and surrounding space. A scan distance is millimetres
+  // typed by a person, so it is read as plain decimal or refused.
+  const given = values.get("--scan-distance");
+  const scanDistanceMm = given === undefined ? 400 : /^\d+(\.\d+)?$/.test(given) ? Number(given) : Number.NaN;
+  if (!Number.isFinite(scanDistanceMm)) return { error: "scan distance must be a number of millimetres" };
+  if (scanDistanceMm < MIN_SCAN_DISTANCE_MM || scanDistanceMm > MAX_SCAN_DISTANCE_MM) {
+    return {
+      error: `scan distance must be between ${MIN_SCAN_DISTANCE_MM} and ${MAX_SCAN_DISTANCE_MM} mm, and this is ${scanDistanceMm}`,
+    };
+  }
+
+  const id =
+    values.get("--id") ??
+    basename(source)
+      .replace(/\.[^.]+$/, "")
+      .toLowerCase();
+  // The same rule the manifest schema applies, so the compiler cannot emit an id its own
+  // sibling package rejects.
+  if (!/^[a-z0-9][a-z0-9-]{2,63}$/.test(id)) {
+    return { error: `id must be 3 to 64 lower case letters, digits or hyphens, and this is ${id}` };
+  }
+
+  const out = values.get("--out");
+  return {
+    arguments: out === undefined ? { source, id, scanDistanceMm } : { source, id, scanDistanceMm, out },
+  };
+}
+
 export function formatReportLines(source: string, target: CompiledTarget): string[] {
   const { report } = target;
   const lines = [
@@ -23,27 +112,19 @@ export function formatReportLines(source: string, target: CompiledTarget): strin
   return lines;
 }
 
-function readOption(argv: string[], name: string): string | undefined {
-  const index = argv.indexOf(name);
-  return index >= 0 ? argv[index + 1] : undefined;
-}
+export async function main(args: string[]): Promise<number> {
+  if (args.length === 0 || args[0] === "--help") {
+    const asked = args[0] === "--help";
+    (asked ? stdout : stderr).write(USAGE);
+    return asked ? EXIT.ok : EXIT.usage;
+  }
 
-export async function main(argv: string[]): Promise<number> {
-  const source = argv[0];
-  if (!source || source === "--help") {
-    stdout.write("usage: taggant-compile <artwork> [--id <id>] [--scan-distance <mm>] [--out <file>]\n");
-    return source ? 0 : 1;
+  const parsed = parseArguments(args);
+  if ("error" in parsed) {
+    stderr.write(`${parsed.error}\n${USAGE}`);
+    return EXIT.usage;
   }
-  const id =
-    readOption(argv, "--id") ??
-    basename(source)
-      .replace(/\.[^.]+$/, "")
-      .toLowerCase();
-  const scanDistanceMm = Number(readOption(argv, "--scan-distance") ?? 400);
-  if (!Number.isFinite(scanDistanceMm) || scanDistanceMm <= 0) {
-    stderr.write("scan distance must be a positive number of millimetres\n");
-    return 1;
-  }
+  const { source, id, scanDistanceMm, out } = parsed.arguments;
 
   let target: CompiledTarget;
   try {
@@ -52,22 +133,21 @@ export async function main(argv: string[]): Promise<number> {
     // Everything reaching here is the input being unusable: a missing file, a directory,
     // artwork below the minimum size, a format that cannot be decoded. One line, then stop.
     stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    return 1;
+    return EXIT.cannotRead;
   }
 
   stdout.write(`${formatReportLines(source, target).join("\n")}\n`);
 
-  const out = readOption(argv, "--out");
-  if (out) {
+  if (out !== undefined) {
     try {
       await writeFile(out, JSON.stringify(toTargetJson(target)));
     } catch (error) {
       stderr.write(`could not write ${out}: ${error instanceof Error ? error.message : String(error)}\n`);
-      return 1;
+      return EXIT.cannotWrite;
     }
     stdout.write(`  written ${out}\n\n`);
   }
-  return target.report.pass ? 0 : 2;
+  return target.report.pass ? EXIT.ok : EXIT.artworkNotReady;
 }
 
 // argv[1] is a filesystem path, and on Windows it uses backslashes, so it has to be

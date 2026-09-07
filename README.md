@@ -6,66 +6,99 @@ A taggant is a marker added to a material so that a later reader can identify it
 
 ## Status
 
-Early development. Two packages are usable, the rest are being built in the open. Interfaces change without notice until a first tagged release.
+Early development. Three packages are usable, the rest are being built in the open. Nothing has been published to a registry and nothing is tagged, so interfaces change without notice.
 
 ## Judging artwork before it goes to press
 
-```
-$ npx taggant-compile pack-front.tif --scan-distance 400
+A press run cannot be undone, so the question worth answering first is whether this artwork will track at the size and distance it will actually be used at. Both runs below are at the same scan distance, and both outputs are copied from the terminal.
 
-  pack-front.tif
-  size                  900 x 650 px
-  tracking quality      100 / 100
-  features              500, covering 100% of the artwork
-  minimum print width   40 mm
+```
+$ node packages/compiler/dist/cli.js blots.png --scan-distance 400
+
+  blots.png
+  size                  640 x 480 px
+  tracking quality      97 / 100
+  features              214, reaching 16 of 16 areas
+  minimum print width   103 mm
   verdict               ready for press
+
+$ echo $?
+0
 ```
 
-A press run cannot be undone, so the question worth answering is whether this artwork will track at the size and distance it will actually be used. Artwork that fails says why, and exits non-zero so a build can stop on it:
+Artwork that fails says why, and exits non-zero so a build can stop on it:
 
 ```
-  flat.png
-  tracking quality      11 / 100
-  features              4, covering 25% of the artwork
-  minimum print width   90 mm
+$ node packages/compiler/dist/cli.js wordmark.png --scan-distance 400
+
+  wordmark.png
+  size                  800 x 600 px
+  tracking quality      12 / 100
+  features              12, reaching 4 of 16 areas
+  minimum print width   56 mm
   verdict               not ready
       too few features to track reliably
-      features are concentrated in part of the artwork
+
+$ echo $?
+2
 ```
 
-The minimum print width grows with the scan distance, because a camera further away resolves fewer pixels across the same mark.
+Two things in there are worth reading carefully.
+
+**Minimum print width is measured from the artwork, not from the flag.** It comes from how far apart the artwork's features sit relative to its size: fine, closely spaced detail has to be printed larger than bold, open artwork before a camera at the same distance can separate one feature from the next. That is why the failing wordmark asks for a smaller print than the passing artwork above it, and it is why the number changes when the artwork changes rather than only when the distance does. It also grows with scan distance, because a camera further away resolves fewer pixels across the same mark.
+
+**Score and verdict cannot disagree.** 60 is the pass mark exactly. Below it, the score says how far short the artwork falls; above it, how much headroom it has.
+
+The number the report cannot yet measure is the camera. Minimum print width assumes a resolving power of 1.6 pixels per millimetre at one metre, which is roughly a 1080p sensor over a 60 degree field. That is optimistic for a browser camera stream, where 720p is common. It is marked as an assumption in the source and is due to be replaced by a measurement across real devices.
 
 ## Packages
 
 | Package | State | Purpose |
 |---|---|---|
 | `@taggant/manifest` | usable | the versioned experience format, its validator, and types generated from the schema |
+| `@taggant/vision` | usable | detection, description, matching and pose: the part the compiler and the runtime must agree on exactly |
 | `@taggant/compiler` | usable | artwork to compiled target, with a print readiness report, as a library and a command line |
 | `@taggant/runtime` | next | camera, recognition, tracking and rendering in the browser |
 | `@taggant/bundler` | planned | an experience compiled to a self-contained static folder |
 | `services/resolver` | planned | code lifecycle and GS1 Digital Link resolution |
 | `apps/console` | planned | authoring for products, artwork versions, targets and codes |
 
+`@taggant/vision` carries no dependencies. The detector, the descriptor, the matcher and the homography solver are all in this repository, which is what lets the compiler and the browser produce identical descriptors from the same artwork.
+
+## How recognition works
+
+Artwork is described at four sizes rather than one, because a descriptor only compares with another taken at roughly the same size, and a print photographed from further back is a smaller image of the same thing. Each feature is reported in the artwork's own coordinates whichever size it was found at, so the pose comes straight out of the fit.
+
+A camera frame is described at two sizes for the same reason and one more: a frame that is slightly out of focus moves detail down the scale the way distance does. Descriptors are matched with a ratio test and a mutual best check, and the pose is fitted by RANSAC over a normalised direct linear transform, which expects a share of the matches to be confidently wrong.
+
+Recognition is measured against known mappings rather than asserted. Artwork is warped by a homography the test chose, located, and the four corners of the artwork are checked against where that mapping puts them: under 4 px square on, under 6 px turned on its side, under 8 px held at an angle, and it is still found through two passes of blur.
+
 ## Design commitments
 
 These hold for every release and are the reason the project exists in this shape.
 
 - A published experience is a static bundle. It carries its own runtime and assets, and it does not call this project's services to work.
-- The manifest format is open, versioned and documented, so anything else can read or write it.
-- Resolver conformance is proven against the published GS1 Digital Link test suite in continuous integration, not asserted in prose.
+- The manifest format is open, versioned and documented, so anything else can read or write it. A manifest is data: it cannot carry a script destination, and its asset paths stay inside the bundle.
 - Image targets first. Handheld web AR has no camera pose on every platform, and printed artwork is the trigger that works everywhere.
 - No proprietary runtime dependency that cannot be redistributed.
+- When the resolver exists, its conformance will be proven against the published GS1 Digital Link test suite in continuous integration rather than asserted here.
+
+## What has and has not been verified
+
+The three packages are exercised by 110 tests, and the whole gate runs on every push. Nothing has been driven against a real camera or a real print: there is no runtime yet, so the device matrix is empty and stays empty until it can be filled in with measurements.
 
 ## Working on it
 
-Requires Node 22 and pnpm 11.
+Requires Node 22 and pnpm 11, which is pinned in `package.json`.
 
 ```
 pnpm install
 pnpm -r typecheck && pnpm check && pnpm -r test && pnpm -r build
 ```
 
-`main` holds released, stable work. `dev` is the integration branch and is where work lands first.
+There is no published package, so the command line runs from the build: `node packages/compiler/dist/cli.js <artwork>`.
+
+`dev` is the integration branch and is where work lands first. `main` is the stable branch; nothing has been released to it yet.
 
 ## Licence
 
