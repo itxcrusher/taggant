@@ -1,0 +1,10 @@
+packages:
+  - "packages/*"
+
+# pnpm 11 requires an explicit decision for every dependency that ships a build script.
+# All three below compile or link a native binary that the toolchain then executes locally
+# and in CI, so they are allowed rather than policy-blocked.
+allowBuilds:
+  "@biomejs/biome": true
+  esbuild: true
+  sharp: true
