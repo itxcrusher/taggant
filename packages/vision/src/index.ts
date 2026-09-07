@@ -15,3 +15,5 @@ export {
 export { resample } from "./image.js";
 export { DEFAULT_SCALES, type BuildOptions, buildTrackingFeatures } from "./target.js";
 export { type LocateOptions, type LocateResult, type TrackingTarget, locate } from "./locate.js";
+export type { TargetFeature } from "./target.js";
+export { type TargetFile, toTargetFile, fromTargetFile } from "./serialise.js";

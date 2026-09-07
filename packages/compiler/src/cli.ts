@@ -3,7 +3,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { argv, exit, stderr, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
-import { type CompiledTarget, compileTarget } from "./compile.js";
+import { type CompiledTarget, compileTarget, toTargetJson } from "./compile.js";
 
 export function formatReportLines(source: string, target: CompiledTarget): string[] {
   const { report } = target;
@@ -58,7 +58,7 @@ export async function main(argv: string[]): Promise<number> {
   const out = readOption(argv, "--out");
   if (out) {
     try {
-      await writeFile(out, JSON.stringify(target));
+      await writeFile(out, JSON.stringify(toTargetJson(target)));
     } catch (error) {
       stderr.write(`could not write ${out}: ${error instanceof Error ? error.message : String(error)}\n`);
       return 1;

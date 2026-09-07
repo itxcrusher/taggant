@@ -13,6 +13,11 @@ import { type GrayscaleImage, resample } from "./image.js";
  */
 export const DEFAULT_SCALES = [1, 0.79, 0.63, 0.5] as const;
 
+export interface TargetFeature extends DescribedCorner {
+  /** Which level of the target this feature was described at. */
+  scale: number;
+}
+
 export interface BuildOptions {
   scales?: readonly number[];
   /** Corners taken from each level. */
@@ -27,15 +32,15 @@ export interface BuildOptions {
  * straight out of the fit: whichever level a feature was found at, it says where it is on
  * the printed piece.
  */
-export function buildTrackingFeatures(image: GrayscaleImage, options: BuildOptions = {}): DescribedCorner[] {
+export function buildTrackingFeatures(image: GrayscaleImage, options: BuildOptions = {}): TargetFeature[] {
   const scales = options.scales ?? DEFAULT_SCALES;
   const perScale = options.perScale ?? 300;
-  const features: DescribedCorner[] = [];
+  const features: TargetFeature[] = [];
   for (const scale of scales) {
     const level = resample(image, scale);
     const described = describeCorners(level, detectCorners(level, { maxCorners: perScale }));
     for (const corner of described) {
-      features.push({ ...corner, x: corner.x / scale, y: corner.y / scale });
+      features.push({ ...corner, x: corner.x / scale, y: corner.y / scale, scale });
     }
   }
   return features;

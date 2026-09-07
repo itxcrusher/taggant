@@ -23,9 +23,30 @@ describe("compileTarget", () => {
     expect(target.report.score).toBeGreaterThan(0);
   });
 
+  it("carries a descriptor for every feature, because corners alone match nothing", async () => {
+    const target = await compileTarget(await noisyArtwork(), { id: "front-panel", scanDistanceMm: 400 });
+    for (const feature of target.features) {
+      expect(feature.descriptor).toBeInstanceOf(Uint32Array);
+      expect(feature.descriptor.length).toBe(8);
+    }
+  });
+
+  it("describes the artwork at several sizes, so distance does not lose it", async () => {
+    const target = await compileTarget(await noisyArtwork(), { id: "front-panel", scanDistanceMm: 400 });
+    const scales = new Set(target.features.map((feature) => feature.scale));
+    expect(scales.size).toBeGreaterThan(1);
+    expect(scales.has(1)).toBe(true);
+  });
+
+  it("counts each place on the artwork once in the report, not once per size", async () => {
+    const target = await compileTarget(await noisyArtwork(), { id: "front-panel", scanDistanceMm: 400 });
+    expect(target.report.featureCount).toBeLessThan(target.features.length);
+    expect(target.report.featureCount).toBe(target.features.filter((f) => f.scale === 1).length);
+  });
+
   it("records the format version so a runtime can refuse what it cannot read", async () => {
     const target = await compileTarget(await noisyArtwork(), { id: "front-panel", scanDistanceMm: 400 });
-    expect(target.formatVersion).toBe(1);
+    expect(target.formatVersion).toBe(2);
   });
 
   it("serialises to JSON and back without losing features", async () => {

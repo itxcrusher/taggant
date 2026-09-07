@@ -4,7 +4,7 @@ import { formatReportLines, main } from "../src/cli.js";
 describe("formatReportLines", () => {
   it("prints the numbers a printer needs, in millimetres", () => {
     const lines = formatReportLines("front.tif", {
-      formatVersion: 1,
+      formatVersion: 2,
       id: "front-panel",
       width: 1200,
       height: 800,
@@ -19,7 +19,7 @@ describe("formatReportLines", () => {
 
   it("lists every reason when the artwork fails", () => {
     const lines = formatReportLines("front.tif", {
-      formatVersion: 1,
+      formatVersion: 2,
       id: "front-panel",
       width: 1200,
       height: 800,
