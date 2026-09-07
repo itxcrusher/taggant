@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0.0",
+  "id": "postcard",
+  "title": "Postcard",
+  "subject": { "kind": "print", "reference": "A6 postcard, front" },
+  "targets": [
+    {
+      "id": "front",
+      "source": "artwork.png",
+      "physicalWidthMm": 148,
+      "content": [
+        {
+          "type": "image",
+          "src": "overlay.svg",
+          "placement": { "scale": 0.5, "offsetY": -0.2 }
+        }
+      ]
+    }
+  ],
+  "fallback": "https://example.com/postcard"
+}

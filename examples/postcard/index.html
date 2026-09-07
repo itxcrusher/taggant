@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Postcard</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; background: #101014; color: #eff0fc; font: 14px/1.5 ui-monospace, monospace; }
+      #scene { position: relative; width: 100vw; height: 100vh; }
+      #status {
+        position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px;
+        background: #101014e6; border-top: 1px solid #2a2a34;
+      }
+      #scene[data-state="tracking"] ~ #status { color: #7fe0a8; }
+      #scene[data-state="denied"] ~ #status, #scene[data-state="error"] ~ #status { color: #ff8f7a; }
+    </style>
+  </head>
+  <body>
+    <div id="scene"></div>
+    <p id="status">Starting.</p>
+    <script type="module">
+      import { mountExperience } from "../../packages/runtime/dist/index.js";
+
+      const status = document.getElementById("status");
+      const say = {
+        idle: "Starting.",
+        requesting: "Asking for the camera.",
+        denied: "The camera was refused. Allow it for this page and reload.",
+        error: "The camera could not be opened.",
+        searching: "Point the camera at the printed artwork.",
+        tracking: "Found it.",
+      };
+
+      const [manifest, target] = await Promise.all([
+        fetch("./manifest.json").then((r) => r.json()),
+        fetch("./front.target.json").then((r) => r.json()),
+      ]);
+
+      await mountExperience({
+        manifest,
+        targets: [
+          {
+            id: target.id,
+            width: target.width,
+            height: target.height,
+            // Typed arrays do not survive JSON, so a consumer rebuilds them.
+            features: target.features.map((f) => ({ ...f, descriptor: Uint32Array.from(f.descriptor) })),
+          },
+        ],
+        container: document.getElementById("scene"),
+        options: {
+          resolve: (src) => `./${src}`,
+          onStateChange: (state) => {
+            status.textContent = say[state] ?? state;
+          },
+        },
+      });
+    </script>
+  </body>
+</html>

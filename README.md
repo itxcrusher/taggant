@@ -6,7 +6,7 @@ A taggant is a marker added to a material so that a later reader can identify it
 
 ## Status
 
-Early development. Three packages are usable, the rest are being built in the open. Nothing has been published to a registry and nothing is tagged, so interfaces change without notice.
+Early development. Four packages are usable, the rest are being built in the open. Nothing has been published to a registry and nothing is tagged, so interfaces change without notice.
 
 ## Judging artwork before it goes to press
 
@@ -58,7 +58,7 @@ The number the report cannot yet measure is the camera. Minimum print width assu
 | `@taggant/manifest` | usable | the versioned experience format, its validator, and types generated from the schema |
 | `@taggant/vision` | usable | detection, description, matching and pose: the part the compiler and the runtime must agree on exactly |
 | `@taggant/compiler` | usable | artwork to compiled target, with a print readiness report, as a library and a command line |
-| `@taggant/runtime` | next | camera, recognition, tracking and rendering in the browser |
+| `@taggant/runtime` | usable | camera, recognition and placing content on the artwork, in the browser |
 | `@taggant/bundler` | planned | an experience compiled to a self-contained static folder |
 | `services/resolver` | planned | code lifecycle and GS1 Digital Link resolution |
 | `apps/console` | planned | authoring for products, artwork versions, targets and codes |
@@ -73,6 +73,20 @@ A camera frame is described at two sizes for the same reason and one more: a fra
 
 Recognition is measured against known mappings rather than asserted. Artwork is warped by a homography the test chose, located, and the four corners of the artwork are checked against where that mapping puts them: under 4 px square on, under 6 px turned on its side, under 8 px held at an angle, and it is still found through two passes of blur.
 
+## Showing something on a print
+
+`examples/postcard` is the whole path in one directory: a hand written manifest, the artwork it names, and a page that opens the camera and puts content on that artwork when it finds it. Its README has the three commands.
+
+```js
+await mountExperience({
+  manifest,
+  targets: [target],
+  container: document.querySelector("#scene"),
+});
+```
+
+The container ends up holding the camera picture with one element per target over it, each carrying the pose as a CSS transform, so a frame where nothing is found costs one hidden attribute rather than a rebuild. Content is only taken away after several consecutive misses, because recognition is per frame and one frame without a find is ordinary. A refused camera is told apart from a missing one, and the manifest's fallback is followed when the camera will not open at all.
+
 ## Design commitments
 
 These hold for every release and are the reason the project exists in this shape.
@@ -85,7 +99,11 @@ These hold for every release and are the reason the project exists in this shape
 
 ## What has and has not been verified
 
-The three packages are exercised by 110 tests, and the whole gate runs on every push. Nothing has been driven against a real camera or a real print: there is no runtime yet, so the device matrix is empty and stays empty until it can be filled in with measurements.
+The four packages are exercised by 122 tests, and the whole gate runs on every push.
+
+The runtime is driven in a real browser rather than asserted: the test writes a video file of the artwork sitting in a larger frame, hands it to Chromium as a camera, and waits for the page to reach its tracking state, then checks that the content landed where the feed actually put the artwork. The example was driven the same way, and the overlay came back within a pixel of the truth.
+
+**Not verified: any real camera, and any real print.** Everything above is synthetic. The device matrix is empty and stays empty until it can be filled in with measurements, and the assumed camera resolving power in the print readiness report is an assumption until then.
 
 ## Working on it
 

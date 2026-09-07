@@ -5,7 +5,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "bin": { "taggant-compile": "./dist/cli.js" },
+  "bin": {
+    "taggant-compile": "./dist/cli.js"
+  },
   "files": ["dist"],
   "scripts": {
     "build": "tsup src/index.ts src/cli.ts --format esm --dts --clean",

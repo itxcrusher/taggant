@@ -32,3 +32,4 @@ Thumbs.db
 # Local artefacts
 *.log
 tmp/
+examples/**/*.target.json
