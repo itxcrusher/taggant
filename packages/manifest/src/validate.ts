@@ -34,7 +34,14 @@ function describe(error: ErrorObject): ManifestError {
  * shape. The caller's object is never touched: validation works on a copy.
  */
 export function validateManifest(input: unknown): ValidationResult {
-  const candidate = structuredClone(input);
+  let candidate: unknown;
+  try {
+    candidate = structuredClone(input);
+  } catch {
+    // structuredClone rejects functions and other non-transferable values. A manifest is
+    // data, so this is a failed validation rather than a crash the caller has to catch.
+    return { ok: false, errors: [{ path: "/", message: "could not be read as data" }] };
+  }
   if (compiled(candidate)) {
     return { ok: true, value: candidate as unknown as TaggantExperienceManifest };
   }

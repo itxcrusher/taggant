@@ -37,3 +37,16 @@ describe("validateManifest", () => {
     expect(targets[0]?.content[0]?.autoplay).toBeUndefined();
   });
 });
+
+describe("validateManifest on values it cannot clone", () => {
+  it("returns a failure instead of throwing when the input holds a function", () => {
+    const result = validateManifest({ schemaVersion: "1.0.0", id: "abc", run: () => 1 });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.errors[0]?.message).toMatch(/could not be read/i);
+  });
+
+  it("returns a failure for a bare function", () => {
+    expect(validateManifest(() => 1).ok).toBe(false);
+  });
+});
