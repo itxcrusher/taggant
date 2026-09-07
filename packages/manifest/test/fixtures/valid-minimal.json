@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0.0",
+  "id": "botanica-500",
+  "targets": [
+    {
+      "id": "front-panel",
+      "source": "artwork/front.tif",
+      "physicalWidthMm": 62,
+      "content": [{ "type": "video", "src": "media/pour.mp4" }]
+    }
+  ]
+}

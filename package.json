@@ -2,7 +2,9 @@
   "name": "taggant",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
@@ -14,6 +16,7 @@
     "@biomejs/biome": "1.9.4",
     "typescript": "5.7.2",
     "tsup": "8.3.5",
-    "vitest": "2.1.8"
+    "vitest": "2.1.8",
+    "@types/node": "22.10.2"
   }
 }
