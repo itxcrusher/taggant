@@ -9,7 +9,16 @@ describe("formatReportLines", () => {
       width: 1200,
       height: 800,
       features: [],
-      report: { score: 82, pass: true, featureCount: 240, coverage: 0.75, minimumWidthMm: 62, reasons: [] },
+      report: {
+        score: 82,
+        pass: true,
+        featureCount: 240,
+        areasWithFeatures: 14,
+        areas: 16,
+        detail: 0.012,
+        minimumWidthMm: 62,
+        reasons: [],
+      },
     });
     const text = lines.join("\n");
     expect(text).toContain("front.tif");
@@ -28,7 +37,9 @@ describe("formatReportLines", () => {
         score: 20,
         pass: false,
         featureCount: 12,
-        coverage: 0.25,
+        areasWithFeatures: 4,
+        areas: 16,
+        detail: 0.012,
         minimumWidthMm: 62,
         reasons: ["too few features to track reliably", "features are concentrated in part of the artwork"],
       },

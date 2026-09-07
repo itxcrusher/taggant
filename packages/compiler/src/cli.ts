@@ -12,8 +12,10 @@ export function formatReportLines(source: string, target: CompiledTarget): strin
     `  ${basename(source)}`,
     `  size                  ${target.width} x ${target.height} px`,
     `  tracking quality      ${report.score} / 100`,
-    `  features              ${report.featureCount}, covering ${Math.round(report.coverage * 100)}% of the artwork`,
-    `  minimum print width   ${report.minimumWidthMm} mm`,
+    // Areas rather than a percentage: a feature is a point, and points do not cover
+    // anything, so "covering 100% of the artwork" was saying more than it knew.
+    `  features              ${report.featureCount}, reaching ${report.areasWithFeatures} of ${report.areas} areas`,
+    `  minimum print width   ${report.minimumWidthMm === null ? "not printable at any size" : `${report.minimumWidthMm} mm`}`,
     `  verdict               ${report.pass ? "ready for press" : "not ready"}`,
   ];
   for (const reason of report.reasons) lines.push(`      ${reason}`);
