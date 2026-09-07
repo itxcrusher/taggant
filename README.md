@@ -6,26 +6,45 @@ A taggant is a marker added to a material so that a later reader can identify it
 
 ## Status
 
-Early development. Nothing is released yet, and the packages described below are being built in the open. Interfaces will change without notice until a first tagged release.
+Early development. Two packages are usable, the rest are being built in the open. Interfaces change without notice until a first tagged release.
 
-## What it does
+## Judging artwork before it goes to press
 
-- **Recognises printed artwork through the camera** and renders content anchored to it: video, 3D models, images and image sequences.
-- **Resolves printed codes** through an implementation of the GS1 Digital Link standard, so one code on a product can serve different content over the product's life without reprinting.
-- **Judges artwork before it goes to press**, reporting how well a design will track, the minimum size it can be printed at for a given scan distance, and whether it collides with others in the same catalogue.
-- **Publishes self-contained bundles.** Every published experience is a static bundle that runs on any HTTPS host with every service in this project switched off.
-- **Runs on your own infrastructure.** The deployment is part of the project, not an afterthought.
+```
+$ npx taggant-compile pack-front.tif --scan-distance 400
 
-## Scope
+  pack-front.tif
+  size                  900 x 650 px
+  tracking quality      100 / 100
+  features              500, covering 100% of the artwork
+  minimum print width   40 mm
+  verdict               ready for press
+```
 
-| Package | Purpose |
-|---|---|
-| `packages/manifest` | the versioned, documented format describing what a physical thing points at, with schema, validator and types |
-| `packages/target-compiler` | turns print artwork into a tracking target and a quality and print-size report, as a library and a command line tool |
-| `packages/runtime` | the browser runtime: camera handling, recognition, tracking, rendering and content behaviour |
-| `services/resolver` | code lifecycle and GS1 Digital Link resolution, with fallback destinations and scan events |
-| `apps/console` | authoring and management for products, artwork versions, targets, experiences and codes |
-| `infra` | containers, infrastructure as code, pipelines and observability |
+A press run cannot be undone, so the question worth answering is whether this artwork will track at the size and distance it will actually be used. Artwork that fails says why, and exits non-zero so a build can stop on it:
+
+```
+  flat.png
+  tracking quality      11 / 100
+  features              4, covering 25% of the artwork
+  minimum print width   90 mm
+  verdict               not ready
+      too few features to track reliably
+      features are concentrated in part of the artwork
+```
+
+The minimum print width grows with the scan distance, because a camera further away resolves fewer pixels across the same mark.
+
+## Packages
+
+| Package | State | Purpose |
+|---|---|---|
+| `@taggant/manifest` | usable | the versioned experience format, its validator, and types generated from the schema |
+| `@taggant/compiler` | usable | artwork to compiled target, with a print readiness report, as a library and a command line |
+| `@taggant/runtime` | next | camera, recognition, tracking and rendering in the browser |
+| `@taggant/bundler` | planned | an experience compiled to a self-contained static folder |
+| `services/resolver` | planned | code lifecycle and GS1 Digital Link resolution |
+| `apps/console` | planned | authoring for products, artwork versions, targets and codes |
 
 ## Design commitments
 
@@ -37,11 +56,14 @@ These hold for every release and are the reason the project exists in this shape
 - Image targets first. Handheld web AR has no camera pose on every platform, and printed artwork is the trigger that works everywhere.
 - No proprietary runtime dependency that cannot be redistributed.
 
-## Requirements
+## Working on it
 
-Node.js 22 or later. Additional requirements per package are documented alongside each one as it lands.
+Requires Node 22 and pnpm 11.
 
-## Branches
+```
+pnpm install
+pnpm -r typecheck && pnpm check && pnpm -r test && pnpm -r build
+```
 
 `main` holds released, stable work. `dev` is the integration branch and is where work lands first.
 
