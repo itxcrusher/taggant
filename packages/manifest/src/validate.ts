@@ -1,7 +1,7 @@
 import type { ErrorObject } from "ajv";
+import addFormats from "ajv-formats";
 // The schema is JSON Schema 2020-12, which the default Ajv export does not understand.
 import { Ajv2020 } from "ajv/dist/2020.js";
-import addFormats from "ajv-formats";
 import schema from "../schema/manifest-1.0.0.json" with { type: "json" };
 import type { TaggantExperienceManifest } from "./types.gen.js";
 
