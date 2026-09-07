@@ -7,3 +7,4 @@ export {
   mountExperience,
 } from "./experience.js";
 export { cssMatrixFor, type Size } from "./overlay.js";
+export { type Pose, type Recogniser, createRecogniser } from "./recogniser.js";

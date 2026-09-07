@@ -33,6 +33,8 @@ export class Camera {
   private stream: MediaStream | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private context: CanvasRenderingContext2D | null = null;
+  /** Reused between frames. A fresh buffer several times a second is work for the collector. */
+  private gray: Uint8Array | null = null;
 
   constructor(
     private readonly video: HTMLVideoElement,
@@ -114,13 +116,15 @@ export class Camera {
       this.canvas.width = width;
       this.canvas.height = height;
       this.context = this.canvas.getContext("2d", { willReadFrequently: true });
+      this.gray = new Uint8Array(width * height);
     }
     const context = this.context;
     if (!context) return null;
 
     context.drawImage(this.video, 0, 0, width, height);
     const { data } = context.getImageData(0, 0, width, height);
-    const gray = new Uint8Array(width * height);
+    const gray = this.gray ?? new Uint8Array(width * height);
+    this.gray = gray;
     for (let i = 0; i < gray.length; i++) {
       const p = i * 4;
       gray[i] = ((data[p] ?? 0) * 299 + (data[p + 1] ?? 0) * 587 + (data[p + 2] ?? 0) * 114) / 1000;

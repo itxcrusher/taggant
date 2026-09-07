@@ -37,7 +37,7 @@
         fetch("./front.target.json").then((r) => r.json()),
       ]);
 
-      await mountExperience({
+      window.taggantExperience = await mountExperience({
         manifest,
         targets: [
           {

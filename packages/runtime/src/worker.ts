@@ -1,0 +1,85 @@
+import { type TrackingTarget, locate } from "@taggant/vision";
+
+/**
+ * Recognition, off the page's thread.
+ *
+ * Finding artwork in a frame takes a couple of hundred milliseconds, and on the main
+ * thread that is a couple of hundred milliseconds where the camera preview does not
+ * repaint and nothing the viewer touches responds. Measured at 480 by 360 in Chromium:
+ * a median of 212 ms per frame, which is five freezes a second.
+ */
+
+interface SetTargets {
+  type: "targets";
+  targets: SerialisedTarget[];
+}
+
+interface Frame {
+  type: "frame";
+  id: number;
+  width: number;
+  height: number;
+  data: ArrayBuffer;
+}
+
+export interface SerialisedTarget {
+  id: string;
+  width: number;
+  height: number;
+  features: Array<{
+    x: number;
+    y: number;
+    angle: number;
+    strength: number;
+    descriptor: number[] | Uint32Array;
+  }>;
+}
+
+export interface WorkerResult {
+  type: "result";
+  id: number;
+  poses: Array<{ id: string; homography: number[] | null; inliers: number }>;
+}
+
+let targets: TrackingTarget[] = [];
+
+function rebuild(serialised: SerialisedTarget[]): TrackingTarget[] {
+  return serialised.map((target) => ({
+    id: target.id,
+    width: target.width,
+    height: target.height,
+    features: target.features.map((feature) => ({
+      x: feature.x,
+      y: feature.y,
+      scale: 1,
+      angle: feature.angle,
+      strength: feature.strength,
+      // Descriptors cross the wire as plain arrays; a typed array does not survive JSON,
+      // and a structured clone of one per feature costs more than rebuilding once.
+      descriptor:
+        feature.descriptor instanceof Uint32Array ? feature.descriptor : Uint32Array.from(feature.descriptor),
+    })),
+  }));
+}
+
+self.addEventListener("message", (event: MessageEvent<SetTargets | Frame>) => {
+  const message = event.data;
+  if (message.type === "targets") {
+    targets = rebuild(message.targets);
+    return;
+  }
+
+  const frame = { width: message.width, height: message.height, data: new Uint8Array(message.data) };
+  const poses = targets.map((target) => {
+    const result = locate(frame, target);
+    return {
+      id: target.id,
+      homography: result.found && result.homography ? [...result.homography] : null,
+      inliers: result.inliers,
+    };
+  });
+  const reply: WorkerResult = { type: "result", id: message.id, poses };
+  // The frame buffer goes back with the answer so the page can reuse it instead of
+  // allocating a new one every frame.
+  (self as unknown as Worker).postMessage(reply, [message.data]);
+});

@@ -6,6 +6,12 @@ import { fileURLToPath } from "node:url";
 import { buildTrackingFeatures, toTargetFile } from "@taggant/vision";
 import { type Browser, chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+declare global {
+  interface Window {
+    taggantExperience?: { threaded: boolean };
+  }
+}
 import { artwork, inView, writeFeed } from "./feed.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -52,6 +58,8 @@ beforeAll(async () => {
   const files = new Map<string, { body: Buffer; type: string }>([
     ["/page.html", { body: await readFile(join(here, "page.html")), type: "text/html" }],
     ["/runtime.js", { body: await readFile(RUNTIME), type: "text/javascript" }],
+    // The worker is loaded by URL from beside the runtime, so it has to be served too.
+    ["/worker.js", { body: await readFile(join(dirname(RUNTIME), "worker.js")), type: "text/javascript" }],
     ["/manifest.json", { body: Buffer.from(JSON.stringify(MANIFEST)), type: "application/json" }],
     ["/target.json", { body: Buffer.from(JSON.stringify(target)), type: "application/json" }],
     ["/overlay.svg", { body: Buffer.from(OVERLAY), type: "image/svg+xml" }],
@@ -123,6 +131,36 @@ describe("the runtime in a browser, against a camera", () => {
     expect(box.x).toBeLessThan(PLACED.x + 40);
     expect(box.y).toBeGreaterThan(PLACED.y - 40);
     expect(box.y).toBeLessThan(PLACED.y + 40);
+
+    // Recognition must be off the page's thread. It falls back to the main thread where a
+    // browser will not give it one, and that fallback is quiet, so without this the page
+    // could go back to freezing for a fifth of a second at a time and every test still pass.
+    expect(await page.evaluate(() => window.taggantExperience?.threaded)).toBe(true);
+
+    // And the page has to keep painting while it does. This asserts the median and the
+    // share of long frames rather than the single worst one: a collector pause can stall
+    // any page once, and a test that fails on one of those is a test that gets ignored.
+    const pacing = await page.evaluate(async () => {
+      const gaps: number[] = [];
+      let last = performance.now();
+      await new Promise<void>((resolve) => {
+        let frames = 0;
+        const tick = () => {
+          const now = performance.now();
+          gaps.push(now - last);
+          last = now;
+          if (++frames >= 90) return resolve();
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+      gaps.sort((a, b) => a - b);
+      return { median: gaps[Math.floor(gaps.length / 2)] ?? 0, long: gaps.filter((gap) => gap > 100).length };
+    });
+    // On the main thread the median would sit at the recognition cost, which is measured
+    // in hundreds of milliseconds, not near the display's own frame time.
+    expect(pacing.median).toBeLessThan(40);
+    expect(pacing.long).toBeLessThan(5);
 
     expect(failures).toEqual([]);
     await context.close();

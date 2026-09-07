@@ -1,8 +1,9 @@
 import type { TaggantExperienceManifest } from "@taggant/manifest";
-import { type TrackingTarget, locate } from "@taggant/vision";
+import type { TrackingTarget } from "@taggant/vision";
 import { Camera, CameraError, type CameraOptions } from "./camera.js";
 import { buildContent } from "./content.js";
 import { cssMatrixFor } from "./overlay.js";
+import { createRecogniser } from "./recogniser.js";
 
 export type ExperienceState = "idle" | "requesting" | "denied" | "searching" | "tracking" | "error";
 
@@ -24,6 +25,8 @@ export interface MountedExperience {
   readonly state: ExperienceState;
   /** Content types in the manifest this build cannot show. */
   readonly unsupported: readonly string[];
+  /** Whether recognition got a thread of its own. False means the page will stutter. */
+  readonly threaded: boolean;
   stop(): void;
 }
 
@@ -65,14 +68,29 @@ export async function mountExperience(options: {
   container.append(stage);
 
   const unsupported = new Set<string>();
-  const overlays = new Map<string, { element: HTMLElement; target: TrackingTarget; missed: number }>();
+  const overlays = new Map<
+    string,
+    {
+      element: HTMLElement;
+      target: TrackingTarget;
+      missed: number;
+      pose: Float64Array | null;
+      processed: { width: number; height: number } | null;
+    }
+  >();
   for (const target of options.targets) {
     const described = options.manifest.targets.find((entry) => entry.id === target.id);
     if (!described) continue;
     const built = buildContent(described, resolve);
     for (const type of built.unsupported) unsupported.add(type);
     stage.append(built.element);
-    overlays.set(target.id, { element: built.element, target, missed: patience });
+    overlays.set(target.id, {
+      element: built.element,
+      target,
+      missed: patience,
+      pose: null,
+      processed: null,
+    });
   }
 
   let state: ExperienceState = "idle";
@@ -98,51 +116,85 @@ export async function mountExperience(options: {
         return state;
       },
       unsupported: [...unsupported],
+      threaded: false,
       stop: () => camera.stop(),
     };
   }
 
   setState("searching");
   let running = true;
+  const recogniser = createRecogniser(options.targets);
 
-  const step = () => {
+  // Two loops, deliberately. Drawing follows the display and runs every frame; recognition
+  // takes a couple of hundred milliseconds and runs as often as it can finish, with frames
+  // that arrive meanwhile dropped rather than queued. Between answers the last pose stands,
+  // which is why the content follows the camera smoothly at a fraction of the frame rate.
+  const draw = () => {
     if (!running) return;
-    const frame = camera.grab();
-    if (frame) {
-      const displayed = {
-        width: video.clientWidth || frame.width,
-        height: video.clientHeight || frame.height,
-      };
+    const displayed = {
+      width: video.clientWidth || 1,
+      height: video.clientHeight || 1,
+    };
+    for (const overlay of overlays.values()) {
+      if (!overlay.pose || !overlay.processed) continue;
+      overlay.element.style.transform = cssMatrixFor(overlay.pose, overlay.processed, displayed);
+      overlay.element.style.width = `${overlay.target.width}px`;
+      overlay.element.style.height = `${overlay.target.height}px`;
+    }
+    requestAnimationFrame(draw);
+  };
+  requestAnimationFrame(draw);
+
+  const recognise = async () => {
+    while (running) {
+      const frame = camera.grab();
+      if (!frame) {
+        await nextFrame();
+        continue;
+      }
+      const poses = await recogniser.submit(frame);
+      if (!poses) {
+        await nextFrame();
+        continue;
+      }
       let anyFound = false;
-      for (const overlay of overlays.values()) {
-        const result = locate(frame, overlay.target);
-        if (result.found && result.homography) {
+      for (const pose of poses) {
+        const overlay = overlays.get(pose.id);
+        if (!overlay) continue;
+        if (pose.homography) {
           overlay.missed = 0;
-          overlay.element.style.transform = cssMatrixFor(result.homography, frame, displayed);
-          overlay.element.style.width = `${overlay.target.width}px`;
-          overlay.element.style.height = `${overlay.target.height}px`;
+          overlay.pose = pose.homography;
+          overlay.processed = { width: frame.width, height: frame.height };
           overlay.element.hidden = false;
           anyFound = true;
         } else if (++overlay.missed >= patience) {
           overlay.element.hidden = true;
+          overlay.pose = null;
         } else {
           anyFound = true;
         }
       }
       setState(anyFound ? "tracking" : "searching");
+      await nextFrame();
     }
-    requestAnimationFrame(step);
   };
-  requestAnimationFrame(step);
+  void recognise();
 
   return {
     get state() {
       return state;
     },
     unsupported: [...unsupported],
+    threaded: recogniser.threaded,
     stop() {
       running = false;
+      recogniser.stop();
       camera.stop();
     },
   };
+}
+
+/** Yield to the browser, so recognition never starves painting or input. */
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
