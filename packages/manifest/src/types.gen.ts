@@ -20,6 +20,9 @@ export interface TaggantExperienceManifest {
    * @minItems 1
    */
   targets: [Target, ...Target[]];
+  /**
+   * Where a scan goes when the experience cannot be shown. A viewer navigates to it, so the scheme is held to http and https: a manifest is authored data and must not be able to carry script into a browser.
+   */
   fallback?: string;
 }
 export interface Target {
@@ -33,6 +36,9 @@ export interface Target {
 }
 export interface Content {
   type: "image" | "video" | "model" | "audio";
+  /**
+   * Path to the asset, relative to the manifest. Relative by design: a published experience is a self contained bundle, so an absolute URL would make it depend on a host that can go away. Parent directory steps are refused because the path is resolved against a bundle directory.
+   */
   src: string;
   placement?: Placement;
   autoplay?: boolean;

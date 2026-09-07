@@ -50,3 +50,78 @@ describe("validateManifest on values it cannot clone", () => {
     expect(validateManifest(() => 1).ok).toBe(false);
   });
 });
+
+describe("validateManifest as the gate before publication", () => {
+  function manifest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      schemaVersion: "1.0.0",
+      id: "postcard",
+      targets: [
+        {
+          id: "front",
+          source: "front.png",
+          physicalWidthMm: 148,
+          content: [{ type: "video", src: "clip.mp4" }],
+        },
+      ],
+      ...overrides,
+    };
+  }
+
+  it("refuses a fallback that would run script in the viewer's browser", () => {
+    for (const fallback of [
+      "javascript:alert(document.cookie)",
+      "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+      "vbscript:msgbox(1)",
+    ]) {
+      expect(validateManifest(manifest({ fallback })).ok).toBe(false);
+    }
+  });
+
+  it("accepts an ordinary web address as a fallback", () => {
+    expect(validateManifest(manifest({ fallback: "https://example.com/postcard" })).ok).toBe(true);
+  });
+
+  it("refuses content paths that leave the bundle", () => {
+    for (const src of [
+      "../../../etc/passwd",
+      "/etc/passwd",
+      "http://elsewhere.example/x.mp4",
+      "a/../b.mp4",
+    ]) {
+      const value = manifest();
+      const targets = value.targets as Array<{ content: Array<{ src: string }> }>;
+      const first = targets[0]?.content[0];
+      if (first) first.src = src;
+      expect(validateManifest(value).ok).toBe(false);
+    }
+  });
+
+  it("refuses two targets with the same id, which anything keying by id would lose", () => {
+    const value = manifest();
+    const targets = value.targets as Array<Record<string, unknown>>;
+    const first = targets[0];
+    if (first) targets.push({ ...first });
+    const result = validateManifest(value);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected failure");
+    expect(result.errors[0]?.message).toMatch(/already used/);
+  });
+
+  it("fills in placement, so a consumer reading placement.scale does not crash", () => {
+    const result = validateManifest(manifest());
+    if (!result.ok) throw new Error("expected success");
+    expect(result.value.targets[0]?.content[0]?.placement?.scale).toBe(1);
+  });
+
+  it("lets an error from the caller's own code through instead of blaming the manifest", () => {
+    const hostile = manifest();
+    Object.defineProperty(hostile, "title", {
+      enumerable: true,
+      get() {
+        throw new Error("boom from the getter");
+      },
+    });
+    expect(() => validateManifest(hostile)).toThrow(/boom from the getter/);
+  });
+});

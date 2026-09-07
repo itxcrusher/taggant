@@ -23,7 +23,13 @@
       "minItems": 1,
       "items": { "$ref": "#/$defs/target" }
     },
-    "fallback": { "type": "string", "format": "uri" }
+    "fallback": {
+      "description": "Where a scan goes when the experience cannot be shown. A viewer navigates to it, so the scheme is held to http and https: a manifest is authored data and must not be able to carry script into a browser.",
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https?://",
+      "maxLength": 2000
+    }
   },
   "$defs": {
     "target": {
@@ -43,8 +49,13 @@
       "additionalProperties": false,
       "properties": {
         "type": { "enum": ["image", "video", "model", "audio"] },
-        "src": { "type": "string", "maxLength": 300 },
-        "placement": { "$ref": "#/$defs/placement" },
+        "src": {
+          "description": "Path to the asset, relative to the manifest. Relative by design: a published experience is a self contained bundle, so an absolute URL would make it depend on a host that can go away. Parent directory steps are refused because the path is resolved against a bundle directory.",
+          "type": "string",
+          "maxLength": 300,
+          "pattern": "^(?!/)(?!.*(?:^|/)[.][.](?:/|$))(?![A-Za-z][A-Za-z0-9+.-]*:)[^?#]+$"
+        },
+        "placement": { "$ref": "#/$defs/placement", "default": {} },
         "autoplay": { "type": "boolean", "default": true },
         "loop": { "type": "boolean", "default": true },
         "muted": { "type": "boolean", "default": false }
