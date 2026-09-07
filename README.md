@@ -87,6 +87,10 @@ await mountExperience({
 
 The container ends up holding the camera picture with one element per target over it, each carrying the pose as a CSS transform, so a frame where nothing is found costs one hidden attribute rather than a rebuild. Content is only taken away after several consecutive misses, because recognition is per frame and one frame without a find is ordinary. A refused camera is told apart from a missing one, and the manifest's fallback is followed when the camera will not open at all.
 
+Recognition runs in a worker, and drawing and recognition are separate loops. Finding artwork in a frame takes a couple of hundred milliseconds, which on the page's own thread is a couple of hundred milliseconds where the camera preview does not repaint and nothing the viewer touches responds. Drawing follows the display and runs every frame from the last known pose; recognition runs as often as it can finish and drops the frames that arrive meanwhile, because a queue would only build a backlog of poses for positions the print has already left. Where a browser will not give a worker, recognition falls back to the page's thread, since a runtime that stops working without one is worse than a runtime that runs slowly.
+
+Measured in Chromium against the example, at 480 by 360: recognition went from 576 ms a call to 212 ms, and with it off the main thread the page paints at a median of 16.6 ms with no frame over 100 ms across 120. The test asserts both, because a green suite is what let the first number go unnoticed.
+
 ## Design commitments
 
 These hold for every release and are the reason the project exists in this shape.
