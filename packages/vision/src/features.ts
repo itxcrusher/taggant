@@ -149,42 +149,79 @@ function fraction(value: number, name: string): number {
 /**
  * The smaller eigenvalue of the structure tensor at every pixel.
  *
+ * Written as three passes rather than one nested loop because the window sums are
+ * separable: computed directly, every gradient is recomputed nine times over for the
+ * overlapping windows that use it. Measured in a browser at 480 by 360, the direct form
+ * put recognition at under two frames a second.
+ *
  * Samples are clamped at the border rather than skipped, so a corner sitting on the trim
  * edge is measured over the same nine samples as one in the middle. Print artwork runs
- * detail to the trim edge all the time, and a corner scored lower for being there loses
- * to the middle of the page for no reason to do with the artwork.
+ * detail to the trim edge all the time, and a corner scored lower for being there loses to
+ * the middle of the page for no reason to do with the artwork.
  */
 function respond(image: GrayscaleImage): Float32Array {
   const { width, height, data } = image;
-  const response = new Float32Array(width * height);
+  const count = width * height;
   const at = (x: number, y: number): number => {
     const cx = x < 0 ? 0 : x >= width ? width - 1 : x;
     const cy = y < 0 ? 0 : y >= height ? height - 1 : y;
     return data[cy * width + cx] ?? 0;
   };
 
+  // One gradient per pixel, and the three products the structure tensor is built from.
+  const xx = new Float32Array(count);
+  const yy = new Float32Array(count);
+  const xy = new Float32Array(count);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      let sxx = 0;
-      let syy = 0;
-      let sxy = 0;
-      for (let wy = -1; wy <= 1; wy++) {
-        for (let wx = -1; wx <= 1; wx++) {
-          const px = x + wx;
-          const py = y + wy;
-          const gx = at(px + 1, py) - at(px - 1, py);
-          const gy = at(px, py + 1) - at(px, py - 1);
-          sxx += gx * gx;
-          syy += gy * gy;
-          sxy += gx * gy;
-        }
-      }
-      const trace = sxx + syy;
-      const gap = Math.sqrt(Math.max(0, (sxx - syy) * (sxx - syy) + 4 * sxy * sxy));
-      response[y * width + x] = (trace - gap) / 2;
+      const gx = at(x + 1, y) - at(x - 1, y);
+      const gy = at(x, y + 1) - at(x, y - 1);
+      const i = y * width + x;
+      xx[i] = gx * gx;
+      yy[i] = gy * gy;
+      xy[i] = gx * gy;
     }
   }
+
+  box3(xx, width, height);
+  box3(yy, width, height);
+  box3(xy, width, height);
+
+  const response = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    const sxx = xx[i] ?? 0;
+    const syy = yy[i] ?? 0;
+    const sxy = xy[i] ?? 0;
+    const trace = sxx + syy;
+    const gap = Math.sqrt(Math.max(0, (sxx - syy) * (sxx - syy) + 4 * sxy * sxy));
+    response[i] = (trace - gap) / 2;
+  }
   return response;
+}
+
+/** Three by three sum, in place, edges replicated. Separable, so two passes rather than nine. */
+function box3(values: Float32Array, width: number, height: number): void {
+  const row = new Float32Array(width);
+  for (let y = 0; y < height; y++) {
+    const start = y * width;
+    for (let x = 0; x < width; x++) {
+      const left = values[start + (x > 0 ? x - 1 : 0)] ?? 0;
+      const right = values[start + (x < width - 1 ? x + 1 : width - 1)] ?? 0;
+      row[x] = left + (values[start + x] ?? 0) + right;
+    }
+    values.set(row, start);
+  }
+
+  const column = new Float32Array(width * height);
+  for (let y = 0; y < height; y++) {
+    const start = y * width;
+    const up = (y > 0 ? y - 1 : 0) * width;
+    const down = (y < height - 1 ? y + 1 : height - 1) * width;
+    for (let x = 0; x < width; x++) {
+      column[start + x] = (values[up + x] ?? 0) + (values[start + x] ?? 0) + (values[down + x] ?? 0);
+    }
+  }
+  values.set(column);
 }
 
 /** Pixels that are the peak of their own three by three neighbourhood, and not flat. */

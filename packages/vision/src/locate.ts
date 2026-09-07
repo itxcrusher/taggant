@@ -41,6 +41,14 @@ export interface LocateResult {
 const NOT_FOUND: LocateResult = { found: false, homography: null, inliers: 0, matches: 0 };
 
 /**
+ * Sizes a frame is described at, in the order they are tried.
+ *
+ * Two, because a frame is not just a smaller view of the print, it is a softer one: a
+ * camera slightly out of focus moves detail down the scale the way distance does.
+ */
+const DEFAULT_FRAME_SCALES = [1, 0.79] as const;
+
+/**
  * Find compiled artwork in a camera frame and work out where it is.
  *
  * The minimum inlier count is what stops the system hallucinating. A homography can
@@ -53,12 +61,29 @@ export function locate(
   options: LocateOptions = {},
 ): LocateResult {
   const minInliers = options.minInliers ?? 10;
+  const perScale = options.maxCorners ?? 400;
   if (frame.width < 1 || frame.height < 1 || target.features.length === 0) return NOT_FOUND;
 
-  const described = buildTrackingFeatures(frame, {
-    scales: options.scales ?? [1, 0.79],
-    perScale: options.maxCorners ?? 400,
-  });
+  const scales = options.scales ?? DEFAULT_FRAME_SCALES;
+  // The first size is tried on its own before the rest are paid for. Describing a frame is
+  // the most expensive thing in the loop, and on a frame where the artwork is squarely in
+  // view the first size finds it, so the common case costs one size and only a frame that
+  // is genuinely hard costs them all.
+  let attempt = attemptAt(frame, target, [scales[0] ?? 1], perScale, minInliers);
+  if (!attempt.found && scales.length > 1) {
+    attempt = attemptAt(frame, target, scales, perScale, minInliers);
+  }
+  return attempt;
+}
+
+function attemptAt(
+  frame: GrayscaleImage,
+  target: TrackingTarget,
+  scales: readonly number[],
+  perScale: number,
+  minInliers: number,
+): LocateResult {
+  const described = buildTrackingFeatures(frame, { scales, perScale });
   if (described.length < 4) return NOT_FOUND;
 
   const matches = matchDescriptors(

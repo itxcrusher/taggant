@@ -1,4 +1,6 @@
-import { hamming } from "./describe.js";
+import { DESCRIPTOR_BITS } from "./pattern.js";
+
+const WORDS = DESCRIPTOR_BITS / 32;
 
 export interface Match {
   /** Index into the query set, which in practice is the camera frame. */
@@ -30,6 +32,35 @@ export interface MatchOptions {
   distinctRadius?: number;
 }
 
+/**
+ * Copy a set of descriptors into one contiguous buffer.
+ *
+ * Matching is the inner loop of every frame: a few hundred descriptors against a few
+ * hundred more, eight words each. Walking an array of separate typed arrays spends most of
+ * that time chasing pointers. Packing first costs one pass and measurably shortens the
+ * frame.
+ */
+function pack(descriptors: Uint32Array[]): Uint32Array {
+  const flat = new Uint32Array(descriptors.length * WORDS);
+  for (let i = 0; i < descriptors.length; i++) {
+    const descriptor = descriptors[i];
+    if (descriptor) flat.set(descriptor.subarray(0, WORDS), i * WORDS);
+  }
+  return flat;
+}
+
+/** Bits that differ between two descriptors held in flat buffers. */
+function distance(a: Uint32Array, ai: number, b: Uint32Array, bi: number): number {
+  let total = 0;
+  for (let w = 0; w < WORDS; w++) {
+    let v = ((a[ai + w] ?? 0) ^ (b[bi + w] ?? 0)) >>> 0;
+    v = v - ((v >>> 1) & 0x5555_5555);
+    v = (v & 0x3333_3333) + ((v >>> 2) & 0x3333_3333);
+    total += (((v + (v >>> 4)) & 0x0f0f_0f0f) * 0x0101_0101) >>> 24;
+  }
+  return total;
+}
+
 interface Best {
   index: number;
   distance: number;
@@ -44,43 +75,64 @@ interface Best {
  * its rival makes the ratio test reject exactly the matches that are most certainly right.
  */
 function bestAgainst(
-  descriptor: Uint32Array,
-  set: Uint32Array[],
-  positions?: Position[],
-  distinctRadius = 0,
+  query: Uint32Array,
+  queryIndex: number,
+  set: Uint32Array,
+  count: number,
+  positions: Position[] | undefined,
+  radiusSquared: number,
 ): Best {
   let index = -1;
-  let distance = Number.POSITIVE_INFINITY;
-  for (let i = 0; i < set.length; i++) {
-    const candidate = set[i];
-    if (!candidate) continue;
-    const d = hamming(descriptor, candidate);
-    if (d < distance) {
-      distance = d;
+  let best = Number.POSITIVE_INFINITY;
+  let second = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < count; i++) {
+    const d = distance(query, queryIndex, set, i * WORDS);
+    if (d < best) {
+      second = best;
+      best = d;
       index = i;
+    } else if (d < second) {
+      second = d;
     }
   }
-  if (index < 0) return { index, distance, second: Number.POSITIVE_INFINITY };
+  if (index < 0 || !positions || radiusSquared <= 0) return { index, distance: best, second };
 
-  const bestPosition = positions?.[index];
-  const radiusSquared = distinctRadius * distinctRadius;
-  let second = Number.POSITIVE_INFINITY;
-  for (let i = 0; i < set.length; i++) {
+  // The runner up sat on the same spot as the winner, so it is the same feature at another
+  // scale rather than a rival. Only then is a second pass worth its cost.
+  const winner = positions[index];
+  const runnerUp =
+    second === Number.POSITIVE_INFINITY ? undefined : nearestAt(positions, winner, radiusSquared);
+  if (!winner || !runnerUp) return { index, distance: best, second };
+
+  second = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < count; i++) {
     if (i === index) continue;
-    const candidate = set[i];
-    if (!candidate) continue;
-    if (bestPosition && radiusSquared > 0) {
-      const other = positions?.[i];
-      if (other) {
-        const dx = other.x - bestPosition.x;
-        const dy = other.y - bestPosition.y;
-        if (dx * dx + dy * dy <= radiusSquared) continue;
-      }
+    const other = positions[i];
+    if (other) {
+      const dx = other.x - winner.x;
+      const dy = other.y - winner.y;
+      if (dx * dx + dy * dy <= radiusSquared) continue;
     }
-    const d = hamming(descriptor, candidate);
+    const d = distance(query, queryIndex, set, i * WORDS);
     if (d < second) second = d;
   }
-  return { index, distance, second };
+  return { index, distance: best, second };
+}
+
+/** Whether any other feature shares the winner's spot, which is what makes a second pass necessary. */
+function nearestAt(
+  positions: Position[],
+  winner: Position | undefined,
+  radiusSquared: number,
+): boolean | undefined {
+  if (!winner) return undefined;
+  let sharing = 0;
+  for (const other of positions) {
+    const dx = other.x - winner.x;
+    const dy = other.y - winner.y;
+    if (dx * dx + dy * dy <= radiusSquared && ++sharing > 1) return true;
+  }
+  return undefined;
 }
 
 /**
@@ -101,25 +153,32 @@ export function matchDescriptors(
   const ratio = options.ratio ?? 0.8;
   const positions = options.targetPositions;
   const distinctRadius = options.distinctRadius ?? (positions ? 6 : 0);
+  const radiusSquared = distinctRadius * distinctRadius;
   if (query.length === 0 || target.length === 0) return [];
+
+  const queries = pack(query);
+  const targets = pack(target);
 
   const forward: Match[] = [];
   for (let q = 0; q < query.length; q++) {
-    const descriptor = query[q];
-    if (!descriptor) continue;
-    const best = bestAgainst(descriptor, target, positions, distinctRadius);
+    const best = bestAgainst(queries, q * WORDS, targets, target.length, positions, radiusSquared);
     if (best.index < 0 || best.distance > maxDistance) continue;
     if (Number.isFinite(best.second) && best.distance > best.second * ratio) continue;
     forward.push({ query: q, target: best.index, distance: best.distance });
   }
 
+  const queryPositions = options.queryPositions;
   const mutual: Match[] = [];
   for (const match of forward) {
-    const descriptor = target[match.target];
-    if (!descriptor) continue;
-    if (bestAgainst(descriptor, query, options.queryPositions, distinctRadius).index === match.query) {
-      mutual.push(match);
-    }
+    const back = bestAgainst(
+      targets,
+      match.target * WORDS,
+      queries,
+      query.length,
+      queryPositions,
+      radiusSquared,
+    );
+    if (back.index === match.query) mutual.push(match);
   }
   return mutual;
 }
