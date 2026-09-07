@@ -1,0 +1,25 @@
+{
+  "name": "@taggant/manifest",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./schema": "./schema/manifest-1.0.0.json"
+  },
+  "files": ["dist", "schema"],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "types": "json2ts schema/manifest-1.0.0.json -o src/types.gen.ts --additionalProperties false"
+  },
+  "dependencies": {
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1"
+  },
+  "devDependencies": {
+    "json-schema-to-typescript": "15.0.3"
+  }
+}
