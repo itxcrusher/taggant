@@ -35,6 +35,12 @@ const MIN_COVERAGE = 0.5;
  */
 export function buildReport(input: ReportInput): Report {
   const { image, corners, scanDistanceMm } = input;
+  if (!Number.isFinite(scanDistanceMm) || scanDistanceMm <= 0) {
+    throw new RangeError(`scan distance must be a positive number of millimetres, got ${scanDistanceMm}`);
+  }
+  if (!(image.width > 0) || !(image.height > 0)) {
+    throw new RangeError(`image must have a positive width and height, got ${image.width} x ${image.height}`);
+  }
   const featureCount = corners.length;
 
   const cells = new Set<number>();

@@ -64,3 +64,19 @@ describe("buildReport", () => {
     expect(report.reasons).toContain("features are concentrated in part of the artwork");
   });
 });
+
+describe("buildReport input validation", () => {
+  it("refuses a scan distance that is not a positive finite number", () => {
+    for (const bad of [0, -400, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() =>
+        buildReport({ image: { width: 400, height: 400 }, corners: corners(10), scanDistanceMm: bad }),
+      ).toThrow(/scan distance/i);
+    }
+  });
+
+  it("refuses an image with no area, rather than reporting coverage for it", () => {
+    expect(() =>
+      buildReport({ image: { width: 0, height: 0 }, corners: corners(10), scanDistanceMm: 400 }),
+    ).toThrow(/image/i);
+  });
+});

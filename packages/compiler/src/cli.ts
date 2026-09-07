@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
-import { argv, exit, stdout } from "node:process";
+import { argv, exit, stderr, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import { type CompiledTarget, compileTarget } from "./compile.js";
 
@@ -38,11 +38,31 @@ export async function main(argv: string[]): Promise<number> {
       .replace(/\.[^.]+$/, "")
       .toLowerCase();
   const scanDistanceMm = Number(readOption(argv, "--scan-distance") ?? 400);
-  const target = await compileTarget(await readFile(source), { id, scanDistanceMm });
+  if (!Number.isFinite(scanDistanceMm) || scanDistanceMm <= 0) {
+    stderr.write("scan distance must be a positive number of millimetres\n");
+    return 1;
+  }
+
+  let target: CompiledTarget;
+  try {
+    target = await compileTarget(await readFile(source), { id, scanDistanceMm });
+  } catch (error) {
+    // Everything reaching here is the input being unusable: a missing file, a directory,
+    // artwork below the minimum size, a format that cannot be decoded. One line, then stop.
+    stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
   stdout.write(`${formatReportLines(source, target).join("\n")}\n`);
+
   const out = readOption(argv, "--out");
   if (out) {
-    await writeFile(out, JSON.stringify(target));
+    try {
+      await writeFile(out, JSON.stringify(target));
+    } catch (error) {
+      stderr.write(`could not write ${out}: ${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
     stdout.write(`  written ${out}\n\n`);
   }
   return target.report.pass ? 0 : 2;

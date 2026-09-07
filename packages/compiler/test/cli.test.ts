@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatReportLines } from "../src/cli.js";
+import { formatReportLines, main } from "../src/cli.js";
 
 describe("formatReportLines", () => {
   it("prints the numbers a printer needs, in millimetres", () => {
@@ -37,5 +37,21 @@ describe("formatReportLines", () => {
     expect(text).toContain("too few features");
     expect(text).toContain("concentrated");
     expect(text).toContain("not ready");
+  });
+});
+
+describe("main", () => {
+  it("reports a bad scan distance and exits non-zero instead of printing nonsense", async () => {
+    const code = await main(["whatever.png", "--scan-distance", "abc"]);
+    expect(code).toBe(1);
+  });
+
+  it("reports a missing file cleanly rather than throwing a stack trace", async () => {
+    const code = await main(["definitely-not-here.png"]);
+    expect(code).toBe(1);
+  });
+
+  it("exits 1 and prints usage when given no arguments", async () => {
+    expect(await main([])).toBe(1);
   });
 });
