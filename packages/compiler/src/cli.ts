@@ -29,9 +29,7 @@ function readOption(argv: string[], name: string): string | undefined {
 export async function main(argv: string[]): Promise<number> {
   const source = argv[0];
   if (!source || source === "--help") {
-    stdout.write(
-      "usage: taggant-compile <artwork> [--id <id>] [--scan-distance <mm>] [--out <file>]\n",
-    );
+    stdout.write("usage: taggant-compile <artwork> [--id <id>] [--scan-distance <mm>] [--out <file>]\n");
     return source ? 0 : 1;
   }
   const id =
