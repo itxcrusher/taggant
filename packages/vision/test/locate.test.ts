@@ -3,7 +3,7 @@ import { type Homography, applyHomography } from "../src/homography.js";
 import type { GrayscaleImage } from "../src/image.js";
 import { type TrackingTarget, locate } from "../src/locate.js";
 import { buildTrackingFeatures } from "../src/target.js";
-import { transform, warp } from "./warp.js";
+import { blur, transform, warp } from "./warp.js";
 
 /**
  * Stand-in artwork: irregular enough that corners are distinguishable, which is the same
@@ -110,6 +110,15 @@ describe("locate", () => {
     };
     const frame = warp(source, transform({ scale: 0.5, translateX: 200, translateY: 150 }), 640, 480);
     expect(locate(frame, single).found).toBe(false);
+  });
+
+  it("finds it in a frame that is out of focus, which every real frame is", () => {
+    const truth = transform({ rotationDeg: 8, translateX: 140, translateY: 100 });
+    const frame = blur(warp(source, truth, 640, 480));
+    const result = locate(frame, target);
+    expect(result.found).toBe(true);
+    if (!result.homography) throw new Error("expected a pose");
+    expect(cornerError(result.homography, truth, target)).toBeLessThan(6);
   });
 
   it("reports not found for a frame of something else", () => {

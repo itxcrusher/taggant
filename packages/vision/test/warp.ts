@@ -51,10 +51,13 @@ export function warp(
   if (!inverse) return { width, height, data };
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
+      // Map the centre of the output pixel, then step back to index space, which is what
+      // sample takes. Without that half pixel the identity mapping blurs the image, and
+      // every test built on it is harder than the camera it stands in for.
       const [sx, sy] = applyHomography(inverse, x + 0.5, y + 0.5);
       if (!Number.isFinite(sx) || !Number.isFinite(sy)) continue;
       if (sx < 0 || sy < 0 || sx >= source.width || sy >= source.height) continue;
-      data[y * width + x] = Math.round(sample(source, sx, sy));
+      data[y * width + x] = Math.round(sample(source, sx - 0.5, sy - 0.5));
     }
   }
   return { width, height, data };
@@ -84,4 +87,25 @@ export function transform(options: {
     options.perspectiveY ?? 0,
     1,
   ]);
+}
+
+/**
+ * A three by three blur, standing in for a camera that is not perfectly in focus.
+ *
+ * Every frame from a phone held at arm's length is softer than the file that was printed,
+ * so a tracker tested only on sharp views is tested on a case that does not occur.
+ */
+export function blur(image: GrayscaleImage): GrayscaleImage {
+  const { width, height, data } = image;
+  const out = new Uint8Array(width * height);
+  const at = (x: number, y: number) =>
+    data[Math.min(height - 1, Math.max(0, y)) * width + Math.min(width - 1, Math.max(0, x))] ?? 0;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let sum = 0;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) sum += at(x + dx, y + dy);
+      out[y * width + x] = Math.round(sum / 9);
+    }
+  }
+  return { width, height, data: out };
 }

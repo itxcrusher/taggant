@@ -1,8 +1,7 @@
-import { type DescribedCorner, describeCorners } from "./describe.js";
-import { detectCorners } from "./features.js";
 import { type Homography, estimateHomography } from "./homography.js";
 import type { GrayscaleImage } from "./image.js";
 import { matchDescriptors } from "./match.js";
+import { type TargetFeature, buildTrackingFeatures } from "./target.js";
 
 /** What the compiler produces and the runtime consumes: artwork reduced to what identifies it. */
 export interface TrackingTarget {
@@ -10,14 +9,21 @@ export interface TrackingTarget {
   /** Size of the artwork the features were measured in, in pixels. */
   width: number;
   height: number;
-  features: DescribedCorner[];
+  features: TargetFeature[];
 }
 
 export interface LocateOptions {
-  /** Corners to take from the frame. More is slower and, past a point, no more accurate. */
+  /** Corners to take from each size the frame is described at. */
   maxCorners?: number;
-  /** Minimum pixels between two frame corners. */
-  minDistance?: number;
+  /**
+   * Sizes the frame is described at.
+   *
+   * Two, because a frame is not just a smaller view of the print, it is a softer one. A
+   * camera that is slightly out of focus moves detail down the scale the same way distance
+   * does, and a descriptor taken from a sharp file does not match one taken from a soft
+   * photograph of it unless somewhere on one side there is a level that is soft too.
+   */
+  scales?: readonly number[];
   /** Matches that must survive the fit before a pose is believed. */
   minInliers?: number;
 }
@@ -49,17 +55,19 @@ export function locate(
   const minInliers = options.minInliers ?? 10;
   if (frame.width < 1 || frame.height < 1 || target.features.length === 0) return NOT_FOUND;
 
-  const corners = detectCorners(frame, {
-    maxCorners: options.maxCorners ?? 600,
-    minDistance: options.minDistance ?? 6,
+  const described = buildTrackingFeatures(frame, {
+    scales: options.scales ?? [1, 0.79],
+    perScale: options.maxCorners ?? 400,
   });
-  const described = describeCorners(frame, corners);
   if (described.length < 4) return NOT_FOUND;
 
   const matches = matchDescriptors(
     described.map((c) => c.descriptor),
     target.features.map((c) => c.descriptor),
-    { targetPositions: target.features.map((c) => ({ x: c.x, y: c.y })) },
+    {
+      targetPositions: target.features.map((c) => ({ x: c.x, y: c.y })),
+      queryPositions: described.map((c) => ({ x: c.x, y: c.y })),
+    },
   );
   if (matches.length < minInliers) {
     return { found: false, homography: null, inliers: 0, matches: matches.length };

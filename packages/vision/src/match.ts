@@ -24,7 +24,9 @@ export interface MatchOptions {
    * physical feature more than once, which a multi scale target always does.
    */
   targetPositions?: Position[];
-  /** How far apart two target features must be before they count as different places. */
+  /** Positions of the query descriptors, for the same reason on the other side. */
+  queryPositions?: Position[];
+  /** How far apart two features must be before they count as different places. */
   distinctRadius?: number;
 }
 
@@ -115,7 +117,9 @@ export function matchDescriptors(
   for (const match of forward) {
     const descriptor = target[match.target];
     if (!descriptor) continue;
-    if (bestAgainst(descriptor, query).index === match.query) mutual.push(match);
+    if (bestAgainst(descriptor, query, options.queryPositions, distinctRadius).index === match.query) {
+      mutual.push(match);
+    }
   }
   return mutual;
 }

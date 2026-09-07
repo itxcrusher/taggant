@@ -73,6 +73,7 @@ export function fromTargetFile(value: unknown): TrackingTarget {
       return {
         x: feature.x,
         y: feature.y,
+        scale: feature.scale,
         angle: feature.angle,
         strength: feature.strength,
         descriptor: Uint32Array.from(feature.descriptor),

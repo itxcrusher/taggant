@@ -1,6 +1,6 @@
 import { type DescribedCorner, describeCorners } from "./describe.js";
 import { detectCorners } from "./features.js";
-import { type GrayscaleImage, resample } from "./image.js";
+import { type GrayscaleImage, resample, smooth } from "./image.js";
 
 /**
  * Scales the artwork is described at.
@@ -37,7 +37,7 @@ export function buildTrackingFeatures(image: GrayscaleImage, options: BuildOptio
   const perScale = options.perScale ?? 300;
   const features: TargetFeature[] = [];
   for (const scale of scales) {
-    const level = resample(image, scale);
+    const level = smooth(resample(image, scale));
     const described = describeCorners(level, detectCorners(level, { maxCorners: perScale }));
     for (const corner of described) {
       features.push({ ...corner, x: corner.x / scale, y: corner.y / scale, scale });
