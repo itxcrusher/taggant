@@ -29,3 +29,23 @@ export function sample(image: GrayscaleImage, x: number, y: number): number {
   const p11 = data[y1 * width + x1] ?? 0;
   return p00 * (1 - fx) * (1 - fy) + p10 * fx * (1 - fy) + p01 * (1 - fx) * fy + p11 * fx * fy;
 }
+
+/**
+ * Resample an image to a fraction of its size.
+ *
+ * Used to build a target at several scales, so a print photographed from further away
+ * than it was compiled at still has a level it can match against.
+ */
+export function resample(image: GrayscaleImage, scale: number): GrayscaleImage {
+  if (!(scale > 0)) throw new RangeError(`scale must be a positive number, got ${scale}`);
+  if (scale === 1) return image;
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
+  const data = new Uint8Array(width * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      data[y * width + x] = Math.round(sample(image, (x + 0.5) / scale - 0.5, (y + 0.5) / scale - 0.5));
+    }
+  }
+  return { width, height, data };
+}

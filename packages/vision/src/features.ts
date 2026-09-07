@@ -82,7 +82,38 @@ export function detectCorners(image: GrayscaleImage, options: DetectOptions = {}
         break;
       }
     }
-    if (!tooClose) accepted.push(candidate);
+    if (!tooClose) accepted.push(refine(response, width, height, candidate));
   }
   return accepted;
+}
+
+/**
+ * Move a corner to the peak of the response surface rather than the middle of the pixel
+ * that happened to win.
+ *
+ * Whole pixel positions are the wrong unit here. The same physical corner seen from a
+ * slightly different angle lands up to a pixel away, and a pose fitted from positions
+ * that are each a pixel out is a pose that visibly floats. A parabola through the
+ * response either side of the peak costs almost nothing and removes most of that error.
+ */
+function refine(response: Float32Array, width: number, height: number, corner: Corner): Corner {
+  const { x, y } = corner;
+  if (x < 1 || y < 1 || x >= width - 1 || y >= height - 1) return corner;
+  const at = (px: number, py: number) => response[py * width + px] ?? 0;
+  const centre = at(x, y);
+
+  const left = at(x - 1, y);
+  const right = at(x + 1, y);
+  const horizontal = left - 2 * centre + right;
+  const dx = Math.abs(horizontal) < 1e-12 ? 0 : (0.5 * (left - right)) / horizontal;
+
+  const up = at(x, y - 1);
+  const down = at(x, y + 1);
+  const vertical = up - 2 * centre + down;
+  const dy = Math.abs(vertical) < 1e-12 ? 0 : (0.5 * (up - down)) / vertical;
+
+  // A shift of more than one pixel means the peak is not where the sampling says it is,
+  // so the fit is not to be trusted and the whole pixel position stands.
+  if (Math.abs(dx) > 1 || Math.abs(dy) > 1) return corner;
+  return { x: x + dx, y: y + dy, strength: corner.strength };
 }

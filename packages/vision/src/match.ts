@@ -8,11 +8,24 @@ export interface Match {
   distance: number;
 }
 
+/** Where a target descriptor sits on the artwork, in the artwork's own coordinates. */
+export interface Position {
+  x: number;
+  y: number;
+}
+
 export interface MatchOptions {
   /** Further apart than this and it is not a match at any ratio. */
   maxDistance?: number;
   /** The best must beat the second best by this factor, or the match is ambiguous. */
   ratio?: number;
+  /**
+   * Positions of the target descriptors. Supply them when the target holds the same
+   * physical feature more than once, which a multi scale target always does.
+   */
+  targetPositions?: Position[];
+  /** How far apart two target features must be before they count as different places. */
+  distinctRadius?: number;
 }
 
 interface Best {
@@ -21,21 +34,49 @@ interface Best {
   second: number;
 }
 
-function bestAgainst(descriptor: Uint32Array, set: Uint32Array[]): Best {
+/**
+ * Nearest and next nearest, where next nearest means the nearest one somewhere else.
+ *
+ * A target compiled at several scales carries each physical feature several times over,
+ * and those copies are nearly identical by construction. Counting a feature's own copy as
+ * its rival makes the ratio test reject exactly the matches that are most certainly right.
+ */
+function bestAgainst(
+  descriptor: Uint32Array,
+  set: Uint32Array[],
+  positions?: Position[],
+  distinctRadius = 0,
+): Best {
   let index = -1;
   let distance = Number.POSITIVE_INFINITY;
-  let second = Number.POSITIVE_INFINITY;
   for (let i = 0; i < set.length; i++) {
     const candidate = set[i];
     if (!candidate) continue;
     const d = hamming(descriptor, candidate);
     if (d < distance) {
-      second = distance;
       distance = d;
       index = i;
-    } else if (d < second) {
-      second = d;
     }
+  }
+  if (index < 0) return { index, distance, second: Number.POSITIVE_INFINITY };
+
+  const bestPosition = positions?.[index];
+  const radiusSquared = distinctRadius * distinctRadius;
+  let second = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < set.length; i++) {
+    if (i === index) continue;
+    const candidate = set[i];
+    if (!candidate) continue;
+    if (bestPosition && radiusSquared > 0) {
+      const other = positions?.[i];
+      if (other) {
+        const dx = other.x - bestPosition.x;
+        const dy = other.y - bestPosition.y;
+        if (dx * dx + dy * dy <= radiusSquared) continue;
+      }
+    }
+    const d = hamming(descriptor, candidate);
+    if (d < second) second = d;
   }
   return { index, distance, second };
 }
@@ -56,13 +97,15 @@ export function matchDescriptors(
 ): Match[] {
   const maxDistance = options.maxDistance ?? 72;
   const ratio = options.ratio ?? 0.8;
+  const positions = options.targetPositions;
+  const distinctRadius = options.distinctRadius ?? (positions ? 6 : 0);
   if (query.length === 0 || target.length === 0) return [];
 
   const forward: Match[] = [];
   for (let q = 0; q < query.length; q++) {
     const descriptor = query[q];
     if (!descriptor) continue;
-    const best = bestAgainst(descriptor, target);
+    const best = bestAgainst(descriptor, target, positions, distinctRadius);
     if (best.index < 0 || best.distance > maxDistance) continue;
     if (Number.isFinite(best.second) && best.distance > best.second * ratio) continue;
     forward.push({ query: q, target: best.index, distance: best.distance });

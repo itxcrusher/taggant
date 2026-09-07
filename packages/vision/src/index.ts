@@ -12,3 +12,6 @@ export {
   estimateHomography,
   homographyFrom,
 } from "./homography.js";
+export { resample } from "./image.js";
+export { DEFAULT_SCALES, type BuildOptions, buildTrackingFeatures } from "./target.js";
+export { type LocateOptions, type LocateResult, type TrackingTarget, locate } from "./locate.js";
