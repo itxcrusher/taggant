@@ -85,20 +85,27 @@ const IDENTIFIERS: readonly Identifier[] = [
   { ai: "8018", shortCode: "gsrn", qualifiers: ["8019"], pattern: /^\d{18}$/, check: "last" },
 ] as const;
 
-/** Qualifier AIs and the short forms a path may use for them. */
-const QUALIFIER_SHORT_CODES: Readonly<Record<string, string>> = {
-  "10": "lot",
-  "21": "ser",
-  "22": "cpv",
-  "254": "glnx",
-  "8011": "cpsn",
-  "8019": "srin",
+/**
+ * Key qualifiers: the short form a path may use, and what their values may look like.
+ *
+ * The patterns are from the same GS1 table as the identifiers above. Validating them is
+ * part of the criterion that a resolver "SHALL extract and syntactically validate the URI",
+ * and without it a lot number could be any length and carry anything at all, and a serial
+ * number defined as digits could be letters.
+ */
+const QUALIFIERS: Readonly<Record<string, { shortCode: string; pattern: RegExp }>> = {
+  "10": { shortCode: "lot", pattern: /^[!-"%-/0-?A-Z_a-z]{1,20}$/ },
+  "21": { shortCode: "ser", pattern: /^[!-"%-/0-?A-Z_a-z]{1,20}$/ },
+  "22": { shortCode: "cpv", pattern: /^[!-"%-/0-?A-Z_a-z]{1,20}$/ },
+  "254": { shortCode: "glnx", pattern: /^[!-"%-/0-?A-Z_a-z]{1,20}$/ },
+  "8011": { shortCode: "cpsn", pattern: /^\d{1,12}$/ },
+  "8019": { shortCode: "srin", pattern: /^\d{1,10}$/ },
 };
 
 const BY_AI = new Map(IDENTIFIERS.map((entry) => [entry.ai, entry]));
 const BY_SHORT_CODE = new Map(IDENTIFIERS.map((entry) => [entry.shortCode, entry]));
 const QUALIFIER_BY_SHORT_CODE = new Map(
-  Object.entries(QUALIFIER_SHORT_CODES).map(([ai, short]) => [short, ai]),
+  Object.entries(QUALIFIERS).map(([ai, entry]) => [entry.shortCode, ai]),
 );
 
 /** The primary identifiers this resolver understands, for the description file. */
@@ -223,7 +230,12 @@ export function parseDigitalLink(pathname: string): DigitalLink {
       throw new DigitalLinkError(`key qualifier ${ai} is out of order`);
     }
     allowedFrom = position + 1;
-    qualifiers.push({ ai, value: rest[i + 1] ?? "" });
+    const qualifierValue = rest[i + 1] ?? "";
+    const definition = QUALIFIERS[ai];
+    if (definition && !definition.pattern.test(qualifierValue)) {
+      throw new DigitalLinkError(`${qualifierValue} is not a valid value for key qualifier ${ai}`);
+    }
+    qualifiers.push({ ai, value: qualifierValue });
   }
 
   // Normalised, so the form a code is printed in does not decide whether it is found. A

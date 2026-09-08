@@ -4,8 +4,13 @@ import { DigitalLinkError, ancestry, checkDigit, parseDigitalLink } from "../src
 describe("checkDigit", () => {
   it("agrees with published GS1 examples", () => {
     // The check digit is the last character, so it is computed over everything before it.
+    // Leading zeros do not change it, which is what makes padding a GTIN safe.
     expect(checkDigit("0952012345678")).toBe(8);
     expect(checkDigit("952012345678")).toBe(8);
+    // Different bodies, so this is not one number asserted twice.
+    expect(checkDigit("61414100734")).toBe(9);
+    expect(checkDigit("9520123")).toBe(8);
+    expect(checkDigit("00000000000000")).toBe(0);
   });
 });
 
@@ -95,5 +100,25 @@ describe("the forms a GTIN is printed in", () => {
 
   it("still refuses a wrong check digit in the shorter form", () => {
     expect(() => parseDigitalLink("/01/9520123456789")).toThrow(/check digit/);
+  });
+});
+
+describe("key qualifier values", () => {
+  it("refuses a lot number longer than the standard allows", () => {
+    expect(() => parseDigitalLink(`/01/09520123456788/10/${"A".repeat(21)}`)).toThrow(/key qualifier 10/);
+  });
+
+  it("refuses characters the standard does not allow in a lot number", () => {
+    expect(() => parseDigitalLink("/01/09520123456788/10/has space")).toThrow(/key qualifier 10/);
+    expect(() => parseDigitalLink("/01/09520123456788/10/日本")).toThrow(/key qualifier 10/);
+  });
+
+  it("refuses letters where the standard says digits", () => {
+    expect(() => parseDigitalLink("/8018/012345678901234560/8019/ABC")).toThrow(/key qualifier 8019/);
+  });
+
+  it("still accepts ordinary values", () => {
+    expect(parseDigitalLink("/01/09520123456788/10/ABC-123").qualifiers[0]?.value).toBe("ABC-123");
+    expect(parseDigitalLink("/8018/012345678901234560/8019/12345").qualifiers[0]?.value).toBe("12345");
   });
 });
