@@ -12,4 +12,5 @@ export const workspaceAliases: Record<string, string> = {
   "@taggant/vision": fileURLToPath(new URL("./packages/vision/src/index.ts", import.meta.url)),
   "@taggant/runtime": fileURLToPath(new URL("./packages/runtime/src/index.ts", import.meta.url)),
   "@taggant/bundler": fileURLToPath(new URL("./packages/bundler/src/index.ts", import.meta.url)),
+  "@taggant/compiler": fileURLToPath(new URL("./packages/compiler/src/index.ts", import.meta.url)),
 };
