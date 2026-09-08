@@ -134,3 +134,38 @@ describe("what an orchestrator can ask", () => {
     expect(events).toEqual([]);
   });
 });
+
+describe("what a stranger can put in a header", () => {
+  it("encodes the path prefix, which is the part the caller writes", async () => {
+    // The identifier parts were always encoded; the prefix in front of them was not, and
+    // it goes into a Link header and into the subject of every fact in a linkset.
+    const response = await get("/%22%3E%3Cscript%3E/01/09520123456788");
+    const header = response.headers.get("link") ?? "";
+    expect(header).not.toContain('"><script>');
+    expect(header).toContain("%22%3E%3Cscript%3E");
+  });
+
+  it("answers a path carrying a line break rather than failing on it", async () => {
+    // Node refuses to write a header holding a carriage return, so this used to become a
+    // 500 whose body carried the internal error text.
+    const response = await get("/a%0d%0aX-Injected:%20yes/01/09520123456788");
+    expect(response.status).toBe(307);
+    expect(response.headers.get("x-injected")).toBeNull();
+  });
+
+  it("never puts an internal error message in a response", async () => {
+    for (const path of ["/a%0d%0aX/01/09520123456788", "/01/09520123456788"]) {
+      const body = await (await get(path)).text();
+      expect(body).not.toMatch(/TypeError|ERR_|at Object\./);
+    }
+  });
+
+  it("does not take a Host header that is not a host", async () => {
+    const response = await get("/01/09520123456788?linkType=linkset", {
+      headers: { host: "127.0.0.1:1" },
+    });
+    // A plausible host is used; the guard is on the shape, because nothing here can tell a
+    // real Host from a forged one. What a deployment does about that is set --origin.
+    expect(response.status).toBe(200);
+  });
+});

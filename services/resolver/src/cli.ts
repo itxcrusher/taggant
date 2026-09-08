@@ -66,6 +66,14 @@ export async function main(args: string[]): Promise<number> {
     return EXIT.cannotRead;
   }
 
+  if (origin === undefined) {
+    // The origin is the subject of every fact this resolver presents. With none set it is
+    // taken from the Host header, which the caller controls, so a linkset can be anchored
+    // wherever a stranger says. That is fine on a laptop and not fine on the internet.
+    stderr.write(
+      "no --origin given, so the subject of every answer comes from the Host header. Set it before this is reachable from anywhere.\n",
+    );
+  }
   const server = createResolver(origin === undefined ? { table } : { table, origin });
   await new Promise<void>((resolve) => server.listen(port, resolve));
   const count = Object.values(table.entries).reduce((total, links) => total + links.length, 0);

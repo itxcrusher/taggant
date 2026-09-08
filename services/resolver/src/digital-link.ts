@@ -214,7 +214,13 @@ export function canonicalise(primary: Pair, qualifiers: Pair[], prefix = ""): st
   const parts = [primary.ai, primary.value];
   for (const qualifier of qualifiers) parts.push(qualifier.ai, qualifier.value);
   const path = parts.map(encodeURIComponent).join("/");
-  return prefix ? `/${prefix}/${path}` : `/${path}`;
+  // The prefix is encoded like everything else. It was not, and it is the one part of the
+  // path an author does not control: it comes straight from the request, and this string
+  // is put into a Link header and used as the subject of the facts in a linkset. A quote
+  // in it reached that header raw, which lets a caller add parameters to a header a client
+  // parses, and a carriage return made the server throw where a 400 belonged.
+  const encoded = prefix.split("/").map(encodeURIComponent).join("/");
+  return encoded ? `/${encoded}/${path}` : `/${path}`;
 }
 
 /**

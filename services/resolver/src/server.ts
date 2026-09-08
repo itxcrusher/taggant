@@ -59,7 +59,7 @@ function handle(
   const started = performance.now();
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
-  const origin = options.origin ?? `http://${request.headers.host ?? "localhost"}`;
+  const origin = options.origin ?? `http://${safeHost(request.headers.host)}`;
 
   // Every response carries these. A resolver that cannot be read from a browser page is
   // not much use to the browsers that scan the codes.
@@ -256,4 +256,17 @@ function send(
   response.writeHead(status, { ...headers, "content-length": String(bytes.length) });
   // A HEAD carries the headers a GET would, and no body.
   response.end(headOnly ? undefined : bytes);
+}
+
+/**
+ * A Host header, if it looks like one, and localhost otherwise.
+ *
+ * The origin is the subject of every fact this resolver presents, and with none configured
+ * it comes from a header the caller sets. `Host: evil.example` anchored a whole linkset
+ * there. A deployment should pass `--origin`; this is what stops the default being worse
+ * than useless, by refusing anything that is not a plain host and port.
+ */
+function safeHost(host: string | undefined): string {
+  if (host && /^[A-Za-z0-9.-]{1,253}(:\d{1,5})?$/.test(host)) return host;
+  return "localhost";
 }
