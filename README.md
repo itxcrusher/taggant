@@ -63,6 +63,7 @@ The number the report cannot yet measure is the camera. Minimum print width assu
 | `@taggant/runtime` | usable | camera, recognition and placing content on the artwork, in the browser |
 | `@taggant/bundler` | usable | an experience published as a self-contained static folder |
 | `services/resolver` | usable | GS1 Digital Link resolution, conformant against the published criteria |
+| `infra` | usable | containers for the whole path, driven on every push |
 | `apps/console` | planned | authoring for products, artwork versions, targets and codes |
 
 `@taggant/vision` carries no dependencies. The detector, the descriptor, the matcher and the homography solver are all in this repository, which is what lets the compiler and the browser produce identical descriptors from the same artwork.
@@ -191,7 +192,7 @@ These hold for every release and are the reason the project exists in this shape
 
 ## What has and has not been verified
 
-The six packages are exercised by 215 tests, and the whole gate runs on every push.
+The six packages are exercised by 215 tests, and the whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them.
 
 The runtime is driven in a real browser rather than asserted: the test writes a video file of the artwork sitting in a larger frame, hands it to Chromium as a camera, and waits for the page to reach its tracking state, then checks that the content landed where the feed actually put the artwork. A published bundle is driven the same way, from a static folder with nothing else running, on artwork put through the real compiler first, which is the only place the two halves of the system meet.
 
