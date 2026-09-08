@@ -1,10 +1,13 @@
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { DigitalLinkError, SUPPORTED_PRIMARY_KEYS, parseDigitalLink } from "./digital-link.js";
+import { Counters, type EventSink, jsonLines } from "./events.js";
 import { type LinkTable, candidatesFor, chooseLink } from "./links.js";
 import { CONTEXT, buildLinkset } from "./linkset.js";
 
 export interface ResolverOptions {
   table: LinkTable;
+  /** Where scan events go. Defaults to one JSON object per line on standard output. */
+  events?: EventSink;
   /**
    * The origin this resolver is reached at, used as the subject of the facts it presents.
    * Taken from the Host header when it is not given, which is right for development and
@@ -16,6 +19,9 @@ export interface ResolverOptions {
 const LINKSET_TYPE = "application/linkset+json";
 const CONTEXT_PATH = "/.well-known/gs1resolver-context.jsonld";
 const DESCRIPTION_PATH = "/.well-known/gs1resolver";
+const HEALTH_PATH = "/healthz";
+const READY_PATH = "/readyz";
+const METRICS_PATH = "/metrics";
 
 /**
  * A GS1 conformant resolver.
@@ -26,9 +32,15 @@ const DESCRIPTION_PATH = "/.well-known/gs1resolver";
  * someone to discover. Compressed Digital Link URIs are the notable gap.
  */
 export function createResolver(options: ResolverOptions): Server {
+  const counters = new Counters();
+  const sink = options.events ?? jsonLines();
+  const emit: EventSink = (event) => {
+    counters.record(event);
+    sink(event);
+  };
   return createServer((request, response) => {
     try {
-      handle(request, response, options);
+      handle(request, response, options, emit, counters);
     } catch (error) {
       // Nothing below is expected to throw, so reaching here is this resolver's fault and
       // is reported as such rather than as a bad request.
@@ -37,7 +49,14 @@ export function createResolver(options: ResolverOptions): Server {
   });
 }
 
-function handle(request: IncomingMessage, response: ServerResponse, options: ResolverOptions): void {
+function handle(
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: ResolverOptions,
+  emit: EventSink,
+  counters: Counters,
+): void {
+  const started = performance.now();
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
   const origin = options.origin ?? `http://${request.headers.host ?? "localhost"}`;
@@ -57,6 +76,29 @@ function handle(request: IncomingMessage, response: ServerResponse, options: Res
   }
   if (method !== "GET" && method !== "HEAD") {
     send(response, 405, { ...cors, allow: "GET, HEAD, OPTIONS" }, "method not allowed\n");
+    return;
+  }
+
+  // Operational endpoints, before anything is parsed as an identifier. Liveness says the
+  // process is up; readiness says it has a table worth asking about, which is the thing an
+  // orchestrator should wait for before sending traffic.
+  if (url.pathname === HEALTH_PATH) {
+    send(response, 200, { ...cors, "content-type": "application/json" }, '{"status":"ok"}\n');
+    return;
+  }
+  if (url.pathname === READY_PATH) {
+    const identifiers = Object.keys(options.table.entries).length;
+    const ready = identifiers > 0;
+    send(
+      response,
+      ready ? 200 : 503,
+      { ...cors, "content-type": "application/json" },
+      `${JSON.stringify({ status: ready ? "ready" : "no links loaded", identifiers })}\n`,
+    );
+    return;
+  }
+  if (url.pathname === METRICS_PATH) {
+    send(response, 200, { ...cors, "content-type": "text/plain; version=0.0.4" }, counters.render());
     return;
   }
 
@@ -81,6 +123,9 @@ function handle(request: IncomingMessage, response: ServerResponse, options: Res
     // The standard is explicit that a syntactically invalid URI is a 400, and equally
     // explicit that an error is never dressed up as a 200.
     const message = error instanceof DigitalLinkError ? error.message : "the request could not be read";
+    // Not a scan: nothing was identified, so there is nothing to count it against. It is
+    // still worth recording, because it is usually a code printed wrong.
+    emit({ type: "problem", at: new Date().toISOString(), reason: message, path: url.pathname, status: 400 });
     send(response, 400, { ...cors, "content-type": "text/plain" }, `${message}\n`);
     return;
   }
@@ -99,13 +144,32 @@ function handle(request: IncomingMessage, response: ServerResponse, options: Res
 
   const wantsLinkset =
     url.searchParams.get("linkType") === "linkset" || (request.headers.accept ?? "").includes(LINKSET_TYPE);
+  const took = (): number => Math.round((performance.now() - started) * 10) / 10;
+  const language = request.headers["accept-language"];
+
   if (wantsLinkset) {
     const body = JSON.stringify(buildLinkset(candidates, origin), null, 2);
+    emit({
+      type: "scan",
+      at: new Date().toISOString(),
+      identifier: link.canonicalPath,
+      outcome: "linkset",
+      tookMs: took(),
+    });
     send(response, 200, { ...headers, "content-type": LINKSET_TYPE }, body, method === "HEAD");
     return;
   }
 
   if (candidates.length === 0) {
+    // A scan, and the most useful one there is: somebody pointed a camera at a printed
+    // thing that nothing was ever assigned to.
+    emit({
+      type: "scan",
+      at: new Date().toISOString(),
+      identifier: link.canonicalPath,
+      outcome: "unresolved",
+      tookMs: took(),
+    });
     send(
       response,
       404,
@@ -121,6 +185,14 @@ function handle(request: IncomingMessage, response: ServerResponse, options: Res
     acceptLanguage: request.headers["accept-language"],
   });
   if (!chosen) {
+    emit({
+      type: "scan",
+      at: new Date().toISOString(),
+      identifier: link.canonicalPath,
+      outcome: "unresolved",
+      ...(requested === undefined ? {} : { requested }),
+      tookMs: took(),
+    });
     const reason = requested
       ? `no link of type ${requested} is available for that identifier\n`
       : "no default link is set for that identifier\n";
@@ -128,13 +200,18 @@ function handle(request: IncomingMessage, response: ServerResponse, options: Res
     return;
   }
 
-  send(
-    response,
-    307,
-    { ...headers, location: withPassedThroughQuery(chosen.href, url) },
-    "",
-    method === "HEAD",
-  );
+  const target = withPassedThroughQuery(chosen.href, url);
+  emit({
+    type: "scan",
+    at: new Date().toISOString(),
+    identifier: link.canonicalPath,
+    outcome: "redirect",
+    ...(requested === undefined ? {} : { requested }),
+    target,
+    ...(language === undefined ? {} : { language }),
+    tookMs: took(),
+  });
+  send(response, 307, { ...headers, location: target }, "", method === "HEAD");
 }
 
 /**

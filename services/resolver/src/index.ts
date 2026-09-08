@@ -21,4 +21,6 @@ export {
 } from "./links.js";
 export type { Candidate, ChoiceRequest, LinkTable, StoredLink } from "./links.js";
 export { CONTEXT, buildLinkset } from "./linkset.js";
+export { Counters, jsonLines } from "./events.js";
+export type { Event, EventSink, ProblemEvent, ScanEvent } from "./events.js";
 export type { Linkset, LinksetTarget } from "./linkset.js";
