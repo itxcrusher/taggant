@@ -18,7 +18,14 @@ const TABLE: LinkTable = parseTable({
   version: 1,
   entries: {
     "/01/09520123456788": [
-      { href: "https://example.com/product", linkType: "gs1:pip", title: "Product", default: true },
+      {
+        href: "https://example.com/product",
+        linkType: "gs1:pip",
+        title: "Product",
+        hreflang: ["en"],
+        default: true,
+      },
+      { href: "https://example.com/produit", linkType: "gs1:pip", title: "Produit", hreflang: ["fr"] },
     ],
   },
 });
@@ -85,7 +92,7 @@ describe("what counts as a scan", () => {
     expect(events).toEqual([]);
   });
 
-  it("keeps the language that decided the choice, and nothing about the person", async () => {
+  it("keeps the language when it decided the choice, and nothing about the person", async () => {
     await get("/01/09520123456788", { headers: { "accept-language": "fr" } });
     const [event] = scans();
     expect(event && "language" in event && event.language).toBe("fr");
@@ -93,6 +100,14 @@ describe("what counts as a scan", () => {
     expect(Object.keys(event ?? {}).sort()).toEqual(
       ["at", "identifier", "language", "outcome", "target", "tookMs", "type"].sort(),
     );
+  });
+
+  it("does not record a language that decided nothing", async () => {
+    // Only one link of this type exists, so the header cannot have chosen between any.
+    // Recording it anyway reads, in a report, as the reason the redirect went where it did.
+    await get("/01/09520123456788?linkType=gs1:recipeInfo", { headers: { "accept-language": "fr" } });
+    await get("/01/09520123456702", { headers: { "accept-language": "fr" } });
+    for (const event of scans()) expect("language" in event).toBe(false);
   });
 });
 
@@ -167,5 +182,108 @@ describe("what a stranger can put in a header", () => {
     // A plausible host is used; the guard is on the shape, because nothing here can tell a
     // real Host from a forged one. What a deployment does about that is set --origin.
     expect(response.status).toBe(200);
+  });
+});
+
+describe("a table that lives outside the process", () => {
+  it("answers from whatever the table says now, not what it said at boot", async () => {
+    let table = parseTable({
+      version: 1,
+      entries: {
+        "/01/09520123456788": [
+          { href: "https://first.example/", linkType: "gs1:pip", title: "T", default: true },
+        ],
+      },
+    });
+    const live = createResolver({ table: () => table, events: () => {} });
+    await new Promise<void>((resolve) => live.listen(0, "127.0.0.1", resolve));
+    const at = `http://127.0.0.1:${(live.address() as AddressInfo).port}`;
+
+    const before = await fetch(`${at}/01/09520123456788`, { redirect: "manual" });
+    expect(before.headers.get("location")).toBe("https://first.example/");
+
+    // The operator edits the mounted file, which is what the instructions tell them to do.
+    table = parseTable({
+      version: 1,
+      entries: {
+        "/01/09520123456788": [
+          { href: "https://second.example/", linkType: "gs1:pip", title: "T", default: true },
+        ],
+      },
+    });
+    const after = await fetch(`${at}/01/09520123456788`, { redirect: "manual" });
+    expect(after.headers.get("location")).toBe("https://second.example/");
+    await new Promise<void>((resolve) => live.close(() => resolve()));
+  });
+
+  it("is not ready while the table on disk cannot be read, even though it still answers", async () => {
+    const table = parseTable({
+      version: 1,
+      entries: {
+        "/01/09520123456788": [
+          { href: "https://a.example/", linkType: "gs1:pip", title: "T", default: true },
+        ],
+      },
+    });
+    const live = createResolver({
+      table,
+      staleReason: () => "the table on disk could not be read",
+      events: () => {},
+    });
+    await new Promise<void>((resolve) => live.listen(0, "127.0.0.1", resolve));
+    const at = `http://127.0.0.1:${(live.address() as AddressInfo).port}`;
+
+    const ready = await fetch(`${at}/readyz`);
+    // Serving scans from a table nobody can reproduce while reporting ready is how a
+    // resolver stays healthy right up until the restart that takes it down.
+    expect(ready.status).toBe(503);
+    expect((await ready.json()) as Record<string, unknown>).toMatchObject({ servingOlderTable: true });
+    // The last table that worked keeps answering, rather than dropping every link.
+    const scan = await fetch(`${at}/01/09520123456788`, { redirect: "manual" });
+    expect(scan.status).toBe(307);
+    await new Promise<void>((resolve) => live.close(() => resolve()));
+  });
+});
+
+describe("a table an operator wrote by hand", () => {
+  it("refuses keys that could never be reached, naming what to write instead", () => {
+    const cases: Array<[string, RegExp]> = [
+      ["/01/09520123456788/", /canonical form/],
+      ["/gtin/09520123456788", /canonical form/],
+      ["01/09520123456788", /not a Digital Link path|canonical form/],
+      ["https://id.example.com/01/09520123456788", /canonical form/],
+      ["/01/09520123456789", /check digit/],
+    ];
+    for (const [key, expected] of cases) {
+      expect(
+        () =>
+          parseTable({
+            version: 1,
+            entries: { [key]: [{ href: "https://a.example/", linkType: "gs1:pip", title: "T" }] },
+          }),
+        key,
+      ).toThrow(expected);
+    }
+  });
+
+  it("accepts a GTIN written in the form actually printed, because it is the same key", () => {
+    const table = parseTable({
+      version: 1,
+      entries: {
+        "/01/09520123456788": [{ href: "https://a.example/", linkType: "gs1:pip", title: "T" }],
+      },
+    });
+    expect(Object.keys(table.entries)).toEqual(["/01/09520123456788"]);
+  });
+
+  it("refuses an href that could never be a destination", () => {
+    for (const href of ["/relative/path", "not a url", "javascript:alert(1)", "ftp://example.com/x"]) {
+      expect(() =>
+        parseTable({
+          version: 1,
+          entries: { "/01/09520123456788": [{ href, linkType: "gs1:pip", title: "T" }] },
+        }),
+      ).toThrow(/absolute address|not http or https/);
+    }
   });
 });

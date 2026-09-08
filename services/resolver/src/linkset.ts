@@ -37,6 +37,19 @@ export function buildLinkset(candidates: Candidate[], origin: string): Linkset {
     if (candidate.hreflang) target.hreflang = candidate.hreflang;
     if (candidate.type) target.type = candidate.type;
     relations[name] = [...(relations[name] ?? []), target];
+
+    // The default is also published as such. Nothing else in a linkset tells a client
+    // which link a plain scan would follow, and GS1's own test suite looks for exactly
+    // this relation and reports "No default link found" without it. The standard says the
+    // default carries a title and none of the optional attributes, so it is written that
+    // way here and described by its own link type in the entry above.
+    if (candidate.default === true) {
+      const asDefault = expandLinkType("gs1:defaultLink");
+      relations[asDefault] = [
+        ...(relations[asDefault] ?? []),
+        { href: candidate.href, title: candidate.title },
+      ];
+    }
     byAnchor.set(anchor, relations);
   }
 

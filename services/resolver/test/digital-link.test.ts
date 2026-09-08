@@ -25,10 +25,16 @@ describe("parseDigitalLink", () => {
     expect(link.canonicalPath).toBe("/01/09520123456788/10/ABC/21/12345");
   });
 
-  it("keeps whatever came before the identifiers, which the standard allows", () => {
+  it("keeps whatever came before the identifiers apart from them", () => {
     const link = parseDigitalLink("/some/shop/01/09520123456788");
-    expect(link.prefix).toBe("some/shop");
-    expect(link.canonicalPath).toBe("/some/shop/01/09520123456788");
+    // The stem is where it belongs and the path is what the table is keyed on, so the same
+    // product does not split into as many identifiers as there are paths in front of it.
+    expect(link.stem).toBe("/some/shop");
+    expect(link.canonicalPath).toBe("/01/09520123456788");
+  });
+
+  it("encodes the stem, which is the part a caller writes freely", () => {
+    expect(parseDigitalLink('/a"b/01/09520123456788').stem).toBe("/a%22b");
   });
 
   it("tolerates a trailing slash", () => {
@@ -70,5 +76,24 @@ describe("ancestry", () => {
       "/01/09520123456788/10/ABC",
       "/01/09520123456788",
     ]);
+  });
+});
+
+describe("the forms a GTIN is printed in", () => {
+  it("treats an EAN-13 and its fourteen digit form as the same identifier", () => {
+    // This is the form actually printed on a pack, and GS1's own toolkit says both denote
+    // the same GTIN. Keyed separately, a scan of a real code finds nothing.
+    expect(parseDigitalLink("/01/9520123456788").canonicalPath).toBe("/01/09520123456788");
+    expect(parseDigitalLink("/01/09520123456788").canonicalPath).toBe("/01/09520123456788");
+  });
+
+  it("does the same for the twelve and eight digit forms", () => {
+    // A UPC-A and a GTIN-8, padded to the same fourteen digits.
+    expect(parseDigitalLink("/01/614141007349").canonicalPath).toBe("/01/00614141007349");
+    expect(parseDigitalLink("/01/95201238").canonicalPath).toBe("/01/00000095201238");
+  });
+
+  it("still refuses a wrong check digit in the shorter form", () => {
+    expect(() => parseDigitalLink("/01/9520123456789")).toThrow(/check digit/);
   });
 });

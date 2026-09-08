@@ -5,6 +5,7 @@ export {
   SUPPORTED_PRIMARY_KEYS,
   ancestry,
   canonicalise,
+  stemOf,
   checkDigit,
   parseDigitalLink,
 } from "./digital-link.js";

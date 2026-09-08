@@ -1,4 +1,4 @@
-import { type DigitalLink, ancestry } from "./digital-link.js";
+import { type DigitalLink, ancestry, canonicalise, parseDigitalLink } from "./digital-link.js";
 
 /** The GS1 Web vocabulary, which is where link types come from unless they say otherwise. */
 export const GS1_VOCAB = "https://gs1.org/voc/";
@@ -47,6 +47,29 @@ export function parseTable(value: unknown): LinkTable {
     throw new TypeError("the link table has no entries");
   }
   for (const [path, links] of Object.entries(table.entries)) {
+    // A key that is not the canonical form of a Digital Link can never be reached, because
+    // that is what a request is turned into before anything is looked up. Six plausible
+    // ways of writing one by hand were accepted in silence, and readiness counted them as
+    // links: a trailing slash, the alphabetic form, no leading slash, a whole URI, a GTIN
+    // in its thirteen digit form, and a typo in a check digit. Every one of them produced a
+    // resolver that answered nothing and said it was ready.
+    let canonical: string;
+    try {
+      const parsed = parseDigitalLink(path);
+      canonical = canonicalise(parsed.primary, parsed.qualifiers);
+    } catch (error) {
+      throw new TypeError(
+        `the key ${JSON.stringify(path)} is not a Digital Link path and could never be reached: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    if (canonical !== path) {
+      throw new TypeError(
+        `the key ${JSON.stringify(path)} is not in its canonical form and could never be reached. Write it as ${JSON.stringify(canonical)}.`,
+      );
+    }
+
     if (!Array.isArray(links)) throw new TypeError(`the entry for ${path} is not a list of links`);
     for (const link of links) {
       for (const field of ["href", "linkType", "title"] as const) {
@@ -56,6 +79,27 @@ export function parseTable(value: unknown): LinkTable {
           // somebody scans something.
           throw new TypeError(`a link under ${path} has no ${field}`);
         }
+      }
+      // A relation name has to be a URI once expanded, which RFC 9264 requires of any
+      // extension relation. It also stops a link type called `anchor` from overwriting the
+      // subject of the whole linkset, which is what happened when anything was allowed.
+      const relation = expandLinkType(link.linkType);
+      if (!/^https?:\/\/\S+$/.test(relation)) {
+        throw new TypeError(
+          `the link type ${JSON.stringify(link.linkType)} under ${path} is not a GS1 vocabulary term or an absolute URI`,
+        );
+      }
+
+      // An href that is not an absolute web address cannot be a Location, and finding that
+      // out at scan time is a 500 for whoever scanned the code.
+      let target: URL;
+      try {
+        target = new URL(link.href);
+      } catch {
+        throw new TypeError(`the href ${JSON.stringify(link.href)} under ${path} is not an absolute address`);
+      }
+      if (target.protocol !== "http:" && target.protocol !== "https:") {
+        throw new TypeError(`the href ${JSON.stringify(link.href)} under ${path} is not http or https`);
       }
     }
   }

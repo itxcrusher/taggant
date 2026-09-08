@@ -22,6 +22,13 @@ export interface Identifier {
    * the identifier does not carry one.
    */
   check: "last" | "none" | number;
+  /**
+   * Length the value is zero padded to, when the standard says shorter forms denote the
+   * same thing. A GTIN is the case that matters: an EAN-13 is thirteen digits and is the
+   * form actually printed on a pack, and it denotes the same GTIN as its fourteen digit
+   * form. Leading zeros do not change the check digit, so padding is safe after validation.
+   */
+  padTo?: number;
 }
 
 const IDENTIFIERS: readonly Identifier[] = [
@@ -32,6 +39,7 @@ const IDENTIFIERS: readonly Identifier[] = [
     qualifiers: ["22", "10", "21"],
     pattern: /^(\d{12,14}|\d{8})$/,
     check: "last",
+    padTo: 14,
   },
   {
     ai: "253",
@@ -112,12 +120,15 @@ export interface DigitalLink {
   primary: Pair;
   /** Key qualifiers, in the order they appeared, which is the order the standard requires. */
   qualifiers: Pair[];
-  /** Whatever preceded the identifiers in the path, which the standard allows and ignores. */
-  prefix: string;
+  /** Whatever preceded the identifiers in the path, encoded, with a leading slash or empty. */
+  stem: string;
   /**
-   * The canonical form: numeric AIs, no short codes, no trailing slash. Two requests that
-   * mean the same thing produce the same string, which is what the store is keyed on and
-   * what the standard wants exposed as the subject of any facts.
+   * The canonical form: numeric AIs, no short codes, no trailing slash, and no stem.
+   *
+   * This is what the table is keyed on and what a scan event names, so the same product
+   * does not split into as many identifiers as there are paths a caller can invent in
+   * front of it. GS1's own toolkit separates the two the same way, calling them the URI
+   * stem and the uncompressed path; the whole address is the one followed by the other.
    */
   canonicalPath: string;
 }
@@ -150,7 +161,22 @@ function checkDigitHolds(entry: Identifier, value: string): boolean {
  * A trailing slash is tolerated, which the standard asks for and which is the sort of
  * thing that quietly breaks a resolver otherwise.
  */
+/**
+ * Longest path this will read.
+ *
+ * The stem is reflected into the Link header three times, so a request the server accepted
+ * produced a response no mainstream client could parse: 7 KB of path became 16 KB of
+ * headers, which Node's own fetch refuses to read. A Digital Link is short; anything of
+ * this length is not one.
+ */
+const MAX_PATH_LENGTH = 512;
+
 export function parseDigitalLink(pathname: string): DigitalLink {
+  if (pathname.length > MAX_PATH_LENGTH) {
+    throw new DigitalLinkError(
+      `the path is ${pathname.length} characters and the longest this reads is ${MAX_PATH_LENGTH}`,
+    );
+  }
   const segments = pathname
     .split("/")
     .filter((segment) => segment.length > 0)
@@ -200,27 +226,43 @@ export function parseDigitalLink(pathname: string): DigitalLink {
     qualifiers.push({ ai, value: rest[i + 1] ?? "" });
   }
 
-  const primary: Pair = { ai: entry.ai, value };
-  const prefix = segments.slice(0, start).join("/");
+  // Normalised, so the form a code is printed in does not decide whether it is found. A
+  // scan of a real EAN-13 answered "nothing is linked to that identifier" against a table
+  // keyed on the fourteen digit form, which is the form a person types into a table.
+  const primary: Pair = {
+    ai: entry.ai,
+    value: entry.padTo && value.length < entry.padTo ? value.padStart(entry.padTo, "0") : value,
+  };
   return {
     primary,
     qualifiers,
-    prefix,
-    canonicalPath: canonicalise(primary, qualifiers, prefix),
+    stem: stemOf(segments.slice(0, start).join("/")),
+    canonicalPath: canonicalise(primary, qualifiers),
   };
 }
 
-export function canonicalise(primary: Pair, qualifiers: Pair[], prefix = ""): string {
+export function canonicalise(primary: Pair, qualifiers: Pair[]): string {
   const parts = [primary.ai, primary.value];
   for (const qualifier of qualifiers) parts.push(qualifier.ai, qualifier.value);
-  const path = parts.map(encodeURIComponent).join("/");
-  // The prefix is encoded like everything else. It was not, and it is the one part of the
-  // path an author does not control: it comes straight from the request, and this string
-  // is put into a Link header and used as the subject of the facts in a linkset. A quote
-  // in it reached that header raw, which lets a caller add parameters to a header a client
-  // parses, and a carriage return made the server throw where a 400 belonged.
-  const encoded = prefix.split("/").map(encodeURIComponent).join("/");
-  return encoded ? `/${encoded}/${path}` : `/${path}`;
+  return `/${parts.map(encodeURIComponent).join("/")}`;
+}
+
+/**
+ * The part of the path in front of the identifiers, encoded.
+ *
+ * Encoded because it is the one part of the address a caller writes freely, and it reaches
+ * a Link header and the subject of every fact presented. Unencoded, a quote in it closed
+ * the URI reference and let a caller add parameters to a header a client parses, and a
+ * carriage return made the server throw where a 400 belonged.
+ *
+ * Kept apart from the identifier path rather than folded into it. The table is keyed on
+ * the path alone, so the same product does not split into as many identifiers as there are
+ * paths a caller can invent in front of it, and the whole address is the stem followed by
+ * the path. GS1's own toolkit separates them the same way.
+ */
+export function stemOf(prefix: string): string {
+  if (prefix.length === 0) return "";
+  return `/${prefix.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 /**

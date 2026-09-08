@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { watch } from "node:fs";
 import { readFile } from "node:fs/promises";
 import process, { argv, stderr, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
@@ -74,7 +75,39 @@ export async function main(args: string[]): Promise<number> {
       "no --origin given, so the subject of every answer comes from the Host header. Set it before this is reachable from anywhere.\n",
     );
   }
-  const server = createResolver(origin === undefined ? { table } : { table, origin });
+  // The table is mounted from outside the process and the operator is told to edit it, so
+  // an edit has to take effect. Read once, editing it did nothing at all and readiness went
+  // on reporting the count it had at boot, including after the file had been replaced with
+  // something that was not JSON.
+  let current = table;
+  let stale: string | null = null;
+  const reload = async (): Promise<void> => {
+    try {
+      current = parseTable(JSON.parse(await readFile(path, "utf8")));
+      stale = null;
+      stdout.write(`  reloaded ${Object.keys(current.entries).length} identifiers from ${path}\n`);
+    } catch (error) {
+      // The last table that worked keeps answering, because dropping every link because
+      // somebody saved a file half written is worse than serving the previous one. But
+      // readiness says so, so nothing goes on believing this process is fine.
+      stale = `the table on disk could not be read: ${error instanceof Error ? error.message : String(error)}`;
+      stderr.write(`${stale}\n`);
+    }
+  };
+
+  try {
+    watch(path, { persistent: false }, () => {
+      void reload();
+    });
+  } catch {
+    stderr.write("could not watch the link table for changes; edits will need a restart\n");
+  }
+
+  const server = createResolver({
+    table: () => current,
+    staleReason: () => stale,
+    ...(origin === undefined ? {} : { origin }),
+  });
   await new Promise<void>((resolve) => server.listen(port, resolve));
   const count = Object.values(table.entries).reduce((total, links) => total + links.length, 0);
   stdout.write(

@@ -34,8 +34,11 @@ USER taggant
 ENV NODE_ENV=production
 EXPOSE 8080
 
-# Liveness from inside the container, so an orchestrator that only knows how to run a
-# command still gets a real answer.
+# Liveness, deliberately, and not readiness. This one answers "is the process still
+# there", which is what decides whether to restart a container. Whether it should be sent
+# traffic is a different question with a different answer, asked at /readyz, and the
+# compose file asks that one. A container that is serving an older link table is alive and
+# should not be restarted, and is not ready and should not be sent scans.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 

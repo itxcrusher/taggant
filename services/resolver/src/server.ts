@@ -5,9 +5,19 @@ import { type LinkTable, candidatesFor, chooseLink } from "./links.js";
 import { CONTEXT, buildLinkset } from "./linkset.js";
 
 export interface ResolverOptions {
-  table: LinkTable;
+  /**
+   * The link table, or a way of asking for the current one.
+   *
+   * A function, because the table is mounted from outside the process and the operator is
+   * told to edit it. Read once at startup, editing it did nothing and readiness went on
+   * reporting the count it had at boot, including after the file had been replaced with
+   * something that was not JSON at all.
+   */
+  table: LinkTable | (() => LinkTable);
   /** Where scan events go. Defaults to one JSON object per line on standard output. */
   events?: EventSink;
+  /** Why the table in use is not the one on disk, when that is the case. */
+  staleReason?: () => string | null;
   /**
    * The origin this resolver is reached at, used as the subject of the facts it presents.
    * Taken from the Host header when it is not given, which is right for development and
@@ -42,11 +52,24 @@ export function createResolver(options: ResolverOptions): Server {
     try {
       handle(request, response, options, emit, counters);
     } catch (error) {
-      // Nothing below is expected to throw, so reaching here is this resolver's fault and
-      // is reported as such rather than as a bad request.
-      send(response, 500, { "content-type": "text/plain" }, `resolver error: ${String(error)}\n`);
+      // Nothing below is expected to throw, so reaching here is this resolver's fault.
+      // What went wrong goes to the log, not to whoever asked: an internal error message in
+      // a response body tells a stranger about the inside of the process, and this one was
+      // reachable from a crafted path.
+      sink({
+        type: "problem",
+        at: new Date().toISOString(),
+        reason: `unhandled: ${error instanceof Error ? error.message : String(error)}`,
+        path: request.url ?? "",
+        status: 500,
+      });
+      send(response, 500, { "content-type": "text/plain" }, "the resolver could not answer that\n");
     }
   });
+}
+
+function currentTable(options: ResolverOptions): LinkTable {
+  return typeof options.table === "function" ? options.table() : options.table;
 }
 
 function handle(
@@ -57,6 +80,7 @@ function handle(
   counters: Counters,
 ): void {
   const started = performance.now();
+  const table = currentTable(options);
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
   const origin = options.origin ?? `http://${safeHost(request.headers.host)}`;
@@ -87,18 +111,29 @@ function handle(
     return;
   }
   if (url.pathname === READY_PATH) {
-    const identifiers = Object.keys(options.table.entries).length;
-    const ready = identifiers > 0;
+    const identifiers = Object.keys(table.entries).length;
+    // Not ready if the table on disk cannot be read, even though an older one is still
+    // being served. Answering scans from a table nobody can reproduce, while reporting
+    // ready, is how a resolver stays healthy right up until the restart that takes it down.
+    const stale = options.staleReason?.() ?? null;
+    const ready = identifiers > 0 && stale === null;
     send(
       response,
       ready ? 200 : 503,
       { ...cors, "content-type": "application/json" },
-      `${JSON.stringify({ status: ready ? "ready" : "no links loaded", identifiers })}\n`,
+      `${JSON.stringify({
+        status: ready ? "ready" : (stale ?? "no links loaded"),
+        identifiers,
+        ...(stale === null ? {} : { servingOlderTable: true }),
+      })}\n`,
     );
     return;
   }
   if (url.pathname === METRICS_PATH) {
-    send(response, 200, { ...cors, "content-type": "text/plain; version=0.0.4" }, counters.render());
+    // No cross origin header here on purpose. These counts are for whoever runs the
+    // service, and a wildcard let any page on the internet read how much a printed code is
+    // being scanned.
+    send(response, 200, { "content-type": "text/plain; version=0.0.4" }, counters.render());
     return;
   }
 
@@ -130,30 +165,34 @@ function handle(
     return;
   }
 
-  const candidates = candidatesFor(options.table, link);
-  const linksetUrl = `${origin}${link.canonicalPath}?linkType=linkset`;
+  const candidates = candidatesFor(table, link);
+  const subject = `${origin}${link.stem}${link.canonicalPath}`;
+  const linksetUrl = `${subject}?linkType=linkset`;
   const headers: Record<string, string> = {
     ...cors,
     // Pointed at even when redirecting, so a client can always find the whole picture.
     link: [
       `<${linksetUrl}>; rel="linkset"; type="${LINKSET_TYPE}"`,
       `<${origin}${CONTEXT_PATH}>; rel="http://www.w3.org/ns/json-ld#context"; type="application/ld+json"`,
-      `<${origin}${link.canonicalPath}>; rel="owl:sameAs"`,
+      `<${subject}>; rel="owl:sameAs"`,
     ].join(", "),
   };
 
   const wantsLinkset =
-    url.searchParams.get("linkType") === "linkset" || (request.headers.accept ?? "").includes(LINKSET_TYPE);
+    url.searchParams.get("linkType") === "linkset" || accepts(request.headers.accept, LINKSET_TYPE);
   const took = (): number => Math.round((performance.now() - started) * 10) / 10;
   const language = request.headers["accept-language"];
 
   if (wantsLinkset) {
-    const body = JSON.stringify(buildLinkset(candidates, origin), null, 2);
+    const body = JSON.stringify(buildLinkset(candidates, `${origin}${link.stem}`), null, 2);
     emit({
       type: "scan",
       at: new Date().toISOString(),
       identifier: link.canonicalPath,
-      outcome: "linkset",
+      // An empty linkset is a client learning that nothing is attached to that code, which
+      // is the same fact as an unresolved redirect and belongs in the same count. Recording
+      // it as a linkset contradicted the definition this file's events are written to.
+      outcome: candidates.length === 0 ? "unresolved" : "linkset",
       tookMs: took(),
     });
     send(response, 200, { ...headers, "content-type": LINKSET_TYPE }, body, method === "HEAD");
@@ -200,6 +239,10 @@ function handle(
     return;
   }
 
+  // Whether the language actually chose: it did if there was more than one link it could
+  // have gone to.
+  const sameType = candidates.filter((candidate) => candidate.linkType === chosen.linkType);
+  const decidedByLanguage = sameType.length > 1;
   const target = withPassedThroughQuery(chosen.href, url);
   emit({
     type: "scan",
@@ -208,7 +251,9 @@ function handle(
     outcome: "redirect",
     ...(requested === undefined ? {} : { requested }),
     target,
-    ...(language === undefined ? {} : { language }),
+    // Recorded only when it chose between links, because a language that decided nothing
+    // in a report of why a redirect went where it did is noise that reads as a reason.
+    ...(language !== undefined && decidedByLanguage ? { language } : {}),
     tookMs: took(),
   });
   send(response, 307, { ...headers, location: target }, "", method === "HEAD");
@@ -235,12 +280,12 @@ function describe(origin: string): Record<string, unknown> {
     name: "taggant resolver",
     resolverRoot: origin,
     supportedPrimaryKeys: SUPPORTED_PRIMARY_KEYS,
-    supportedLinkType: "all",
     contextFile: `${origin}${CONTEXT_PATH}`,
     // Said plainly rather than left for a test suite to discover. A resolver that claims
     // conformance it does not have is worse than one that says where it stops.
     notSupported: [
       "compressed GS1 Digital Link URIs, which this resolver neither decompresses nor advertises",
+      "HTTP over TLS, which this process does not terminate: it speaks plain HTTP and expects to be reached through something that does",
     ],
   };
 }
@@ -269,4 +314,22 @@ function send(
 function safeHost(host: string | undefined): string {
   if (host && /^[A-Za-z0-9.-]{1,253}(:\d{1,5})?$/.test(host)) return host;
   return "localhost";
+}
+
+/**
+ * Whether an Accept header actually asks for a media type.
+ *
+ * Matched by substring before, which meant `application/linkset+json;q=0`, whose whole
+ * meaning is "not this", returned one, and so did the made up
+ * `application/linkset+jsonwhatever`.
+ */
+export function accepts(header: string | undefined, type: string): boolean {
+  if (!header) return false;
+  for (const part of header.split(",")) {
+    const [name = "", ...parameters] = part.trim().split(";");
+    if (name.trim().toLowerCase() !== type) continue;
+    const quality = parameters.find((parameter) => parameter.trim().startsWith("q="));
+    return quality === undefined || Number(quality.trim().slice(2)) > 0;
+  }
+  return false;
 }
