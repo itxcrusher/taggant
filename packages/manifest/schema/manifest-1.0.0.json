@@ -53,7 +53,7 @@
           "description": "Path to the asset, relative to the manifest. Relative by design: a published experience is a self contained bundle, so an absolute URL would make it depend on a host that can go away. Parent directory steps are refused because the path is resolved against a bundle directory.",
           "type": "string",
           "maxLength": 300,
-          "pattern": "^(?!/)(?!.*(?:^|/)[.][.](?:/|$))(?![A-Za-z][A-Za-z0-9+.-]*:)[^?#]+$"
+          "pattern": "^(?!/)(?!.*(?:^|/)[.][.](?:/|$))(?![A-Za-z][A-Za-z0-9+.-]*:)[A-Za-z0-9._~/-]+$"
         },
         "placement": { "$ref": "#/$defs/placement", "default": {} },
         "autoplay": { "type": "boolean", "default": true },

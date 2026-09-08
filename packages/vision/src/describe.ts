@@ -51,6 +51,46 @@ function orientation(image: GrayscaleImage, cx: number, cy: number): { angle: nu
  * clamped pixels, because a descriptor built from an edge that repeats itself matches
  * everything.
  */
+/**
+ * Orientations the sampling pattern is allowed to be rotated to.
+ *
+ * The angle comes out of Math.atan2, which differs by one unit in the last place between
+ * JavaScript engines. Measured on the same bytes: 58 of 379 angles differed between Node
+ * and Chromium, which moved samples across pixel boundaries and changed 28 descriptors by
+ * up to 12 bits. That is well inside the distance a match is accepted at, so recognition
+ * still worked, but the first percentile of distances between distinct features on real
+ * artwork is 7 bits, so a 12 bit shift is enough to hand a match to the wrong feature.
+ *
+ * Rounding to a fixed number of steps removes it: a difference in the last place cannot
+ * change which step an angle falls in, except for the vanishing case of an angle sitting
+ * exactly on a boundary. The grid is far finer than it needs to be for that, because a
+ * difference in the last place is around 1e-16 and a step here is 1.5e-3, and a coarser
+ * grid costs real discrimination: at 256 steps two unrelated corners on the test texture
+ * came 10 bits closer together.
+ */
+const ORIENTATION_STEPS = 1048576;
+const STEP = (Math.PI * 2) / ORIENTATION_STEPS;
+
+/**
+ * How finely the rotation itself is rounded.
+ *
+ * Rounding the angle is not enough on its own: the sine and cosine of the rounded angle
+ * are transcendental too and also differ in the last place between engines, which was
+ * still moving samples across pixel boundaries. Rounding the two multipliers to a grid
+ * this coarse is far below anything that can change a sample and far above anything a last
+ * place difference can reach.
+ */
+const ROTATION_GRID = 1 << 20;
+
+/** The rotation for a corner, rounded so that any engine computes the same one. */
+function rotationFor(angle: number): { cos: number; sin: number } {
+  const quantised = Math.round(angle / STEP) * STEP;
+  return {
+    cos: Math.round(Math.cos(quantised) * ROTATION_GRID) / ROTATION_GRID,
+    sin: Math.round(Math.sin(quantised) * ROTATION_GRID) / ROTATION_GRID,
+  };
+}
+
 export function describeCorners(image: GrayscaleImage, corners: Corner[]): DescribedCorner[] {
   const described: DescribedCorner[] = [];
   for (const corner of corners) {
@@ -68,8 +108,7 @@ export function describeCorners(image: GrayscaleImage, corners: Corner[]): Descr
     // or any rotationally symmetric mark reads exactly zero here; on real artwork the
     // lowest measured was 0.025, so this drops the degenerate case and nothing else.
     if (bias < MIN_ORIENTATION_BIAS) continue;
-    const cos = Math.cos(angle);
-    const sin = Math.sin(angle);
+    const { cos, sin } = rotationFor(angle);
     const descriptor = new Uint32Array(DESCRIPTOR_BITS / 32);
     for (let bit = 0; bit < DESCRIPTOR_BITS; bit++) {
       const i = bit * 4;

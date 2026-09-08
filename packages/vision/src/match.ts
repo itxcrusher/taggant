@@ -179,7 +179,10 @@ export function matchDescriptors(
       radiusSquared,
     );
     if (best.index < 0 || best.distance > maxDistance) continue;
-    if (Number.isFinite(best.second) && best.distance > best.second * ratio) continue;
+    // Greater than or equal, not greater than. With an exact tie both distances are zero
+    // and `0 > 0` is false, so the one case where the matcher has no information at all
+    // was the one it kept.
+    if (Number.isFinite(best.second) && best.distance >= best.second * ratio) continue;
     forward.push({ query: q, target: best.index, distance: best.distance });
   }
 

@@ -68,4 +68,17 @@ describe("matchDescriptors", () => {
     expect(matchDescriptors([], [descriptor(1)])).toEqual([]);
     expect(matchDescriptors([descriptor(1)], [])).toEqual([]);
   });
+
+  it("refuses an exact tie, which is the case it has least to go on", () => {
+    const twin = descriptor(55);
+    // Two places on the artwork that look identical. Picking whichever came first in the
+    // array is guessing, and this is the case the ratio test exists for.
+    const matches = matchDescriptors([Uint32Array.from(twin)], [twin, Uint32Array.from(twin)], {
+      targetPositions: [
+        { x: 10, y: 10 },
+        { x: 410, y: 310 },
+      ],
+    });
+    expect(matches).toEqual([]);
+  });
 });

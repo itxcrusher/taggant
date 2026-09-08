@@ -125,3 +125,34 @@ describe("validateManifest as the gate before publication", () => {
     expect(() => validateManifest(hostile)).toThrow(/boom from the getter/);
   });
 });
+
+describe("the paths a manifest may name", () => {
+  function withSrc(src: string): unknown {
+    return {
+      schemaVersion: "1.0.0",
+      id: "probe",
+      targets: [{ id: "front", source: "a.png", physicalWidthMm: 100, content: [{ type: "image", src }] }],
+    };
+  }
+
+  it("accepts ordinary relative paths", () => {
+    for (const src of ["overlay.svg", "media/clip.mp4", "a-b_c.9/x.png"]) {
+      expect(validateManifest(withSrc(src)).ok).toBe(true);
+    }
+  });
+
+  it("refuses every way of leaving the bundle a browser would resolve", () => {
+    for (const src of [
+      "../o.svg",
+      "a/../../o.svg",
+      "/etc/passwd",
+      "//evil.example/x.mp4",
+      "http://evil.example/x.mp4",
+      String.raw`..\..\windows\win.ini`,
+      "%2e%2e/%2e%2e/secret.json",
+      String.raw`\\evil.example\share\x.mp4`,
+    ]) {
+      expect(validateManifest(withSrc(src)).ok, src).toBe(false);
+    }
+  });
+});
