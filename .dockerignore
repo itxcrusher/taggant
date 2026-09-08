@@ -1,0 +1,17 @@
+# What never belongs in a build context.
+#
+# node_modules is the one that matters. pnpm installs it as links into a content
+# addressed store, and copying that from the host puts links pointing at paths the
+# container does not have on top of the install the image just did. The result is a build
+# that fails to resolve a dependency it demonstrably installed, which reads like anything
+# except what it is.
+node_modules
+**/node_modules
+
+# Built output is rebuilt inside the image, and a host build carries the host's platform.
+dist
+**/dist
+
+.git
+.github
+**/*.log
