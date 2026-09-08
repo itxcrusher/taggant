@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { validateManifest } from "@taggant/manifest";
@@ -42,32 +42,31 @@ export interface BundleResult {
 const MARKER = ".taggant-bundle";
 
 /**
- * Make the output directory hold this bundle and nothing else.
+ * Whether this publish is allowed to replace what is at the destination.
  *
- * A published folder has to be authoritative, and it was not. Publishing again left the
- * assets of the previous publish in place, so content an author had removed went on being
- * served from its hashed address forever, and publishing into a directory that already had
- * something in it shipped that too.
+ * Nothing is deleted here. A published bundle is a live thing that people are scanning a
+ * printed code to reach, and emptying its folder before knowing the new one can even be
+ * built is how a typo in a manifest takes an experience off the air. So the destination is
+ * only inspected, the new bundle is built beside it, and the swap happens at the end.
  *
- * Emptying a directory is not something to do on a guess, so it is only done to a directory
- * this has published to before, which is what the marker file records. Anything else is
- * refused by name.
+ * Replacing is only allowed for a directory this tool published to before, which the
+ * marker file records. Anything else is refused by name, because emptying a directory
+ * somebody else filled is not a thing to do on a guess.
  */
-async function prepare(outDir: string): Promise<void> {
+async function mayReplace(outDir: string): Promise<boolean> {
   let existing: string[];
   try {
     existing = await readdir(outDir);
   } catch {
-    await mkdir(outDir, { recursive: true });
-    return;
+    return false;
   }
-  if (existing.length === 0) return;
+  if (existing.length === 0) return true;
   if (!existing.includes(MARKER)) {
     throw new Error(
-      `${outDir} already holds files and was not published by this tool, so it will not be emptied. Publish into a new directory, or empty this one yourself.`,
+      `${outDir} already holds files and was not published by this tool, so it will not be replaced. Publish into a new directory, or empty this one yourself.`,
     );
   }
-  for (const entry of existing) await rm(join(outDir, entry), { recursive: true, force: true });
+  return true;
 }
 
 export async function bundle(options: BundleOptions): Promise<BundleResult> {
@@ -100,58 +99,79 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     }
   }
 
-  await prepare(options.outDir);
-
   const assets: CopiedAsset[] = [];
   const seen = new Map<string, string>();
-  const rewritten = structuredClone(manifest);
-  for (const target of rewritten.targets) {
-    for (const item of target.content) {
-      const already = seen.get(item.src);
-      if (already !== undefined) {
-        item.src = already;
-        continue;
-      }
-      const copied = await copyAsset(item.src, options.sourceDir, options.outDir);
-      assets.push(copied);
-      seen.set(item.src, copied.to);
-      item.src = copied.to;
-    }
-  }
-
-  const targetDir = join(options.outDir, "targets");
-  await mkdir(targetDir, { recursive: true });
   const names: string[] = [];
-  for (const target of manifest.targets) {
-    await writeFile(join(targetDir, `${target.id}.json`), JSON.stringify(options.targets[target.id]));
-    names.push(target.id);
+  const result: BundleResult = { outDir: options.outDir, assets, targets: names, files: [] };
+
+  const replacing = await mayReplace(options.outDir);
+
+  // Built beside the destination and swapped in at the end, so a failure part way through
+  // leaves whatever is published exactly as it was.
+  const staging = `${options.outDir}.publishing`;
+  await rm(staging, { recursive: true, force: true });
+  await mkdir(staging, { recursive: true });
+  try {
+    await write(staging);
+  } catch (error) {
+    await rm(staging, { recursive: true, force: true });
+    throw error;
   }
 
-  const runtime = await vendorRuntime(options.outDir, options.runtimeDir);
-  await writeFile(
-    join(options.outDir, MARKER),
-    `${new Date().toISOString()}
-`,
-  );
-  await writeFile(join(options.outDir, "manifest.json"), JSON.stringify(rewritten, null, 2));
-  await writeFile(
-    join(options.outDir, "index.html"),
-    entryPage({ title: manifest.title ?? manifest.id, targets: names }),
-  );
+  if (replacing) await rm(options.outDir, { recursive: true, force: true });
+  await mkdir(dirname(options.outDir), { recursive: true });
+  await rename(staging, options.outDir);
 
-  return {
-    outDir: options.outDir,
-    assets,
-    targets: names,
-    files: [
+  return result;
+
+  async function write(into: string): Promise<void> {
+    const rewritten = structuredClone(manifest);
+    for (const target of rewritten.targets) {
+      for (const item of target.content) {
+        const already = seen.get(item.src);
+        if (already !== undefined) {
+          item.src = already;
+          continue;
+        }
+        const copied = await copyAsset(item.src, options.sourceDir, into);
+        seen.set(item.src, copied.to);
+        item.src = copied.to;
+        // Counted by where it landed, not by what it was called. The same bytes under two
+        // paths are one file in the bundle, and reporting them as two made the count the
+        // command line prints disagree with the folder.
+        if (!assets.some((asset) => asset.to === copied.to)) assets.push(copied);
+      }
+    }
+
+    const targetDir = join(into, "targets");
+    await mkdir(targetDir, { recursive: true });
+    for (const target of manifest.targets) {
+      await writeFile(join(targetDir, `${target.id}.json`), JSON.stringify(options.targets[target.id]));
+      names.push(target.id);
+    }
+
+    const runtime = await vendorRuntime(into, options.runtimeDir);
+    await writeFile(join(into, "manifest.json"), JSON.stringify(rewritten, null, 2));
+    await writeFile(
+      join(into, "index.html"),
+      entryPage({ title: manifest.title ?? manifest.id, targets: names }),
+    );
+    // Written last, so a folder only carries the marker once it holds a whole bundle.
+    await writeFile(
+      join(into, MARKER),
+      `${new Date().toISOString()}
+`,
+    );
+
+    result.files = [
       MARKER,
       "index.html",
       "manifest.json",
       ...names.map((name) => `targets/${name}.json`),
       ...assets.map((asset) => asset.to),
       ...runtime,
-    ],
-  };
+    ];
+  }
 }
 
 /**

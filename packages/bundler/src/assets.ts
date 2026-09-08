@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, realpath } from "node:fs/promises";
 import { extname, join, normalize, resolve, sep } from "node:path";
 
 export interface CopiedAsset {
@@ -19,14 +19,21 @@ export interface CopiedAsset {
  * not invalidate the video.
  */
 export async function copyAsset(source: string, sourceDir: string, outDir: string): Promise<CopiedAsset> {
-  const absolute = within(sourceDir, source);
+  // A fragment names a part of a file rather than a file, which is how one symbol in an
+  // SVG sprite is referenced. It is not part of the name on disk, and it has to survive to
+  // the rewritten path or the reference stops meaning anything.
+  const hash = source.indexOf("#");
+  const file = hash < 0 ? source : source.slice(0, hash);
+  const fragment = hash < 0 ? "" : source.slice(hash);
+
+  const absolute = await realWithin(sourceDir, file);
   const bytes = await readFile(absolute);
   const digest = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
-  const name = `${digest}${extname(source).toLowerCase()}`;
+  const name = `${digest}${extname(file).toLowerCase()}`;
   const assets = join(outDir, "assets");
   await mkdir(assets, { recursive: true });
   await copyFile(absolute, join(assets, name));
-  return { from: source, to: `assets/${name}`, bytes: bytes.length };
+  return { from: source, to: `assets/${name}${fragment}`, bytes: bytes.length };
 }
 
 /**
@@ -57,4 +64,38 @@ export function within(sourceDir: string, source: string): string {
     throw new Error(`${source} is outside the manifest's own directory and will not be bundled`);
   }
   return target;
+}
+
+/**
+ * The same containment check, made against where the file really is.
+ *
+ * `within` compares paths as text, which is all it can do without touching the disk, and
+ * that is not enough: a symbolic link or a Windows directory junction inside the source
+ * folder passes it and then `copyFile` follows the link out. Proved by publishing
+ * `/etc/passwd` through a link named `logo.png`, and on Windows by publishing a secrets
+ * file through a junction, which needs no administrator rights to create.
+ *
+ * So the path is resolved on the disk before anything is read, and checked again. The
+ * source directory is resolved too, because it may itself sit behind a link, and comparing
+ * a real path against a lexical one would refuse ordinary setups on macOS where /tmp is a
+ * link to /private/tmp.
+ */
+export async function realWithin(sourceDir: string, source: string): Promise<string> {
+  const lexical = within(sourceDir, source);
+  let real: string;
+  let realBase: string;
+  try {
+    real = await realpath(lexical);
+    realBase = await realpath(sourceDir);
+  } catch (error) {
+    // A path that cannot be resolved is a missing asset, which is the caller's problem to
+    // hear about plainly rather than a containment failure.
+    throw new Error(`${source} could not be read: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (real !== realBase && !real.startsWith(realBase + sep)) {
+    throw new Error(
+      `${source} points outside the manifest's own directory and will not be bundled: it resolves to ${real}`,
+    );
+  }
+  return real;
 }

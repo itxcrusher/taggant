@@ -2,8 +2,13 @@
  * The entry page for a bundle.
  *
  * Everything it references is relative and sits beside it. That is the whole point of a
- * bundle: it is opened from a static host, or a USB stick, or a folder inside a museum's
- * own network, with nothing else running anywhere.
+ * bundle: it is served from a static host, which can be one inside a museum's own network
+ * with nothing of this project running anywhere.
+ *
+ * Served, not opened. Double clicking the page off a USB stick does not work and cannot:
+ * a browser refuses to load a module from a file:// origin, and the page sits saying
+ * "Starting." with a CORS error in a console nobody has open. Any file server will do,
+ * including one that comes with the operating system.
  *
  * The states are spelled out in the page rather than left to the runtime, because what a
  * person should be told when a camera is refused is a decision for whoever published the
@@ -48,14 +53,26 @@ export function entryPage(options: { title: string; targets: string[] }): string
         tracking: "Found it.",
       };
 
+      // Anything that goes wrong before the experience mounts is told to the viewer.
+      // Without this a file lost in a copy, which is the failure that actually happens,
+      // leaves the page saying "Starting." forever with the reason only in the console.
+      window.addEventListener("unhandledrejection", (event) => {
+        status.textContent = "This experience could not be loaded: " + (event.reason?.message ?? event.reason);
+      });
+
       const names = ${targets};
       // This manifest was validated when the bundle was written, and rewritten by the same
       // step that copied the files it names, so the page does not validate it again. The
       // validator is a Node dependency and shipping it would put one in the browser for no
       // gain.
+      const load = async (path) => {
+        const response = await fetch(path);
+        if (!response.ok) throw new Error(path + " is missing from this bundle (" + response.status + ")");
+        return response.json();
+      };
       const [manifest, ...targetFiles] = await Promise.all([
-        fetch("./manifest.json").then((response) => response.json()),
-        ...names.map((name) => fetch("./targets/" + name + ".json").then((response) => response.json())),
+        load("./manifest.json"),
+        ...names.map((name) => load("./targets/" + name + ".json")),
       ]);
 
       window.taggantExperience = await mountExperience({

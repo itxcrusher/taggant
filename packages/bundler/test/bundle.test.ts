@@ -223,3 +223,26 @@ describe("publishing again", () => {
     expect(await readdir(outDir)).not.toContain("stray.txt");
   });
 });
+
+describe("an asset referenced by a fragment", () => {
+  it("bundles the file and keeps the fragment on the rewritten path", async () => {
+    const { sourceDir, outDir } = await scratch();
+    const sprite = structuredClone(MANIFEST) as typeof MANIFEST;
+    const content = sprite.targets[0]?.content[0];
+    // How one symbol in an SVG sprite is named. The schema allows it; the bundler treated
+    // the whole string as a filename and could not find it.
+    if (content) content.src = "overlay.svg#badge";
+    await bundle({
+      manifest: sprite,
+      targets: { front: TARGET },
+      sourceDir,
+      outDir,
+      runtimeDir: RUNTIME_DIST,
+    });
+    const written = JSON.parse(await readFile(join(outDir, "manifest.json"), "utf8"));
+    expect(written.targets[0].content[0].src).toMatch(/^assets\/[0-9a-f]{16}\.svg#badge$/);
+    // And the file the fragment points into is really there, under its name without it.
+    const withoutFragment = written.targets[0].content[0].src.split("#")[0];
+    await expect(readFile(join(outDir, withoutFragment))).resolves.toBeDefined();
+  });
+});
