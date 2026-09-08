@@ -32,7 +32,10 @@ export interface MountedExperience {
   readonly unsupported: readonly string[];
   /** Compiled targets that no manifest target claims, so nothing was built for them. */
   readonly unmatchedTargets: readonly string[];
-  /** Whether recognition got a thread of its own. False means the page will stutter. */
+  /**
+   * Whether recognition currently has a thread of its own. False means the page will
+   * stutter, and can become false after mounting if the worker is lost.
+   */
   readonly threaded: boolean;
   stop(): void;
 }
@@ -228,7 +231,12 @@ export async function mountExperience(options: {
     },
     unsupported: [...unsupported],
     unmatchedTargets: unmatched,
-    threaded: recogniser.threaded,
+    // Read when asked rather than captured at mount, because recognition can lose its
+    // thread later: a worker can be ended by the browser under memory pressure, or turn
+    // out never to have loaded.
+    get threaded() {
+      return recogniser.threaded;
+    },
     stop() {
       running = false;
       recogniser.stop();

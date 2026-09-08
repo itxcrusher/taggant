@@ -177,7 +177,7 @@ Requires Node 22 and pnpm 11, which is pinned in `package.json`.
 
 ```
 pnpm install
-pnpm -r typecheck && pnpm check && pnpm -r test && pnpm -r build
+pnpm -r typecheck && pnpm check && pnpm -r build && pnpm -r test
 ```
 
 There is no published package, so the command line runs from the build: `node packages/compiler/dist/cli.js <artwork>`.

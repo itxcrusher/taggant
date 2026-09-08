@@ -1,6 +1,8 @@
 import type { GrayscaleImage } from "@taggant/vision";
 
 export interface CameraOptions {
+  /** How long to wait for a picture after the camera opens, before giving up on it. */
+  readyTimeoutMs?: number;
   /**
    * Width the frames are tracked at.
    *
@@ -74,14 +76,35 @@ export class Camera {
     await this.ready();
   }
 
-  /** Resolve once the video has a size, which is when frames can be read from it. */
+  /**
+   * Resolve once the video has a size, which is when frames can be read from it.
+   *
+   * With a deadline, because a camera can open and then deliver nothing: another app
+   * holding it, a virtual device with no source behind it. Waiting on `loadedmetadata`
+   * with nothing behind it meant the promise from `mountExperience` never settled at all,
+   * so the page sat on "asking for the camera" and the caller could not even say why.
+   */
   private ready(): Promise<void> {
     if (this.video.videoWidth > 0) return Promise.resolve();
-    return new Promise((resolve) => {
-      const done = () => {
+    const limit = this.options.readyTimeoutMs ?? 10_000;
+    return new Promise((resolve, reject) => {
+      const finish = () => {
+        clearTimeout(timer);
         this.video.removeEventListener("loadedmetadata", done);
+      };
+      const done = () => {
+        finish();
         resolve();
       };
+      const timer = setTimeout(() => {
+        finish();
+        reject(
+          new CameraError(
+            "unavailable",
+            `the camera opened but sent no picture within ${limit} ms, which usually means another app is using it`,
+          ),
+        );
+      }, limit);
       this.video.addEventListener("loadedmetadata", done);
     });
   }

@@ -127,6 +127,14 @@ describe("within", () => {
     expect(() => within("/srv/experience", "nested/../../../etc/passwd")).toThrow(/outside/);
   });
 
+  it("refuses the other ways of writing a parent step", () => {
+    // A browser resolves both of these, so refusing only the plain form is a guarantee
+    // that is stated and not kept.
+    expect(() => within("/srv/experience", "%2e%2e/%2e%2e/secret.json")).toThrow(/outside/);
+    expect(() => within("/srv/experience", String.raw`..\..\windows\win.ini`)).toThrow(/backslashes/);
+    expect(() => within("/srv/experience", String.raw`\\evil.example\share\x.mp4`)).toThrow(/backslashes/);
+  });
+
   it("allows ordinary paths, including nested ones", () => {
     expect(within("/srv/experience", "overlay.svg")).toMatch(/overlay\.svg$/);
     expect(within("/srv/experience", "media/clip.mp4")).toMatch(/clip\.mp4$/);

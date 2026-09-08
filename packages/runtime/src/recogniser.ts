@@ -18,6 +18,8 @@ export interface Pose {
 const REPLY_TIMEOUT_MS = 5000;
 
 export interface Recogniser {
+  /** Set when recognition had to come back to this thread, with the reason. */
+  readonly problem?: string | null;
   /**
    * Answer for this frame, or null if one is already being worked on.
    *
@@ -61,11 +63,30 @@ export function createRecogniser(targets: TrackingTarget[]): Recogniser {
 
   worker.postMessage({ type: "targets", targets: serialise(targets) });
 
+  // A worker that cannot be fetched does not throw when it is constructed. The constructor
+  // succeeds, the failure arrives later as an error event, and until it does everything
+  // looks fine. That is the likeliest deployment mistake there is, because the runtime is
+  // two files and only one of them is the one people copy. So the fallback is not only for
+  // browsers that refuse a worker: it is for a worker that turns out not to be there, and
+  // recognition carries on more slowly rather than stopping.
+  const onThread = onThisThread(targets);
+  let broken: string | null = null;
+  worker.addEventListener("error", (event: ErrorEvent) => {
+    broken = event.message || "the recognition worker could not be loaded";
+    worker.terminate();
+  });
+
   let busy = false;
   let nextId = 1;
   return {
-    threaded: true,
+    get threaded() {
+      return broken === null;
+    },
+    get problem() {
+      return broken;
+    },
     async submit(frame) {
+      if (broken !== null) return onThread.submit(frame);
       if (busy) return null;
       busy = true;
       const id = nextId++;
@@ -105,6 +126,12 @@ export function createRecogniser(targets: TrackingTarget[]): Recogniser {
             [copy.buffer],
           );
         });
+      } catch (error) {
+        // The worker is not coming back, so this one frame is answered on this thread and
+        // every frame after it goes there directly.
+        broken = error instanceof Error ? error.message : String(error);
+        worker.terminate();
+        return onThread.submit(frame);
       } finally {
         busy = false;
       }

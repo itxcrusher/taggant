@@ -39,8 +39,20 @@ export async function copyAsset(source: string, sourceDir: string, outDir: strin
  * actually do the reading.
  */
 export function within(sourceDir: string, source: string): string {
+  // Decoded first, and backslashes read as separators, because both are ways of writing a
+  // parent step that a naive check waves through and a browser then resolves. The schema
+  // refuses them too; this is the side that would do the reading.
+  let decoded = source;
+  try {
+    decoded = decodeURIComponent(source);
+  } catch {
+    throw new Error(`${source} is not a readable path`);
+  }
+  if (decoded.includes("\\")) {
+    throw new Error(`${source} uses backslashes, which are not path separators in a manifest`);
+  }
   const base = resolve(sourceDir);
-  const target = resolve(base, normalize(source));
+  const target = resolve(base, normalize(decoded));
   if (target !== base && !target.startsWith(base + sep)) {
     throw new Error(`${source} is outside the manifest's own directory and will not be bundled`);
   }

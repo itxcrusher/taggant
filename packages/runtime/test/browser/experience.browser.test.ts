@@ -302,7 +302,7 @@ describe("the runtime in a browser, against a camera", () => {
     await context.close();
   }, 60_000);
 
-  it("gives up and takes the content away when recognition stops answering", async () => {
+  it("carries on when the worker dies, instead of stopping or pretending it is fine", async () => {
     if (!browser) throw new Error("no browser");
     const context = await browser.newContext({ permissions: ["camera"] });
     const page = await context.newPage();
@@ -332,13 +332,17 @@ describe("the runtime in a browser, against a camera", () => {
       return {
         state: document.querySelector("#stage")?.getAttribute("data-state"),
         hidden: (document.querySelector("[data-taggant-target]") as HTMLElement | null)?.hidden,
+        threaded: window.taggantExperience?.threaded,
       };
     });
 
-    // The failure this guards against is the page going on saying "tracking" with content
-    // frozen where the artwork used to be, which is what it did before there was a timeout.
-    expect(outcome.state).toBe("error");
-    expect(outcome.hidden).toBe(true);
+    // Recognition comes back to this thread and keeps going, which is worth more to a
+    // viewer than a correct error message. Two failures are guarded here: sitting on
+    // "tracking" with content frozen where the artwork used to be, which is what happened
+    // before there was a timeout, and going on reporting a worker that is gone.
+    expect(outcome.state).toBe("tracking");
+    expect(outcome.hidden).toBe(false);
+    expect(outcome.threaded).toBe(false);
     await context.close();
   }, 120_000);
 
