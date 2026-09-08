@@ -33,3 +33,9 @@ Thumbs.db
 *.log
 tmp/
 examples/**/*.target.json
+
+# What the stack writes when it runs. The link table itself is tracked, because it is the
+# worked example; what the console authors and what it publishes are local state.
+infra/workspace/
+infra/bundles/*
+!infra/bundles/.gitkeep

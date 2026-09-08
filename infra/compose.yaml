@@ -50,3 +50,41 @@ services:
       retries: 5
     security_opt:
       - no-new-privileges:true
+
+  console:
+    # Not started by default, which is why it carries a profile. Everything above answers
+    # requests about things that already exist; this one creates them, and it does so with
+    # no authentication of any kind. Start it deliberately:
+    #
+    #     docker compose -f infra/compose.yaml --profile authoring up --build
+    #
+    # The port is published on the loopback address only. That is not belt and braces, it
+    # is the whole of the protection: anyone who can reach this can write files, run the
+    # compiler, and replace the link table that every printed code depends on.
+    profiles: ["authoring"]
+    build:
+      context: ..
+      dockerfile: apps/console/Dockerfile
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      # The three things it writes, all of them outside the image. The link table is the
+      # same file the resolver reads, and the bundles folder is the one the static host
+      # serves, so publishing here is immediately visible to both.
+      - ./workspace:/srv/workspace
+      - ./bundles:/srv/bundles
+      - ./links:/srv/links
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:4000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

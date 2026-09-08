@@ -54,6 +54,13 @@ jobs:
       - run: docker compose -f infra/compose.yaml up -d --build
       - run: node infra/smoke.mjs
 
+      # The authoring loop, from nothing. This one is here because the step it ends on was
+      # broken and everything else was green: the resolver noticed a changed link table
+      # with a file watch, which dies when the file is replaced by a rename and which a
+      # bind mount often never feeds at all.
+      - run: docker compose -f infra/compose.yaml --profile authoring up -d --build console
+      - run: node infra/authoring-smoke.mjs
+
       # The continuity claim, checked rather than stated: a bundle outlives the service
       # that routed people to it.
       - name: stop the resolver and check the bundle still serves
@@ -66,4 +73,6 @@ jobs:
       - if: always()
         run: docker compose -f infra/compose.yaml logs resolver | tail -50
       - if: always()
-        run: docker compose -f infra/compose.yaml down -v
+        run: docker compose -f infra/compose.yaml --profile authoring logs console | tail -30
+      - if: always()
+        run: docker compose -f infra/compose.yaml --profile authoring down -v
