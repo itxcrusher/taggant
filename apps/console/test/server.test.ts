@@ -222,6 +222,61 @@ describe("what it refuses", () => {
   });
 });
 
+describe("what it does not crash on", () => {
+  it("answers a truncated upload with a message rather than a 500", async () => {
+    // An interrupted upload is ordinary. Node's own parser throws a TypeError, which is
+    // not a WorkspaceError, so it used to become a 500 with a stack trace in the log.
+    await post("/experiences", new URLSearchParams({ id: "cut-short", title: "Cut short" }));
+    const boundary = "----probe";
+    const body = `--${boundary}
+Content-Disposition: form-data; name="targetId"
+
+t
+--${boundary}
+Content-Disposition: form-data; name="artwork"; filename="a.png"
+
+not finished`;
+    const response = await fetch(`${origin}/e/cut-short/targets`, {
+      method: "POST",
+      body,
+      headers: {
+        "sec-fetch-site": "same-origin",
+        "content-type": `multipart/form-data; boundary=${boundary}`,
+      },
+      redirect: "manual",
+    });
+    expect(response.status).toBe(303);
+    const said = await fetch(`${origin}${response.headers.get("location")}`);
+    expect(await said.text()).toContain("could not be read");
+  });
+
+  it("refuses a printed width no press could produce", async () => {
+    await post("/experiences", new URLSearchParams({ id: "tiny", title: "Tiny" }));
+    const form = new FormData();
+    form.append("targetId", "t");
+    form.append("physicalWidthMm", "1e-3");
+    form.append("artwork", new Blob([await artwork()], { type: "image/png" }), "a.png");
+    const response = await post("/e/tiny/targets", form);
+    const said = await fetch(`${origin}${response.headers.get("location")}`);
+    expect(await said.text()).toContain("is not a printed width in millimetres");
+  });
+
+  it("keeps every target when several are added at the same moment", async () => {
+    await post("/experiences", new URLSearchParams({ id: "at-once", title: "At once" }));
+    const png = await artwork();
+    const add = (id: string) => {
+      const form = new FormData();
+      form.append("targetId", id);
+      form.append("physicalWidthMm", "120");
+      form.append("artwork", new Blob([png], { type: "image/png" }), `${id}.png`);
+      return post("/e/at-once/targets", form);
+    };
+    await Promise.all([add("a"), add("b"), add("c"), add("d")]);
+    const saved = await workspace.read("at-once");
+    expect(saved.manifest.targets.map((target) => target.id).sort()).toEqual(["a", "b", "c", "d"]);
+  });
+});
+
 describe("what it says", () => {
   it("escapes a title that is trying to be markup", async () => {
     await post(

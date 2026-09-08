@@ -116,11 +116,20 @@ async function readForm(request: IncomingMessage): Promise<FormData> {
   const type = request.headers["content-type"] ?? "";
   const body = await readBody(request);
   if (type.startsWith("multipart/form-data")) {
-    return await new Request("http://console.invalid/", {
-      method: "POST",
-      headers: { "content-type": type },
-      body,
-    }).formData();
+    try {
+      return await new Request("http://console.invalid/", {
+        method: "POST",
+        headers: { "content-type": type },
+        body,
+      }).formData();
+    } catch (error) {
+      // An upload that stopped half way is the ordinary case, not a crash. Without this
+      // the parser's TypeError became a 500 with a stack trace in the log, which is what
+      // a cancelled upload or a dropped connection looks like from a browser.
+      throw new WorkspaceError(
+        `that upload could not be read, which usually means it was interrupted: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
   const form = new FormData();
   for (const [key, value] of new URLSearchParams(body.toString("utf8"))) form.append(key, value);
@@ -249,12 +258,13 @@ export function createConsole(options: ConsoleOptions): Server {
       const form = await readForm(request);
       const targetId = field(form, "targetId");
       if (!targetId) throw new WorkspaceError("a target needs an id");
-      if (experience.manifest.targets.some((target) => target.id === targetId)) {
-        throw new WorkspaceError(`${id} already has a target called ${targetId}`);
-      }
       const width = Number(field(form, "physicalWidthMm"));
-      if (!Number.isFinite(width) || width <= 0 || width > 10000) {
-        throw new WorkspaceError(`${field(form, "physicalWidthMm")} is not a printed width in millimetres`);
+      // A floor of one millimetre rather than of zero. 0.001 was accepted, and a printed
+      // width of one micron is not a mistake worth passing on to a compiler.
+      if (!Number.isFinite(width) || width < 1 || width > 10000) {
+        throw new WorkspaceError(
+          `${field(form, "physicalWidthMm")} is not a printed width in millimetres: 1 to 10000`,
+        );
       }
       const file = form.get("artwork");
       if (!(file instanceof File) || file.size === 0) throw new WorkspaceError("no artwork was uploaded");
@@ -264,12 +274,17 @@ export function createConsole(options: ConsoleOptions): Server {
         file.name,
         new Uint8Array(await file.arrayBuffer()),
       );
-      await workspace.save(id, {
-        ...experience.manifest,
-        targets: [
-          ...experience.manifest.targets,
-          { id: targetId, source, physicalWidthMm: width, content: [] },
-        ],
+      // Read, change and write in one turn. Read and save as separate calls lost three of
+      // four targets added at the same moment, because each request had read the manifest
+      // before any of the others wrote theirs.
+      await workspace.update(id, (manifest) => {
+        if (manifest.targets.some((target) => target.id === targetId)) {
+          throw new WorkspaceError(`${id} already has a target called ${targetId}`);
+        }
+        return {
+          ...manifest,
+          targets: [...manifest.targets, { id: targetId, source, physicalWidthMm: width, content: [] }],
+        };
       });
       redirect(response, `/e/${encodeURIComponent(id)}`, {
         tone: "good",
@@ -311,14 +326,14 @@ export function createConsole(options: ConsoleOptions): Server {
       const file = form.get("file");
       if (!(file instanceof File) || file.size === 0) throw new WorkspaceError("no file was uploaded");
       const src = await workspace.storeFile(id, "media", file.name, new Uint8Array(await file.arrayBuffer()));
-      await workspace.save(id, {
-        ...experience.manifest,
-        targets: experience.manifest.targets.map((target) =>
+      await workspace.update(id, (manifest) => ({
+        ...manifest,
+        targets: manifest.targets.map((target) =>
           target.id === targetId
             ? { ...target, content: [...target.content, { type: type as "image", src }] }
             : target,
         ),
-      });
+      }));
       redirect(response, `/e/${encodeURIComponent(id)}`, {
         tone: "good",
         message: `${file.name} added to ${targetId}.`,
