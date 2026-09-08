@@ -8,7 +8,12 @@
  */
 
 import type { Report } from "@taggant/compiler";
-import { type DraftManifest, ID_PATTERN_ATTRIBUTE, type Listed } from "./workspace.js";
+import {
+  type DraftManifest,
+  ID_PATTERN_ATTRIBUTE,
+  type Listed,
+  TARGET_ID_PATTERN_ATTRIBUTE,
+} from "./workspace.js";
 
 /** HTML escaping, for text and for attribute values alike. */
 export function esc(value: unknown): string {
@@ -140,7 +145,7 @@ export function verdict(report: Report, scanDistanceMm: number): string {
         )} px across the artwork`;
   return `<div class="verdict ${report.pass ? "pass" : "fail"}">
   <span class="state">${report.pass ? "Ready for press" : "Not ready"}</span>
-  <span class="score mono">${report.score} / 100</span>
+  <span class="score mono">${esc(report.score)} / 100</span>
 </div>
 <p class="mono width-line">Print it at least ${esc(width)}.</p>
 ${
@@ -239,7 +244,7 @@ ${
   <div class="row bottom">
     <div class="field narrow">
       <label for="t-id">Target id</label>
-      <input id="t-id" name="targetId" type="text" required placeholder="front-panel" autocomplete="off" spellcheck="false">
+      <input id="t-id" name="targetId" type="text" required pattern="${TARGET_ID_PATTERN_ATTRIBUTE}" placeholder="front-panel" autocomplete="off" spellcheck="false">
     </div>
     <div class="field narrow">
       <label for="t-width">Printed width, mm</label>

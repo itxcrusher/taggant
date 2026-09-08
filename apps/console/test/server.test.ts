@@ -253,7 +253,7 @@ not finished`;
   it("refuses a printed width no press could produce", async () => {
     await post("/experiences", new URLSearchParams({ id: "tiny", title: "Tiny" }));
     const form = new FormData();
-    form.append("targetId", "t");
+    form.append("targetId", "front");
     form.append("physicalWidthMm", "1e-3");
     form.append("artwork", new Blob([await artwork()], { type: "image/png" }), "a.png");
     const response = await post("/e/tiny/targets", form);
@@ -271,9 +271,9 @@ not finished`;
       form.append("artwork", new Blob([png], { type: "image/png" }), `${id}.png`);
       return post("/e/at-once/targets", form);
     };
-    await Promise.all([add("a"), add("b"), add("c"), add("d")]);
+    await Promise.all([add("one"), add("two"), add("three"), add("four")]);
     const saved = await workspace.read("at-once");
-    expect(saved.manifest.targets.map((target) => target.id).sort()).toEqual(["a", "b", "c", "d"]);
+    expect(saved.manifest.targets.map((target) => target.id).sort()).toEqual(["four", "one", "three", "two"]);
   });
 });
 

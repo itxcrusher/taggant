@@ -15,7 +15,7 @@ import { type IncomingMessage, type Server, type ServerResponse, createServer } 
 import { DEFAULT_SCAN_DISTANCE_MM, bundleDirFor, compile, publish, registerCode } from "./operations.js";
 import { STYLESHEET } from "./style.js";
 import { type Notice, type TargetView, errorPage, experiencePage, indexPage, page } from "./views.js";
-import { type Experience, type Workspace, WorkspaceError, assertId } from "./workspace.js";
+import { type Experience, type Workspace, WorkspaceError, assertId, assertTargetId } from "./workspace.js";
 
 /**
  * Largest request this will read.
@@ -26,6 +26,16 @@ import { type Experience, type Workspace, WorkspaceError, assertId } from "./wor
  */
 const MAX_BODY_BYTES = 256 * 1024 * 1024;
 
+/**
+ * The bound on a form that carries no file.
+ *
+ * The upload limit is sized for artwork and video and was being applied to a form with
+ * three short fields in it. That branch decodes and parses the whole body synchronously,
+ * so a 200 MB urlencoded post held the event loop for nine seconds and every other request
+ * waited behind it. Nothing this console renders posts more than a few hundred bytes.
+ */
+const MAX_FORM_BYTES = 64 * 1024;
+
 export interface ConsoleOptions {
   workspace: Workspace;
   /** Where published bundles are written. Each experience gets a folder named by its id. */
@@ -34,6 +44,8 @@ export interface ConsoleOptions {
   linkTablePath: string;
   /** Overridden by the tests so they bundle a known runtime build. */
   runtimeDir?: string;
+  /** Any further host names it should accept, when it is behind something. */
+  hosts?: readonly string[];
 }
 
 /**
@@ -69,6 +81,34 @@ class Notices {
   }
 }
 
+/** The names a console is reached by when nobody has put anything in front of it. */
+const LOOPBACK_NAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
+
+/**
+ * Whether the request was addressed to this console rather than to a name pointed at it.
+ *
+ * Without this, `Host` decides what same-origin means and `Host` is written by whoever is
+ * asking. A page held on any name that resolves to the loopback address is same-origin
+ * with the console by every other check it makes, so a browser could be walked into
+ * rewriting the link table: `Host: evil.example:4000` with a matching `Origin` was
+ * accepted, and pointed a printed GTIN at an attacker's URL.
+ *
+ * The port is taken from the socket the request actually arrived on rather than from
+ * configuration, so this is right whatever port it was given, including none.
+ */
+function addressedToUs(request: IncomingMessage, extra: ReadonlySet<string>): boolean {
+  const host = request.headers.host?.toLowerCase();
+  if (host === undefined) return false;
+  if (extra.has(host)) return true;
+  const parts = host.match(/^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/);
+  const name = parts?.[1];
+  if (name === undefined) return false;
+  if (!LOOPBACK_NAMES.has(name) && !extra.has(name)) return false;
+  const stated = parts?.[2] === undefined ? 80 : Number(parts[2]);
+  const arrivedOn = request.socket.localPort;
+  return arrivedOn === undefined || stated === arrivedOn;
+}
+
 /**
  * Whether a state-changing request came from this console's own pages.
  *
@@ -76,14 +116,17 @@ class Notices {
  * a form here, and the operator's browser will send it. `Sec-Fetch-Site` says so directly
  * in every current browser; `Origin` is the fallback and covers the rest. A request
  * carrying neither is not a browser form post, and is refused rather than guessed about.
+ *
+ * The `Host` check comes first, because everything below compares against it.
  */
-function sameOrigin(request: IncomingMessage, host: string | undefined): boolean {
+function sameOrigin(request: IncomingMessage, extra: ReadonlySet<string>): boolean {
+  if (!addressedToUs(request, extra)) return false;
   const site = request.headers["sec-fetch-site"];
   if (typeof site === "string") return site === "same-origin" || site === "none";
   const origin = request.headers.origin;
-  if (typeof origin === "string" && host !== undefined) {
+  if (typeof origin === "string") {
     try {
-      return new URL(origin).host === host;
+      return new URL(origin).host.toLowerCase() === request.headers.host?.toLowerCase();
     } catch {
       return false;
     }
@@ -91,18 +134,30 @@ function sameOrigin(request: IncomingMessage, host: string | undefined): boolean
   return false;
 }
 
-async function readBody(request: IncomingMessage): Promise<Buffer> {
+async function readBody(request: IncomingMessage, limit: number): Promise<Buffer> {
+  // Refused before a byte is read where the client said how much it was sending, so the
+  // answer arrives instead of a reset. Reading it all and then refusing meant the socket
+  // died while the client was still writing, and whoever uploaded a 300 MB video saw a
+  // network error rather than the sentence saying there is a limit.
+  const declared = Number(request.headers["content-length"]);
+  if (Number.isFinite(declared) && declared > limit) {
+    throw new WorkspaceError(`that is ${describeSize(declared)} and the limit is ${describeSize(limit)}`);
+  }
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of request) {
     const buffer = chunk as Buffer;
     total += buffer.length;
-    if (total > MAX_BODY_BYTES) {
-      throw new WorkspaceError(`the upload is larger than the ${MAX_BODY_BYTES / (1024 * 1024)} MB limit`);
+    if (total > limit) {
+      throw new WorkspaceError(`that is larger than the ${describeSize(limit)} limit`);
     }
     chunks.push(buffer);
   }
   return Buffer.concat(chunks);
+}
+
+function describeSize(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${Math.round(bytes / (1024 * 1024))} MB` : `${Math.round(bytes / 1024)} KB`;
 }
 
 /**
@@ -114,8 +169,9 @@ async function readBody(request: IncomingMessage): Promise<Buffer> {
  */
 async function readForm(request: IncomingMessage): Promise<FormData> {
   const type = request.headers["content-type"] ?? "";
-  const body = await readBody(request);
-  if (type.startsWith("multipart/form-data")) {
+  const multipart = type.startsWith("multipart/form-data");
+  const body = await readBody(request, multipart ? MAX_BODY_BYTES : MAX_FORM_BYTES);
+  if (multipart) {
     try {
       return await new Request("http://console.invalid/", {
         method: "POST",
@@ -134,6 +190,21 @@ async function readForm(request: IncomingMessage): Promise<FormData> {
   const form = new FormData();
   for (const [key, value] of new URLSearchParams(body.toString("utf8"))) form.append(key, value);
   return form;
+}
+
+/**
+ * Percent-decoding that answers rather than throws.
+ *
+ * `decodeURIComponent` throws `URIError` on a lone `%`, and that is not a `WorkspaceError`,
+ * so `/e/%/targets` was a 500 with a stack trace in the log. A malformed address is the
+ * client's mistake and is answered as one.
+ */
+function decode(segment: string, what: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    throw new WorkspaceError(`${what} is not a readable address: ${segment}`);
+  }
 }
 
 function field(form: FormData, name: string): string {
@@ -167,6 +238,7 @@ const ROUTES = {
 export function createConsole(options: ConsoleOptions): Server {
   const { workspace, publishRoot, linkTablePath } = options;
   const notices = new Notices();
+  const allowed = new Set((options.hosts ?? []).map((name) => name.toLowerCase()));
 
   /** Everything the experience page needs, read from disk each time it is asked for. */
   const viewFor = async (experience: Experience): Promise<TargetView[]> => {
@@ -253,11 +325,10 @@ export function createConsole(options: ConsoleOptions): Server {
 
     const added = path.match(ROUTES.addTarget);
     if (added?.[1]) {
-      const id = assertId(decodeURIComponent(added[1]));
+      const id = assertId(decode(added[1], "that experience"));
       const experience = await workspace.read(id);
       const form = await readForm(request);
-      const targetId = field(form, "targetId");
-      if (!targetId) throw new WorkspaceError("a target needs an id");
+      const targetId = assertTargetId(field(form, "targetId"));
       const width = Number(field(form, "physicalWidthMm"));
       // A floor of one millimetre rather than of zero. 0.001 was accepted, and a printed
       // width of one micron is not a mistake worth passing on to a compiler.
@@ -295,8 +366,8 @@ export function createConsole(options: ConsoleOptions): Server {
 
     const compiling = path.match(ROUTES.compile);
     if (compiling?.[1] && compiling[2]) {
-      const id = assertId(decodeURIComponent(compiling[1]));
-      const targetId = decodeURIComponent(compiling[2]);
+      const id = assertId(decode(compiling[1], "that experience"));
+      const targetId = decode(compiling[2], "that target");
       const form = await readForm(request);
       const distance = Number(field(form, "scanDistanceMm") || DEFAULT_SCAN_DISTANCE_MM);
       const experience = await workspace.read(id);
@@ -312,8 +383,8 @@ export function createConsole(options: ConsoleOptions): Server {
 
     const contenting = path.match(ROUTES.content);
     if (contenting?.[1] && contenting[2]) {
-      const id = assertId(decodeURIComponent(contenting[1]));
-      const targetId = decodeURIComponent(contenting[2]);
+      const id = assertId(decode(contenting[1], "that experience"));
+      const targetId = decode(contenting[2], "that target");
       const experience = await workspace.read(id);
       if (!experience.manifest.targets.some((target) => target.id === targetId)) {
         throw new WorkspaceError(`${id} has no target called ${targetId}`);
@@ -343,7 +414,7 @@ export function createConsole(options: ConsoleOptions): Server {
 
     const publishing = path.match(ROUTES.publish);
     if (publishing?.[1]) {
-      const id = assertId(decodeURIComponent(publishing[1]));
+      const id = assertId(decode(publishing[1], "that experience"));
       const experience = await workspace.read(id);
       const outDir = bundleDirFor(publishRoot, id);
       const result = await publish(workspace, experience, outDir, {
@@ -359,7 +430,7 @@ export function createConsole(options: ConsoleOptions): Server {
 
     const coding = path.match(ROUTES.code);
     if (coding?.[1]) {
-      const id = assertId(decodeURIComponent(coding[1]));
+      const id = assertId(decode(coding[1], "that experience"));
       const form = await readForm(request);
       const href = field(form, "href");
       let parsed: URL;
@@ -378,9 +449,17 @@ export function createConsole(options: ConsoleOptions): Server {
       });
       redirect(response, `/e/${encodeURIComponent(id)}`, {
         tone: "good",
-        message: written.replaced
-          ? `${written.path} now points here, replacing what it pointed at before.`
-          : `${written.path} points here.`,
+        message: [
+          `${written.path} points here.`,
+          written.replaced > 0
+            ? `${written.replaced} product ${written.replaced === 1 ? "link" : "links"} of that kind ${written.replaced === 1 ? "was" : "were"} replaced.`
+            : "",
+          written.kept > 0
+            ? `${written.kept} other ${written.kept === 1 ? "link" : "links"} on that code ${written.kept === 1 ? "was" : "were"} left alone.`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
       });
       return;
     }
@@ -423,7 +502,7 @@ export function createConsole(options: ConsoleOptions): Server {
       try {
         await showExperience(
           response,
-          assertId(decodeURIComponent(one[1])),
+          assertId(decode(one[1], "that experience")),
           notices.take(url.searchParams.get("said")),
         );
       } catch (error) {
@@ -441,7 +520,7 @@ export function createConsole(options: ConsoleOptions): Server {
       return;
     }
 
-    if (!sameOrigin(request, host)) {
+    if (!sameOrigin(request, allowed)) {
       html(
         response,
         403,

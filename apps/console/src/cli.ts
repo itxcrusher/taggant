@@ -17,6 +17,8 @@ export interface Arguments {
   publishTo: string;
   links: string;
   host: string;
+  /** Extra names it will answer forms on, beyond the loopback ones. */
+  hosts: string[];
 }
 
 export function parseArguments(args: string[]): { arguments: Arguments } | { error: string } {
@@ -25,16 +27,24 @@ export function parseArguments(args: string[]): { arguments: Arguments } | { err
   let publishTo: string | undefined;
   let links: string | undefined;
   let host = "127.0.0.1";
+  const hosts: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === undefined) continue;
-    if (arg === "--port" || arg === "--publish-to" || arg === "--links" || arg === "--host") {
+    if (
+      arg === "--port" ||
+      arg === "--publish-to" ||
+      arg === "--links" ||
+      arg === "--host" ||
+      arg === "--allow-host"
+    ) {
       const value = args[i + 1];
       if (value === undefined || value.startsWith("--")) return { error: `${arg} needs a value` };
       i++;
       if (arg === "--publish-to") publishTo = value;
       else if (arg === "--links") links = value;
+      else if (arg === "--allow-host") hosts.push(value);
       else if (arg === "--host") host = value;
       else {
         if (!/^\d+$/.test(value)) return { error: `--port must be a number, and this is ${value}` };
@@ -57,6 +67,7 @@ export function parseArguments(args: string[]): { arguments: Arguments } | { err
       workspace,
       port,
       host,
+      hosts,
       publishTo: publishTo ?? resolve(workspace, "../bundles"),
       links: links ?? resolve(workspace, "../links.json"),
     },
@@ -75,14 +86,32 @@ export async function main(args: string[]): Promise<number> {
   }
 
   const { workspace: root, port, host, publishTo, links } = parsed.arguments;
-  await mkdir(resolve(root), { recursive: true });
-  await mkdir(resolve(publishTo), { recursive: true });
+  // A path that is a file rather than a directory is an ordinary mistake, and printing a
+  // Node stack at somebody for it is not an answer.
+  for (const [what, where] of [
+    ["the workspace", root],
+    ["the publish folder", publishTo],
+  ] as const) {
+    try {
+      await mkdir(resolve(where), { recursive: true });
+    } catch (error) {
+      stderr.write(
+        `${what} could not be opened at ${resolve(where)}: ${error instanceof Error ? error.message : String(error)}
+`,
+      );
+      return EXIT.usage;
+    }
+  }
 
   const workspace = createWorkspace(root);
   const server = createConsole({
     workspace,
     publishRoot: resolve(publishTo),
     linkTablePath: resolve(links),
+    // Whatever name it is reached by, when that is not the loopback address. The console
+    // will not act on a form posted to a name it does not know, because Host is written by
+    // whoever is asking and everything same-origin means is compared against it.
+    hosts: parsed.arguments.hosts,
   });
 
   if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {
