@@ -72,7 +72,7 @@ export async function main(args: string[]): Promise<number> {
   stdout.write(
     `\n  resolving ${count} links across ${Object.keys(table.entries).length} identifiers on port ${port}\n`,
   );
-  stdout.write(`  description at /.well-known/gs1resolver\n\n`);
+  stdout.write("  description at /.well-known/gs1resolver\n\n");
   return EXIT.ok;
 }
 
