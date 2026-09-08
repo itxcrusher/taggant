@@ -59,25 +59,58 @@ export function fromTargetFile(value: unknown): TrackingTarget {
   if (file.formatVersion !== 2) {
     throw new TypeError(`target file format ${String(file.formatVersion)} is not supported, expected 2`);
   }
-  if (typeof file.id !== "string" || !(file.width && file.height) || !Array.isArray(file.features)) {
-    throw new TypeError("target file is missing an id, its dimensions, or its features");
+  if (typeof file.id !== "string" || !Array.isArray(file.features)) {
+    throw new TypeError("target file is missing an id or its features");
   }
+  const width = size(file.width, "width");
+  const height = size(file.height, "height");
+
   return {
     id: file.id,
-    width: file.width,
-    height: file.height,
+    width,
+    height,
     features: file.features.map((feature, index) => {
       if (!Array.isArray(feature?.descriptor) || feature.descriptor.length !== 8) {
         throw new TypeError(`feature ${index} does not carry an eight word descriptor`);
       }
+      const descriptor = new Uint32Array(8);
+      for (let word = 0; word < 8; word++) {
+        const value = feature.descriptor[word];
+        // Every one of these reaches the caller as "it never recognises anything", which
+        // is the hardest failure to trace back to a file that was written wrong.
+        if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 0xffff_ffff) {
+          throw new TypeError(`feature ${index} has a descriptor word that is not a 32 bit integer`);
+        }
+        descriptor[word] = value;
+      }
       return {
-        x: feature.x,
-        y: feature.y,
-        scale: feature.scale,
-        angle: feature.angle,
-        strength: feature.strength,
-        descriptor: Uint32Array.from(feature.descriptor),
+        x: finite(feature.x, index, "x"),
+        y: finite(feature.y, index, "y"),
+        scale: positiveFinite(feature.scale, index, "scale"),
+        angle: finite(feature.angle, index, "angle"),
+        strength: finite(feature.strength, index, "strength"),
+        descriptor,
       };
     }),
   };
+}
+
+function size(value: unknown, name: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    throw new TypeError(`target file ${name} must be a positive number, got ${String(value)}`);
+  }
+  return value;
+}
+
+function finite(value: unknown, index: number, name: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new TypeError(`feature ${index} has a ${name} that is not a finite number, got ${String(value)}`);
+  }
+  return value;
+}
+
+function positiveFinite(value: unknown, index: number, name: string): number {
+  const number = finite(value, index, name);
+  if (number <= 0) throw new TypeError(`feature ${index} has a ${name} that is not positive, got ${number}`);
+  return number;
 }

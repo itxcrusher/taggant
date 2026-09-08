@@ -69,11 +69,13 @@ export function locate(
   // the most expensive thing in the loop, and on a frame where the artwork is squarely in
   // view the first size finds it, so the common case costs one size and only a frame that
   // is genuinely hard costs them all.
-  let attempt = attemptAt(frame, target, [scales[0] ?? 1], perScale, minInliers);
-  if (!attempt.found && scales.length > 1) {
-    attempt = attemptAt(frame, target, scales, perScale, minInliers);
-  }
-  return attempt;
+  const first = attemptAt(frame, target, [scales[0] ?? 1], perScale, minInliers);
+  if (first.found || scales.length < 2) return first;
+
+  // Only the sizes not already tried. Repeating the first one here would put the waste on
+  // the frame that was already the slowest.
+  const rest = attemptAt(frame, target, scales.slice(1), perScale, minInliers);
+  return rest.found || rest.matches >= first.matches ? rest : first;
 }
 
 function attemptAt(

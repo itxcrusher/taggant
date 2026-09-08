@@ -80,6 +80,7 @@ function bestAgainst(
   set: Uint32Array,
   count: number,
   positions: Position[] | undefined,
+  shared: Uint8Array | undefined,
   radiusSquared: number,
 ): Best {
   let index = -1;
@@ -95,14 +96,13 @@ function bestAgainst(
       second = d;
     }
   }
-  if (index < 0 || !positions || radiusSquared <= 0) return { index, distance: best, second };
+  if (index < 0 || !positions || !shared || radiusSquared <= 0) return { index, distance: best, second };
 
-  // The runner up sat on the same spot as the winner, so it is the same feature at another
-  // scale rather than a rival. Only then is a second pass worth its cost.
+  // Only when something else sits on the winner's spot is the runner up suspect, and only
+  // then is a second pass worth its cost. Which features share a spot is a property of the
+  // target, so it is worked out once rather than once per frame descriptor.
   const winner = positions[index];
-  const runnerUp =
-    second === Number.POSITIVE_INFINITY ? undefined : nearestAt(positions, winner, radiusSquared);
-  if (!winner || !runnerUp) return { index, distance: best, second };
+  if (!winner || shared[index] !== 1) return { index, distance: best, second };
 
   second = Number.POSITIVE_INFINITY;
   for (let i = 0; i < count; i++) {
@@ -119,20 +119,26 @@ function bestAgainst(
   return { index, distance: best, second };
 }
 
-/** Whether any other feature shares the winner's spot, which is what makes a second pass necessary. */
-function nearestAt(
-  positions: Position[],
-  winner: Position | undefined,
-  radiusSquared: number,
-): boolean | undefined {
-  if (!winner) return undefined;
-  let sharing = 0;
-  for (const other of positions) {
-    const dx = other.x - winner.x;
-    const dy = other.y - winner.y;
-    if (dx * dx + dy * dy <= radiusSquared && ++sharing > 1) return true;
+/** Which features share their position with another, computed once for a whole set. */
+function sharedPositions(positions: Position[] | undefined, radiusSquared: number): Uint8Array | undefined {
+  if (!positions || radiusSquared <= 0) return undefined;
+  const shared = new Uint8Array(positions.length);
+  for (let i = 0; i < positions.length; i++) {
+    if (shared[i] === 1) continue;
+    const a = positions[i];
+    if (!a) continue;
+    for (let j = i + 1; j < positions.length; j++) {
+      const b = positions[j];
+      if (!b) continue;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      if (dx * dx + dy * dy <= radiusSquared) {
+        shared[i] = 1;
+        shared[j] = 1;
+      }
+    }
   }
-  return undefined;
+  return shared;
 }
 
 /**
@@ -158,10 +164,20 @@ export function matchDescriptors(
 
   const queries = pack(query);
   const targets = pack(target);
+  const targetShared = sharedPositions(positions, radiusSquared);
+  const queryShared = sharedPositions(options.queryPositions, radiusSquared);
 
   const forward: Match[] = [];
   for (let q = 0; q < query.length; q++) {
-    const best = bestAgainst(queries, q * WORDS, targets, target.length, positions, radiusSquared);
+    const best = bestAgainst(
+      queries,
+      q * WORDS,
+      targets,
+      target.length,
+      positions,
+      targetShared,
+      radiusSquared,
+    );
     if (best.index < 0 || best.distance > maxDistance) continue;
     if (Number.isFinite(best.second) && best.distance > best.second * ratio) continue;
     forward.push({ query: q, target: best.index, distance: best.distance });
@@ -176,6 +192,7 @@ export function matchDescriptors(
       queries,
       query.length,
       queryPositions,
+      queryShared,
       radiusSquared,
     );
     if (back.index === match.query) mutual.push(match);
