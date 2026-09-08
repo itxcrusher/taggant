@@ -89,7 +89,12 @@ async function did(label, response) {
     check(false, label, `redirected to a ${landed.status}`);
     return false;
   }
-  const complaint = page.match(/<div class="notice bad"[^>]*>\s*<p>([^<]+)</)?.[1];
+  // The one-shot message the console redirected to, which is the only notice that carries
+  // `role="status"`. Matching every `.notice` caught the publish-readiness panel, which is
+  // information rather than a complaint; matching only `notice bad` missed a `warn` tone,
+  // which renders with no tone class at all and is what a failed compile produces.
+  const flash = page.match(/<div class="notice([^"]*)"[^>]*role="status">\s*<p>([^<]+)</);
+  const complaint = flash && !flash[1].includes("good") ? flash[2] : undefined;
   check(complaint === undefined, label, complaint ?? "");
   return complaint === undefined;
 }

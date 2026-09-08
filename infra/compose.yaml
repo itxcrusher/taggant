@@ -102,3 +102,14 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # It writes only into the three mounts above, so the image itself can be read only,
+    # the way the resolver's is. It is the service that accepts uploads and runs a native
+    # image decoder over them, which is the one that most wants it.
+    read_only: true
+    tmpfs:
+      - /tmp
+    # Four concurrent uploads at the configured limit turned 480 MB of payload into about
+    # 2 GB of buffers, and nothing here bounded it: the body is accumulated, concatenated,
+    # parsed and read again. A limit means the container dies rather than the host.
+    mem_limit: 2g
+    pids_limit: 256
