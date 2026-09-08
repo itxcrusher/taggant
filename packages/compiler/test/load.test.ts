@@ -18,16 +18,18 @@ describe("loadGrayscale", () => {
   it("returns single-channel pixels with the source dimensions", async () => {
     const png = await makeCheckerboard(640, 480);
     const image = await loadGrayscale(png);
+    // Analysed at the working size whatever arrived, so two exports of one design are the
+    // same target. This one happens to arrive at that size already.
     expect(image.width).toBe(640);
     expect(image.height).toBe(480);
     expect(image.data.length).toBe(640 * 480);
   });
 
-  it("downscales when the longest edge exceeds the limit, preserving aspect", async () => {
-    const png = await makeCheckerboard(2000, 1000);
-    const image = await loadGrayscale(png, { maxEdge: 1000 });
-    expect(image.width).toBe(1000);
-    expect(image.height).toBe(500);
+  it("brings every file to the same working size, up as well as down", async () => {
+    const small = await loadGrayscale(await makeCheckerboard(600, 300), { workingEdge: 1000 });
+    const large = await loadGrayscale(await makeCheckerboard(2000, 1000), { workingEdge: 1000 });
+    expect([small.width, small.height]).toEqual([1000, 500]);
+    expect([large.width, large.height]).toEqual([1000, 500]);
   });
 
   it("rejects an image smaller than the minimum usable size", async () => {
@@ -67,12 +69,14 @@ describe("loadGrayscale against the files print actually arrives as", () => {
       .jpeg()
       .toBuffer();
     const image = await loadGrayscale(jpeg, { minEdge: 100 });
-    expect(image.width).toBe(300);
-    expect(image.height).toBe(400);
+    // Stored 400 by 300, shown 300 by 400. What matters is that the analysis is of the
+    // turned image, so the tall edge is the long one whatever the working size is.
+    expect(image.height).toBeGreaterThan(image.width);
+    expect(image.height / image.width).toBeCloseTo(400 / 300, 1);
   });
 
-  it("applies the shortest edge rule to the size it will analyse, not the size that arrived", async () => {
+  it("refuses artwork too long and thin to analyse, whatever its file size says", async () => {
     const strip = await makeCheckerboard(4000, 300);
-    await expect(loadGrayscale(strip)).rejects.toThrow(/once scaled for analysis, and this is 90 px/);
+    await expect(loadGrayscale(strip)).rejects.toThrow(/long and thin/);
   });
 });

@@ -2,9 +2,24 @@ import type { GrayscaleImage } from "@taggant/vision";
 import sharp from "sharp";
 
 export interface LoadOptions {
-  /** Longest edge in pixels after downscaling. Larger costs time and buys nothing. */
-  maxEdge?: number;
-  /** Shortest edge the compiler will accept. Below this there is nothing to track. */
+  /**
+   * Longest edge, in pixels, that every piece of artwork is analysed at.
+   *
+   * Fixed rather than a ceiling, and this matters more than it looks. Everything the
+   * compiler measures is in analysis pixels, so if this followed the file then the same
+   * design exported at two sizes would produce two different targets and two different
+   * minimum print widths. It did, and the swing was three to one, which rewarded exporting
+   * small: send a smaller file, be told you may print smaller, and get a worse target for
+   * it. A design is a design whatever the export dialogue was set to.
+   *
+   * The value is set by what a camera can deliver, not by what a file might hold. The
+   * runtime recognises against a frame reduced to 480 px wide, and the smallest size in a
+   * target is half its analysis raster, so analysing at much more than this describes
+   * detail no runtime will ever be given. Analysing at 1024 made the smallest level 512 px
+   * and nothing matched at all.
+   */
+  workingEdge?: number;
+  /** Shortest edge the compiler will accept in the file itself. Below this there is nothing to track. */
   minEdge?: number;
   /**
    * Substrate the artwork is composited onto, as any colour sharp understands.
@@ -22,7 +37,7 @@ export interface LoadOptions {
  * rather than anywhere near a browser.
  */
 export async function loadGrayscale(input: Buffer, options: LoadOptions = {}): Promise<GrayscaleImage> {
-  const maxEdge = options.maxEdge ?? 1200;
+  const workingEdge = options.workingEdge ?? 640;
   const minEdge = options.minEdge ?? 256;
   const substrate = options.substrate ?? "#ffffff";
 
@@ -39,14 +54,25 @@ export async function loadGrayscale(input: Buffer, options: LoadOptions = {}): P
   const sourceHeight = (turned ? meta.width : meta.height) ?? 0;
   if (sourceWidth < 1 || sourceHeight < 1) throw new Error("artwork has no readable dimensions");
 
-  const longestEdge = Math.max(sourceWidth, sourceHeight);
-  const scale = longestEdge > maxEdge ? maxEdge / longestEdge : 1;
-  // Checked against the size the analysis will actually run at, not the size that arrived.
-  // A 4000 by 300 strip clears a 256 px gate and is then analysed at 1200 by 90.
-  const shortestEdge = Math.floor(Math.min(sourceWidth, sourceHeight) * scale);
+  // Two gates, and both are needed. The first is on the file, because that is where the
+  // detail either exists or does not, and scaling a small file up to the working size does
+  // not put any into it.
+  const shortestEdge = Math.min(sourceWidth, sourceHeight);
   if (shortestEdge < minEdge) {
     throw new Error(
-      `artwork must be at least ${minEdge} px on its shortest edge once scaled for analysis, and this is ${shortestEdge} px`,
+      `artwork must be at least ${minEdge} px on its shortest edge, and this is ${shortestEdge} px`,
+    );
+  }
+
+  // The second is on the size it will be analysed at, which for a long thin piece is not
+  // the same thing. A 4000 by 300 strip clears the first gate and would be analysed 77 px
+  // tall, describing a printed mark a few millimetres high.
+  const analysedShortEdge = Math.round(
+    (Math.min(sourceWidth, sourceHeight) * workingEdge) / Math.max(sourceWidth, sourceHeight),
+  );
+  if (analysedShortEdge < minEdge) {
+    throw new Error(
+      `artwork this long and thin cannot be analysed usefully: at a working size of ${workingEdge} px it is ${analysedShortEdge} px on its shortest edge, and ${minEdge} is the minimum`,
     );
   }
 
@@ -54,9 +80,8 @@ export async function loadGrayscale(input: Buffer, options: LoadOptions = {}): P
   // transparent file is graded on the colour hiding under its alpha channel, and art on a
   // transparent background gains edges at its boundary that will never reach paper.
   pipeline.flatten({ background: substrate }).grayscale();
-  if (scale < 1) {
-    pipeline.resize({ width: maxEdge, height: maxEdge, fit: "inside", withoutEnlargement: true });
-  }
+  // Up as well as down, so the analysis raster is the same for every piece of artwork.
+  pipeline.resize({ width: workingEdge, height: workingEdge, fit: "inside", withoutEnlargement: false });
 
   const { data, info } = await pipeline.raw().toBuffer({ resolveWithObject: true });
   return { width: info.width, height: info.height, data: new Uint8Array(data) };
