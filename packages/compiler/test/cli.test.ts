@@ -3,23 +3,28 @@ import { EXIT, formatReportLines, main, parseArguments } from "../src/cli.js";
 
 describe("formatReportLines", () => {
   it("prints the numbers a printer needs, in millimetres", () => {
-    const lines = formatReportLines("front.tif", {
-      formatVersion: 2,
-      id: "front-panel",
-      width: 1200,
-      height: 800,
-      features: [],
-      report: {
-        score: 82,
-        pass: true,
-        featureCount: 240,
-        areasWithFeatures: 14,
-        areas: 16,
-        detail: 0.012,
-        minimumWidthMm: 62,
-        reasons: [],
+    const lines = formatReportLines(
+      "front.tif",
+      {
+        formatVersion: 2,
+        id: "front-panel",
+        width: 1200,
+        height: 800,
+        features: [],
+        report: {
+          score: 82,
+          pass: true,
+          featureCount: 240,
+          areasWithFeatures: 14,
+          areas: 16,
+          analysisWidth: 1200,
+          smallestUsableScale: 0.5,
+          minimumWidthMm: 62,
+          reasons: [],
+        },
       },
-    });
+      400,
+    );
     const text = lines.join("\n");
     expect(text).toContain("front.tif");
     expect(text).toContain("82 / 100");
@@ -27,23 +32,28 @@ describe("formatReportLines", () => {
   });
 
   it("lists every reason when the artwork fails", () => {
-    const lines = formatReportLines("front.tif", {
-      formatVersion: 2,
-      id: "front-panel",
-      width: 1200,
-      height: 800,
-      features: [],
-      report: {
-        score: 20,
-        pass: false,
-        featureCount: 12,
-        areasWithFeatures: 4,
-        areas: 16,
-        detail: 0.012,
-        minimumWidthMm: 62,
-        reasons: ["too few features to track reliably", "features are concentrated in part of the artwork"],
+    const lines = formatReportLines(
+      "front.tif",
+      {
+        formatVersion: 2,
+        id: "front-panel",
+        width: 1200,
+        height: 800,
+        features: [],
+        report: {
+          score: 20,
+          pass: false,
+          featureCount: 12,
+          areasWithFeatures: 4,
+          areas: 16,
+          analysisWidth: 1200,
+          smallestUsableScale: 0.5,
+          minimumWidthMm: 62,
+          reasons: ["too few features to track reliably", "features are concentrated in part of the artwork"],
+        },
       },
-    });
+      400,
+    );
     const text = lines.join("\n");
     expect(text).toContain("too few features");
     expect(text).toContain("concentrated");

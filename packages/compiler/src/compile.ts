@@ -24,14 +24,18 @@ export async function compileTarget(artwork: Buffer, options: CompileOptions): P
   const image = await loadGrayscale(artwork);
   const features = buildTrackingFeatures(image, { perScale: options.perScale ?? 300 });
 
-  // The report describes the artwork, not the target file, so it counts each place on the
-  // print once. It counts only features that could be described, because a corner too
-  // near the edge to describe is a corner no runtime will ever use, and a report that
-  // promises features the runtime does not have is a report that lies about press
-  // readiness.
+  // Grouped by the size each feature was found at, so the report can say how small the
+  // artwork can get and still hold up. Nothing is recomputed here. The report sees only
+  // features that could be described, because a corner too near the edge to describe is
+  // one no runtime will ever use, and promising features the runtime does not have is a
+  // report that lies about press readiness.
+  const scales = [...new Set(features.map((feature) => feature.scale))];
   const report = buildReport({
     image: { width: image.width, height: image.height },
-    corners: features.filter((feature) => feature.scale === 1),
+    levels: scales.map((scale) => ({
+      scale,
+      corners: features.filter((feature) => feature.scale === scale),
+    })),
     scanDistanceMm: options.scanDistanceMm,
   });
 

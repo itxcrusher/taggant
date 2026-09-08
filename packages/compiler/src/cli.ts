@@ -4,6 +4,7 @@ import { basename } from "node:path";
 import process, { argv, stderr, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import { type CompiledTarget, compileTarget, toTargetJson } from "./compile.js";
+import { describeWidth } from "./report.js";
 
 /**
  * Exit codes, so a build script can read the outcome instead of parsing stderr.
@@ -37,11 +38,12 @@ export interface Arguments {
 /**
  * Read the arguments, refusing anything ambiguous rather than guessing.
  *
- * Every case handled here was found by an adversarial pass, and all four exited 0: a flag
- * with no value fell through to the default and printed millimetres for a distance nobody
- * asked for, a misspelled flag was ignored the same way, --out with no value wrote nothing
- * and reported success, and --id followed by another flag wrote that flag into the
- * compiled target as its id, where it then failed the manifest package's own id rule.
+ * The quiet failures are the ones worth refusing. A flag with no value falls through to a
+ * default and prints millimetres for a distance nobody asked for. A misspelled flag is
+ * ignored the same way. `--out` with no value writes nothing and reports success, so a
+ * build carries on without the file. `--id` followed by another flag takes that flag as
+ * its value and writes it into the compiled target as an id, which then fails the
+ * manifest package's own rule for one. All four would otherwise exit 0.
  */
 export function parseArguments(args: string[]): { arguments: Arguments } | { error: string } {
   const values = new Map<string, string>();
@@ -94,7 +96,7 @@ export function parseArguments(args: string[]): { arguments: Arguments } | { err
   };
 }
 
-export function formatReportLines(source: string, target: CompiledTarget): string[] {
+export function formatReportLines(source: string, target: CompiledTarget, scanDistanceMm: number): string[] {
   const { report } = target;
   const lines = [
     "",
@@ -104,7 +106,10 @@ export function formatReportLines(source: string, target: CompiledTarget): strin
     // Areas rather than a percentage: a feature is a point, and points do not cover
     // anything, so "covering 100% of the artwork" was saying more than it knew.
     `  features              ${report.featureCount}, reaching ${report.areasWithFeatures} of ${report.areas} areas`,
-    `  minimum print width   ${report.minimumWidthMm === null ? "not printable at any size" : `${report.minimumWidthMm} mm`}`,
+    // Said in full rather than as a bare number, because it is a resolution
+    // requirement set by the camera and the target, not a measurement of the design, and
+    // a bare millimetre figure under a filename reads as the latter.
+    `  minimum print width   ${describeWidth(report, scanDistanceMm)}`,
     `  verdict               ${report.pass ? "ready for press" : "not ready"}`,
   ];
   for (const reason of report.reasons) lines.push(`      ${reason}`);
@@ -136,7 +141,7 @@ export async function main(args: string[]): Promise<number> {
     return EXIT.cannotRead;
   }
 
-  stdout.write(`${formatReportLines(source, target).join("\n")}\n`);
+  stdout.write(`${formatReportLines(source, target, scanDistanceMm).join("\n")}\n`);
 
   if (out !== undefined) {
     try {
