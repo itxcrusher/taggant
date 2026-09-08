@@ -27,3 +27,43 @@ jobs:
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm -r build
       - run: pnpm -r test
+
+  # The path a printed code takes, in containers, on every push. What this covers is the
+  # part no unit test can: that the image builds, the stack comes up healthy, a scan
+  # reaches a bundle on a host that knows nothing about Digital Links, and stopping the
+  # resolver does not take the published bundle with it.
+  stack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+
+      # Publish a real bundle into the stack, the way the infra README says to.
+      - run: |
+          node packages/compiler/dist/cli.js examples/postcard/artwork.png             --id front --scan-distance 350 --out front.target.json
+          node packages/bundler/dist/cli.js examples/postcard/manifest.json             --target front=front.target.json --out infra/bundles/postcard
+
+      - run: docker compose -f infra/compose.yaml up -d --build
+      - run: node infra/smoke.mjs
+
+      # The continuity claim, checked rather than stated: a bundle outlives the service
+      # that routed people to it.
+      - name: stop the resolver and check the bundle still serves
+        run: |
+          docker compose -f infra/compose.yaml stop resolver
+          code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/postcard/)
+          echo "the published bundle answers $code with the resolver stopped"
+          test "$code" = "200"
+
+      - if: always()
+        run: docker compose -f infra/compose.yaml logs resolver | tail -50
+      - if: always()
+        run: docker compose -f infra/compose.yaml down -v

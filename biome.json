@@ -8,5 +8,5 @@
     "indentWidth": 2,
     "lineWidth": 110
   },
-  "files": { "ignore": ["dist", "node_modules", "**/*.gen.ts"] }
+  "files": { "ignore": ["dist", "node_modules", "**/*.gen.ts", "infra/bundles"] }
 }

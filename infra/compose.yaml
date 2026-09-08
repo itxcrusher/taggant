@@ -1,0 +1,52 @@
+# The whole path a printed code takes, in containers.
+#
+# A scan hits the resolver, the resolver redirects to a published bundle, and the bundle is
+# served by a static host that knows nothing about any of this. That separation is the
+# point rather than an arrangement of convenience: every bundle already published keeps
+# working when the resolver is stopped, and the only thing the resolver contributes is the
+# redirect.
+name: taggant
+
+services:
+  resolver:
+    build:
+      context: ..
+      dockerfile: services/resolver/Dockerfile
+    command: ["/srv/links/links.json", "--port", "8080", "--origin", "http://localhost:8080"]
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mounted, not baked in: the table is the one thing that changes without the code
+      # changing, and baking it would mean rebuilding an image to add a product.
+      - ./links:/srv/links:ro
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8080/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 3s
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  bundles:
+    # A plain static host. Nothing here knows what a Digital Link is, which is what makes
+    # the continuity claim true: this container is replaceable by any file server.
+    image: nginx:1.27-alpine
+    ports:
+      - "8081:80"
+    volumes:
+      - ./bundles:/usr/share/nginx/html:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
