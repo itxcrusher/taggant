@@ -232,6 +232,14 @@ Descriptors are compared across engines, because the compiler runs in Node and t
 
 **Not verified: any real camera, and any real print.** Everything above is synthetic. The device matrix is empty and stays empty until it can be filled in with measurements, and the assumed camera resolving power in the print readiness report is an assumption until then.
 
+## The project page
+
+`site/` is a single page describing what this is, for people who have not cloned it. It is one file with no build step: open `site/index.html`, or serve the folder.
+
+The numbers it shows under the lamp are this repository's own: they are what `packages/compiler` reports for `examples/postcard/artwork.png` at a 350 mm reading distance, and they are meant to be checked against it rather than admired.
+
+Publishing it is a manual job on purpose. Turn on GitHub Pages with Actions as the source, then run the `pages` workflow from the Actions tab. It is not wired to `push`, because a repository with Pages turned off would fail that job on every commit and a red build that means nothing is worse than none.
+
 ## Working on it
 
 Requires Node 22 and pnpm 11, which is pinned in `package.json`.
