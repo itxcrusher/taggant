@@ -43,6 +43,20 @@ describe("the postcard example", () => {
     expect(target.report.minimumWidthMm ?? 0).toBeLessThan(declared);
   });
 
+  it("asks for the width the README says it asks for", async () => {
+    // The README quotes this figure and invites the reader to check it. It quoted the
+    // numbers from an earlier analysis raster for a while: 296 px and 65 mm against a tool
+    // that says 320 and 70. A figure in a document that invites checking has to be checked
+    // by something other than whoever wrote it down.
+    const readme = await readFile(join(EXAMPLE, "../../README.md"), "utf8");
+    const target = await compileTarget(await readFile(join(EXAMPLE, "artwork.png")), {
+      id: "front",
+      scanDistanceMm: 350,
+    });
+    const across = Math.round(target.report.smallestUsableScale * target.report.analysisWidth);
+    expect(readme).toContain(`needs ${across} px across and so ${target.report.minimumWidthMm} mm at 350 mm`);
+  });
+
   it("names files that exist", async () => {
     const manifest = JSON.parse(await readFile(join(EXAMPLE, "manifest.json"), "utf8"));
     for (const target of manifest.targets) {

@@ -246,3 +246,21 @@ describe("an asset referenced by a fragment", () => {
     await expect(readFile(join(outDir, withoutFragment))).resolves.toBeDefined();
   });
 });
+
+describe("what the README says a bundle is", () => {
+  it("writes the number of files the README quotes", async () => {
+    // The count changed when a marker file was added to make republishing safe, and the
+    // README went on saying seven. It is the first command anyone runs from that page.
+    const { readFile } = await import("node:fs/promises");
+    const readme = await readFile(new URL("../../../README.md", import.meta.url), "utf8");
+    const { sourceDir, outDir } = await scratch();
+    const result = await bundle({
+      manifest: MANIFEST,
+      targets: { front: TARGET },
+      sourceDir,
+      outDir,
+      runtimeDir: RUNTIME_DIST,
+    });
+    expect(readme).toContain(`${result.files.length} files written to dist/postcard`);
+  });
+});

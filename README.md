@@ -45,7 +45,7 @@ $ echo $?
 
 Two things in there are worth reading carefully.
 
-**Minimum print width says what it is derived from.** It is a resolution requirement, not a judgement of the design: the print has to be large enough that the camera, at that distance, still delivers the pixels across the mark that the smallest size in the compiled target needs. Artwork that holds up all the way down that range asks for less; the postcard in `examples/postcard` needs 296 px across and so 65 mm at 350 mm, while the artwork above holds up only at full size, needs 640 px, and asks for 160 mm. Artwork that does not pass gets no width at all, because no width would fix it.
+**Minimum print width says what it is derived from.** It is a resolution requirement, not a judgement of the design: the print has to be large enough that the camera, at that distance, still delivers the pixels across the mark that the smallest size in the compiled target needs. Artwork that holds up all the way down that range asks for less; the postcard in `examples/postcard` needs 320 px across and so 70 mm at 350 mm, while the artwork above holds up only at full size, needs 640 px, and asks for 160 mm. Artwork that does not pass gets no width at all, because no width would fix it.
 
 The line is written out in full rather than as a bare figure in millimetres, because a bare figure under a filename reads as a measurement of the design and gets carried into a press setup as one.
 
@@ -101,13 +101,13 @@ A printed thing can last decades. The service that served its experience does no
 ```
 $ node packages/bundler/dist/cli.js examples/postcard/manifest.json     --target front=front.target.json --out dist/postcard
 
-  7 files written to dist/postcard
+  8 files written to dist/postcard
   overlay.svg -> assets/64b7fbcbc479e0c4.svg (428 bytes)
 
   Serve that folder over HTTPS or from localhost. It needs nothing else.
 ```
 
-What comes out is a folder: an entry page, the manifest rewritten to point at what was copied, the compiled targets, the assets under names taken from their own content, and the runtime carried in rather than linked. Nothing in it reaches for the network.
+What comes out is a folder: an entry page, the manifest rewritten to point at what was copied, the compiled targets, the assets under names taken from their own content, the runtime carried in rather than linked, and one marker file. The marker is what makes republishing safe: publishing empties a folder only when this tool wrote it, so pointing `--out` at the wrong directory is refused by name rather than acted on. Nothing in it reaches for the network.
 
 That is a claim, so it is tested as one. A test serves the folder from a plain static server with nothing else running, drives it in a real browser against a synthetic camera, and waits for it to find the artwork. It fails on any request that leaves the origin and on any request the folder cannot answer. A second test reads every file the bundle ships and refuses an absolute address in any of them.
 
@@ -224,7 +224,7 @@ These hold for every release and are the reason the project exists in this shape
 
 ## What has and has not been verified
 
-The seven packages are exercised by 309 tests, and the whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all.
+The seven packages are exercised by 311 tests, and the whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all.
 
 The runtime is driven in a real browser rather than asserted: the test writes a video file of the artwork sitting in a larger frame, hands it to Chromium as a camera, and waits for the page to reach its tracking state, then checks that the content landed where the feed actually put the artwork. A published bundle is driven the same way, from a static folder with nothing else running, on artwork put through the real compiler first, which is the only place the two halves of the system meet.
 
