@@ -1,4 +1,4 @@
-import type { Corner } from "@taggant/vision";
+import { type Corner, type DescribedCorner, measureDistinctiveness } from "@taggant/vision";
 
 /** One size the artwork was described at, with the features found there. */
 export interface Level {
@@ -10,6 +10,11 @@ export interface ReportInput {
   image: { width: number; height: number };
   /** Every size the artwork was described at. */
   levels: Level[];
+  /**
+   * The described features at the artwork's own size, for judging whether they can be told
+   * apart. Omitted only by callers that have corners without descriptions.
+   */
+  described?: DescribedCorner[];
   /** Distance in millimetres at which a person is expected to hold the camera. */
   scanDistanceMm: number;
 }
@@ -21,6 +26,12 @@ export interface Report {
   featureCount: number;
   /** Areas of a 4 by 4 grid over the artwork that hold at least one feature. */
   areasWithFeatures: number;
+  /**
+   * Share of features that have a look-alike somewhere else on the artwork, from 0 to 1.
+   * Null when there were no descriptions to judge. High means the artwork repeats, and a
+   * pose can land on the wrong copy.
+   */
+  repetition: number | null;
   /** How many areas there are, so the count above reads without knowing the grid. */
   areas: number;
   /** Pixels across the artwork as it was analysed. The width below is derived from it. */
@@ -56,6 +67,28 @@ const MIN_AREAS = 8;
 const GRID = 4;
 
 /**
+ * How much of the artwork may look like the rest of it.
+ *
+ * Above this a matcher has no way to know which copy of a repeated pattern it is looking
+ * at, and the pose it produces can be a whole tile out while reporting plenty of agreeing
+ * matches, so the runtime shows content confidently in the wrong place.
+ *
+ * Set from measurement rather than taste. Five pieces of artwork, each located in sixty
+ * poses from zero to ninety degrees, with the error measured against the known mapping:
+ *
+ *   artwork                    repetition   poses placed more than 50 px out
+ *   postcard                     0.361                0 of 60
+ *   medium, 200 marks            0.398                0 of 60
+ *   fine, 900 marks              0.463                0 of 60
+ *   medium, printed twice        0.743                2 of 60
+ *   postcard, printed twice      0.752                7 of 60
+ *
+ * Everything that places correctly sits at or below 0.46 and everything that mislocates
+ * sits above 0.74, so the line goes between them with room on both sides.
+ */
+const MAX_REPETITION = 0.6;
+
+/**
  * Turn the features found at each size into the verdict a printer needs.
  *
  * The minimum width deserves a note, because getting it wrong costs a press run and the
@@ -85,9 +118,15 @@ export function buildReport(input: ReportInput): Report {
   const featureCount = base.length;
   const areasWithFeatures = areasTouched(base, image);
 
+  const distinctiveness = input.described ? measureDistinctiveness(input.described) : null;
+  const repetition = distinctiveness?.share ?? null;
+
   const reasons: string[] = [];
   if (featureCount < MIN_FEATURES) reasons.push("too few features to track reliably");
   else if (areasWithFeatures < MIN_AREAS) reasons.push("features are concentrated in part of the artwork");
+  if (repetition !== null && repetition > MAX_REPETITION) {
+    reasons.push("the artwork repeats itself, so content could be placed on the wrong copy");
+  }
   const pass = reasons.length === 0;
 
   // The smallest size that still holds up. A camera further away than this puts fewer
@@ -107,6 +146,7 @@ export function buildReport(input: ReportInput): Report {
     featureCount,
     areasWithFeatures,
     areas: GRID * GRID,
+    repetition,
     analysisWidth: image.width,
     smallestUsableScale,
     minimumWidthMm,

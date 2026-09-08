@@ -4,7 +4,7 @@ import { basename } from "node:path";
 import process, { argv, stderr, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import { type CompiledTarget, compileTarget, toTargetJson } from "./compile.js";
-import { describeWidth } from "./report.js";
+import { type Report, describeWidth } from "./report.js";
 
 /**
  * Exit codes, so a build script can read the outcome instead of parsing stderr.
@@ -110,6 +110,7 @@ export function formatReportLines(source: string, target: CompiledTarget, scanDi
     // requirement set by the camera and the target, not a measurement of the design, and
     // a bare millimetre figure under a filename reads as the latter.
     `  minimum print width   ${describeWidth(report, scanDistanceMm)}`,
+    `  repeated detail       ${describeRepetition(report)}`,
     `  verdict               ${report.pass ? "ready for press" : "not ready"}`,
   ];
   for (const reason of report.reasons) lines.push(`      ${reason}`);
@@ -164,4 +165,12 @@ if (invokedDirectly) {
   main(argv.slice(2)).then((code) => {
     process.exitCode = code;
   });
+}
+
+/** How much of the artwork looks like the rest of it, in words rather than a bare fraction. */
+function describeRepetition(report: Report): string {
+  if (report.repetition === null) return "not measured";
+  const percent = Math.round(report.repetition * 100);
+  if (percent <= 40) return `${percent}% of features have a look-alike, which is normal`;
+  return `${percent}% of features have a look-alike elsewhere on the artwork`;
 }

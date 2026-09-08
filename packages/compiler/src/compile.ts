@@ -36,6 +36,7 @@ export async function compileTarget(artwork: Buffer, options: CompileOptions): P
       scale,
       corners: features.filter((feature) => feature.scale === scale),
     })),
+    described: features.filter((feature) => feature.scale === 1),
     scanDistanceMm: options.scanDistanceMm,
   });
 

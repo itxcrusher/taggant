@@ -102,4 +102,37 @@ describe("the report against real artwork", { timeout: 30_000 }, () => {
     expect(after.report.pass).toBe(true);
     expect(after.report.featureCount).toBeGreaterThan(before.report.featureCount * 0.7);
   });
+
+  it("refuses artwork that repeats, because a pose can land on the wrong copy", async () => {
+    const once = await artwork({ blobs: 200, radius: 18, size: 600 });
+    const raw = await sharp(once).grayscale().raw().toBuffer({ resolveWithObject: true });
+    const { width, height } = raw.info;
+    // The same design printed twice side by side, which is what a sheet of labels is.
+    const tiled = Buffer.alloc(width * 2 * height);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const value = raw.data[y * width + x] ?? 0;
+        tiled[y * width * 2 + x] = value;
+        tiled[y * width * 2 + width + x] = value;
+      }
+    }
+    const twice = await sharp(tiled, { raw: { width: width * 2, height, channels: 1 } })
+      .png()
+      .toBuffer();
+
+    const single = await compileTarget(once, { id: "once", scanDistanceMm: 350 });
+    const repeated = await compileTarget(twice, { id: "twice", scanDistanceMm: 350 });
+
+    // The single piece is fine and has to stay fine: a gate that fails everything is not a
+    // gate. The repeated one has plenty of features, spread over the whole piece, and no
+    // way to tell which copy is being looked at.
+    expect(single.report.pass).toBe(true);
+    expect(repeated.report.featureCount).toBeGreaterThan(60);
+    expect(repeated.report.areasWithFeatures).toBeGreaterThan(8);
+    expect(repeated.report.pass).toBe(false);
+    expect(repeated.report.reasons).toContain(
+      "the artwork repeats itself, so content could be placed on the wrong copy",
+    );
+    expect(repeated.report.repetition ?? 0).toBeGreaterThan(single.report.repetition ?? 0);
+  });
 });

@@ -2,6 +2,7 @@ export { type GrayscaleImage, sample } from "./image.js";
 export { type Corner, type DetectOptions, detectCorners } from "./features.js";
 export { DESCRIPTOR_BITS, PATCH_RADIUS, TEST_PAIRS } from "./pattern.js";
 export { type DescribedCorner, describeCorners, hamming } from "./describe.js";
+export { type Distinctiveness, measureDistinctiveness } from "./distinct.js";
 export { type Match, type MatchOptions, matchDescriptors } from "./match.js";
 export {
   type Correspondence,
@@ -12,7 +13,7 @@ export {
   estimateHomography,
   homographyFrom,
 } from "./homography.js";
-export { resample } from "./image.js";
+export { resample, smooth } from "./image.js";
 export { DEFAULT_SCALES, type BuildOptions, buildTrackingFeatures } from "./target.js";
 export { type LocateOptions, type LocateResult, type TrackingTarget, locate } from "./locate.js";
 export type { TargetFeature } from "./target.js";
