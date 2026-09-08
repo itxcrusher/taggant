@@ -75,6 +75,8 @@ importers:
 
   packages/vision: {}
 
+  services/resolver: {}
+
 packages:
 
   '@apidevtools/json-schema-ref-parser@11.9.3':

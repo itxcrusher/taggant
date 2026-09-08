@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "entries": {
+    "/01/09520123456788": [
+      {
+        "href": "https://example.com/product",
+        "linkType": "gs1:pip",
+        "title": "Product information page",
+        "hreflang": ["en"],
+        "type": "text/html",
+        "default": true
+      },
+      {
+        "href": "https://example.com/produit",
+        "linkType": "gs1:pip",
+        "title": "Page d'information produit",
+        "hreflang": ["fr"],
+        "type": "text/html"
+      }
+    ],
+    "/01/09520123456788/10/ABC": [
+      {
+        "href": "https://example.com/batch/ABC",
+        "linkType": "gs1:certificationInfo",
+        "title": "Certification for batch ABC",
+        "hreflang": ["en"]
+      }
+    ]
+  }
+}

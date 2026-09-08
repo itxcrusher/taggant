@@ -1,0 +1,10 @@
+The application identifier facts in `src/digital-link.ts` (which identifiers can be a
+primary key, the key qualifiers each one allows, the shape of their values and how their
+check digits work) were checked against the table published in the GS1 Digital Link
+Toolkit, https://github.com/gs1/GS1DigitalLinkToolkit.js, which is licensed Apache-2.0.
+
+The criteria named by the tests in `test/conformance.test.ts` are quoted from
+`ConformantResolver1_0.txt` in https://github.com/gs1/GS1DL-resolver-testsuite, also
+Apache-2.0.
+
+No code from either repository is included here.
