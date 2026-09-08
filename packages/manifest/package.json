@@ -11,7 +11,7 @@
   },
   "files": ["dist", "schema"],
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --clean",
+    "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "types": "json2ts schema/manifest-1.0.0.json -o src/types.gen.ts --additionalProperties false"

@@ -21,16 +21,21 @@ Then point it at the artwork. Print `artwork.png` at 148 mm wide, or just show i
 
 ```
   artwork.png
-  size                  592 x 420 px
+  size                  640 x 454 px
   tracking quality      100 / 100
-  features              261, reaching 16 of 16 areas
-  minimum print width   65 mm to be read from 350 mm away, being 296 px across the artwork
+  features              258, reaching 16 of 16 areas
+  minimum print width   70 mm to be read from 350 mm away, being 320 px across the artwork
+  repeated detail       23% of features have a look-alike, which is normal
   verdict               ready for press
 ```
 
-The manifest declares this postcard as 148 mm wide and the compiler asks for at least 65 mm at a scan distance of 350 mm, so it has room. Compile it again at `--scan-distance 900` and the minimum rises to 167 mm, because a camera further away puts fewer pixels across the same mark.
+The manifest declares this postcard as 148 mm wide and the compiler asks for at least 70 mm at a scan distance of 350 mm, so it has room. Compile it again at `--scan-distance 900` and the minimum rises, because a camera further away puts fewer pixels across the same mark.
 
-That width is a resolution requirement, not a judgement of the artwork. It is the print size at which the camera, assumed to resolve 1.6 px/mm at a metre, still delivers the 296 px across the mark that the smallest size in the compiled target needs. The line says so rather than printing a bare number, because a bare number under a filename reads as a measurement of the design and gets carried into a press setup as one.
+That width is a resolution requirement, not a judgement of the artwork. It is the print size at which the camera, assumed to resolve 1.6 px/mm at a metre, still delivers the 320 px across the mark that the smallest size in the compiled target needs. The line says so rather than printing a bare number, because a bare number under a filename reads as a measurement of the design and gets carried into a press setup as one.
+
+The size line reads 640 by 454 where the file is 592 by 420, because every piece of artwork is analysed at the same raster whatever size it was exported at. Otherwise the same design sent as a bigger file would be measured differently and told to print larger, which rewards exporting small.
+
+`repeated detail` is the share of features that have a look-alike somewhere else on the piece. It matters because nothing else in the report notices a design that repeats, and a repeated design gives a tracker no way to know which copy it is looking at: the same artwork printed twice scores full marks on features and spread, and then places content a whole tile away.
 
 ## The files
 

@@ -38,6 +38,13 @@ importers:
       '@taggant/vision':
         specifier: workspace:*
         version: link:../vision
+    devDependencies:
+      '@taggant/compiler':
+        specifier: workspace:*
+        version: link:../compiler
+      sharp:
+        specifier: 0.33.5
+        version: 0.33.5
 
   packages/compiler:
     dependencies:

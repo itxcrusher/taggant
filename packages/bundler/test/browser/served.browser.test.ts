@@ -3,8 +3,9 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildTrackingFeatures, toTargetFile } from "@taggant/vision";
+import { compileTarget, toTargetJson } from "@taggant/compiler";
 import { type Browser, chromium } from "playwright";
+import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { artwork, inView, writeFeed } from "../../../runtime/test/browser/feed.js";
 import { bundle } from "../../src/bundle.js";
@@ -18,9 +19,18 @@ declare global {
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNTIME_DIST = join(here, "../../../runtime/dist");
 
-const ART = { width: 320, height: 240 };
+/**
+ * Sized so the camera actually delivers what the compiled target needs.
+ *
+ * The runtime recognises against a frame reduced to 480 px wide, and a target's smallest
+ * size is half the raster it was analysed at, so the artwork has to fill enough of the
+ * frame to clear that. Artwork at 480 px in a 640 px frame lands at 360 processed pixels
+ * against a target whose smallest size is 320. Getting this wrong looks exactly like a
+ * broken tracker and is neither.
+ */
+const ART = { width: 480, height: 360 };
 const FRAME = { width: 640, height: 480 };
-const PLACED = { x: 150, y: 110 };
+const PLACED = { x: 80, y: 60 };
 
 const OVERLAY =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 2"><rect width="2" height="2" fill="#e2402a"/></svg>';
@@ -45,6 +55,16 @@ beforeAll(async () => {
   outDir = join(root, "out");
 
   const art = artwork(ART.width, ART.height);
+  // Compiled by the real compiler rather than described directly, so this test is also the
+  // only place the two halves of the system meet: artwork in one end, recognised out of the
+  // other. Building targets by hand everywhere else is what let a change that made nothing
+  // recognisable pass every test.
+  const artworkPng = await sharp(Buffer.from(art.data), {
+    raw: { width: art.width, height: art.height, channels: 1 },
+  })
+    .png()
+    .toBuffer();
+  const compiled = await compileTarget(artworkPng, { id: "front", scanDistanceMm: 350 });
   await bundle({
     manifest: {
       schemaVersion: "1.0.0",
@@ -59,14 +79,7 @@ beforeAll(async () => {
         },
       ],
     },
-    targets: {
-      front: toTargetFile({
-        id: "front",
-        width: ART.width,
-        height: ART.height,
-        features: buildTrackingFeatures(art),
-      }),
-    },
+    targets: { front: toTargetJson(compiled) },
     sourceDir,
     outDir,
     runtimeDir: RUNTIME_DIST,
