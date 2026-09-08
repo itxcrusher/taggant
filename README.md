@@ -17,9 +17,9 @@ $ node packages/compiler/dist/cli.js blots.png --scan-distance 400
 
   blots.png
   size                  640 x 480 px
-  tracking quality      97 / 100
-  features              214, reaching 16 of 16 areas
-  minimum print width   103 mm
+  tracking quality      86 / 100
+  features              135, reaching 16 of 16 areas
+  minimum print width   160 mm to be read from 400 mm away, being 640 px across the artwork
   verdict               ready for press
 
 $ echo $?
@@ -33,9 +33,9 @@ $ node packages/compiler/dist/cli.js wordmark.png --scan-distance 400
 
   wordmark.png
   size                  800 x 600 px
-  tracking quality      12 / 100
-  features              12, reaching 4 of 16 areas
-  minimum print width   56 mm
+  tracking quality      20 / 100
+  features              20, reaching 4 of 16 areas
+  minimum print width   not printable until the artwork passes
   verdict               not ready
       too few features to track reliably
 
@@ -45,7 +45,9 @@ $ echo $?
 
 Two things in there are worth reading carefully.
 
-**Minimum print width is measured from the artwork, not from the flag.** It comes from how far apart the artwork's features sit relative to its size: fine, closely spaced detail has to be printed larger than bold, open artwork before a camera at the same distance can separate one feature from the next. That is why the failing wordmark asks for a smaller print than the passing artwork above it, and it is why the number changes when the artwork changes rather than only when the distance does. It also grows with scan distance, because a camera further away resolves fewer pixels across the same mark.
+**Minimum print width says what it is derived from.** It is a resolution requirement, not a judgement of the design: the print has to be large enough that the camera, at that distance, still delivers the pixels across the mark that the smallest size in the compiled target needs. Artwork that holds up all the way down that range asks for less; the postcard in `examples/postcard` needs 296 px across and so 65 mm at 350 mm, while the artwork above holds up only at full size, needs 640 px, and asks for 160 mm. Artwork that does not pass gets no width at all, because no width would fix it.
+
+The line is written out in full rather than as a bare figure in millimetres, because a bare figure under a filename reads as a measurement of the design and gets carried into a press setup as one.
 
 **Score and verdict cannot disagree.** 60 is the pass mark exactly. Below it, the score says how far short the artwork falls; above it, how much headroom it has.
 
@@ -103,7 +105,7 @@ These hold for every release and are the reason the project exists in this shape
 
 ## What has and has not been verified
 
-The four packages are exercised by 122 tests, and the whole gate runs on every push.
+The four packages are exercised by 130 tests, and the whole gate runs on every push.
 
 The runtime is driven in a real browser rather than asserted: the test writes a video file of the artwork sitting in a larger frame, hands it to Chromium as a camera, and waits for the page to reach its tracking state, then checks that the content landed where the feed actually put the artwork. The example was driven the same way, and the overlay came back within a pixel of the truth.
 

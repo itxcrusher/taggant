@@ -21,6 +21,8 @@
     <p id="status">Starting.</p>
     <script type="module">
       import { mountExperience } from "../../packages/runtime/dist/index.js";
+      import { validateManifest } from "../../packages/manifest/dist/index.js";
+      import { fromTargetFile } from "../../packages/vision/dist/index.js";
 
       const status = document.getElementById("status");
       const say = {
@@ -32,27 +34,30 @@
         tracking: "Found it.",
       };
 
-      const [manifest, target] = await Promise.all([
+      const [manifestJson, targetJson] = await Promise.all([
         fetch("./manifest.json").then((r) => r.json()),
         fetch("./front.target.json").then((r) => r.json()),
       ]);
 
+      // Both are read through the checks written for them rather than trusted. A manifest
+      // is a format other people write, and the runtime will follow its fallback.
+      const manifest = validateManifest(manifestJson);
+      if (!manifest.ok) {
+        status.textContent = `This manifest is not valid: ${manifest.errors[0].path} ${manifest.errors[0].message}`;
+        throw new Error("invalid manifest");
+      }
+
       window.taggantExperience = await mountExperience({
-        manifest,
-        targets: [
-          {
-            id: target.id,
-            width: target.width,
-            height: target.height,
-            // Typed arrays do not survive JSON, so a consumer rebuilds them.
-            features: target.features.map((f) => ({ ...f, descriptor: Uint32Array.from(f.descriptor) })),
-          },
-        ],
+        manifest: manifest.value,
+        targets: [fromTargetFile(targetJson)],
         container: document.getElementById("scene"),
         options: {
           resolve: (src) => `./${src}`,
           onStateChange: (state) => {
             status.textContent = say[state] ?? state;
+          },
+          onProblem: (message) => {
+            status.textContent = message;
           },
         },
       });

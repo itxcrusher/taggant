@@ -24,11 +24,13 @@ Then point it at the artwork. Print `artwork.png` at 148 mm wide, or just show i
   size                  592 x 420 px
   tracking quality      100 / 100
   features              261, reaching 16 of 16 areas
-  minimum print width   83 mm
+  minimum print width   65 mm to be read from 350 mm away, being 296 px across the artwork
   verdict               ready for press
 ```
 
-The manifest declares this postcard as 148 mm wide, and the compiler asks for at least 83 mm at a scan distance of 350 mm, so it has room. Compile it again at `--scan-distance 900` and the minimum rises, because a camera further away puts fewer pixels across the same mark.
+The manifest declares this postcard as 148 mm wide and the compiler asks for at least 65 mm at a scan distance of 350 mm, so it has room. Compile it again at `--scan-distance 900` and the minimum rises to 167 mm, because a camera further away puts fewer pixels across the same mark.
+
+That width is a resolution requirement, not a judgement of the artwork. It is the print size at which the camera, assumed to resolve 1.6 px/mm at a metre, still delivers the 296 px across the mark that the smallest size in the compiled target needs. The line says so rather than printing a bare number, because a bare number under a filename reads as a measurement of the design and gets carried into a press setup as one.
 
 ## The files
 
