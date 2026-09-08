@@ -80,7 +80,15 @@ async function did(label, response) {
     );
     return false;
   }
-  const page = await (await ask(`${CONSOLE}${response.headers.get("location")}`)).text();
+  const landed = await ask(`${CONSOLE}${response.headers.get("location")}`);
+  const page = await landed.text();
+  // The status matters as much as the message. A redirect to an experience that was never
+  // created lands on a 404, which carries no notice at all, so checking only for a
+  // complaint reported four failed steps as successes.
+  if (!landed.ok) {
+    check(false, label, `redirected to a ${landed.status}`);
+    return false;
+  }
   const complaint = page.match(/<div class="notice bad"[^>]*>\s*<p>([^<]+)</)?.[1];
   check(complaint === undefined, label, complaint ?? "");
   return complaint === undefined;
