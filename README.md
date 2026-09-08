@@ -6,7 +6,7 @@ A taggant is a marker added to a material so that a later reader can identify it
 
 ## Status
 
-Early development. Four packages are usable, the rest are being built in the open. Nothing has been published to a registry and nothing is tagged, so interfaces change without notice.
+Early development. Five packages are usable, the rest are being built in the open. Nothing has been published to a registry and nothing is tagged, so interfaces change without notice.
 
 ## Judging artwork before it goes to press
 
@@ -61,7 +61,7 @@ The number the report cannot yet measure is the camera. Minimum print width assu
 | `@taggant/vision` | usable | detection, description, matching and pose: the part the compiler and the runtime must agree on exactly |
 | `@taggant/compiler` | usable | artwork to compiled target, with a print readiness report, as a library and a command line |
 | `@taggant/runtime` | usable | camera, recognition and placing content on the artwork, in the browser |
-| `@taggant/bundler` | planned | an experience compiled to a self-contained static folder |
+| `@taggant/bundler` | usable | an experience published as a self-contained static folder |
 | `services/resolver` | planned | code lifecycle and GS1 Digital Link resolution |
 | `apps/console` | planned | authoring for products, artwork versions, targets and codes |
 
@@ -93,6 +93,25 @@ Recognition runs in a worker, and drawing and recognition are separate loops. Fi
 
 Measured in Chromium against the example, at 480 by 360: recognition went from 576 ms a call to 212 ms, and with it off the main thread the page paints at a median of 16.6 ms with no frame over 100 ms across 120. The test asserts both, because a green suite is what let the first number go unnoticed.
 
+## Publishing something that outlives us
+
+A printed thing can last decades. The service that served its experience does not have to.
+
+```
+$ node packages/bundler/dist/cli.js examples/postcard/manifest.json     --target front=front.target.json --out dist/postcard
+
+  7 files written to dist/postcard
+  overlay.svg -> assets/64b7fbcbc479e0c4.svg (428 bytes)
+
+  Serve that folder over HTTPS or from localhost. It needs nothing else.
+```
+
+What comes out is a folder: an entry page, the manifest rewritten to point at what was copied, the compiled targets, the assets under names taken from their own content, and the runtime carried in rather than linked. Nothing in it reaches for the network.
+
+That is a claim, so it is tested as one. A test serves the folder from a plain static server with nothing else running, drives it in a real browser against a synthetic camera, and waits for it to find the artwork. It fails on any request that leaves the origin and on any request the folder cannot answer. A second test reads every file the bundle ships and refuses an absolute address in any of them.
+
+Content addressing is why republishing an experience whose video did not change does not invalidate that video, and why the same file is never stored twice. Paths in a manifest are resolved against the manifest's own directory and refused if they leave it: publishing runs with the rights of whoever publishes, and a manifest is a format other people write.
+
 ## Design commitments
 
 These hold for every release and are the reason the project exists in this shape.
@@ -105,7 +124,7 @@ These hold for every release and are the reason the project exists in this shape
 
 ## What has and has not been verified
 
-The four packages are exercised by 130 tests, and the whole gate runs on every push.
+The five packages are exercised by 149 tests, and the whole gate runs on every push.
 
 The runtime is driven in a real browser rather than asserted: the test writes a video file of the artwork sitting in a larger frame, hands it to Chromium as a camera, and waits for the page to reach its tracking state, then checks that the content landed where the feed actually put the artwork. The example was driven the same way, and the overlay came back within a pixel of the truth.
 
