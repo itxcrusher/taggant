@@ -76,7 +76,12 @@ export function resample(image: GrayscaleImage, scale: number): GrayscaleImage {
   if (!(scale > 0)) throw new RangeError(`scale must be a positive number, got ${scale}`);
   if (scale === 1) return image;
   let source = image;
-  for (let pass = 0; pass < Math.round(1 / scale) - 1; pass++) source = smooth(source);
+  // Rounded up, not to nearest. Rounding to nearest gives no blur at all for any scale
+  // above two thirds, which included 0.79, one of the four sizes a target is described at
+  // and one of the two a frame is: one pixel stripes came through that level with their
+  // full contrast intact, which is aliasing, and aliasing invents corners that are in the
+  // level and not in the artwork.
+  for (let pass = 0; pass < Math.ceil(1 / scale) - 1; pass++) source = smooth(source);
   const width = Math.max(1, Math.round(image.width * scale));
   const height = Math.max(1, Math.round(image.height * scale));
   const data = new Uint8Array(width * height);

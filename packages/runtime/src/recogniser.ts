@@ -119,8 +119,9 @@ export function createRecogniser(targets: TrackingTarget[]): Recogniser {
           }, REPLY_TIMEOUT_MS);
           worker.addEventListener("message", done);
           worker.addEventListener("error", failed);
-          // The buffer is transferred rather than copied, so a frame costs no allocation
-          // on the way out.
+          // Transferred rather than cloned, so the frame crosses without a second copy
+          // being made for the worker. The copy above is still made, because the camera
+          // reuses its buffer and a transfer would detach it.
           worker.postMessage(
             { type: "frame", id, width: frame.width, height: frame.height, data: copy.buffer },
             [copy.buffer],

@@ -53,6 +53,21 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     throw new Error(`no compiled target was given for: ${missing.map((target) => target.id).join(", ")}`);
   }
 
+  // This is where the compiler's answer and the manifest's claim meet, and until they did
+  // an experience could be published for a piece printed smaller than the artwork can be
+  // read at. The compiler works out the smallest width the mark can be printed at; the
+  // manifest states the width it will actually be printed at. Nothing else in the system
+  // sees both numbers.
+  for (const target of manifest.targets) {
+    const compiled = options.targets[target.id] as { report?: { minimumWidthMm?: number | null } };
+    const needs = compiled?.report?.minimumWidthMm;
+    if (typeof needs === "number" && target.physicalWidthMm < needs) {
+      throw new Error(
+        `${target.id} is declared ${target.physicalWidthMm} mm wide, and its artwork needs at least ${needs} mm to be read at the distance it was compiled for`,
+      );
+    }
+  }
+
   await mkdir(options.outDir, { recursive: true });
 
   const assets: CopiedAsset[] = [];

@@ -23,9 +23,9 @@ Then point it at the artwork. Print `artwork.png` at 148 mm wide, or just show i
   artwork.png
   size                  640 x 454 px
   tracking quality      100 / 100
-  features              258, reaching 16 of 16 areas
+  features              248, reaching 16 of 16 areas
   minimum print width   70 mm to be read from 350 mm away, being 320 px across the artwork
-  repeated detail       23% of features have a look-alike, which is normal
+  repeated detail       29% of features have a look-alike, which is normal
   verdict               ready for press
 ```
 

@@ -113,6 +113,37 @@ describe("bundle", () => {
     ).rejects.toThrow(/not valid/i);
   });
 
+  it("refuses to publish a piece printed smaller than its artwork can be read at", async () => {
+    const { sourceDir, outDir } = await scratch();
+    const tooSmall = structuredClone(MANIFEST) as typeof MANIFEST;
+    const first = tooSmall.targets[0];
+    if (first) first.physicalWidthMm = 20;
+    await expect(
+      bundle({
+        manifest: tooSmall,
+        // The compiler says this artwork needs 70 mm; the manifest says it will be printed
+        // at 20. Nothing else in the system sees both numbers.
+        targets: { front: { ...TARGET, report: { minimumWidthMm: 70 } } },
+        sourceDir,
+        outDir,
+        runtimeDir: RUNTIME_DIST,
+      }),
+    ).rejects.toThrow(/declared 20 mm wide, and its artwork needs at least 70 mm/);
+  });
+
+  it("publishes when the piece is wide enough", async () => {
+    const { sourceDir, outDir } = await scratch();
+    await expect(
+      bundle({
+        manifest: MANIFEST,
+        targets: { front: { ...TARGET, report: { minimumWidthMm: 70 } } },
+        sourceDir,
+        outDir,
+        runtimeDir: RUNTIME_DIST,
+      }),
+    ).resolves.toBeDefined();
+  });
+
   it("refuses to publish an experience whose targets were never compiled", async () => {
     const { sourceDir, outDir } = await scratch();
     await expect(

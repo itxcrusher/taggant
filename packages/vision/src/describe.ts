@@ -91,14 +91,24 @@ function rotationFor(angle: number): { cos: number; sin: number } {
   };
 }
 
+/**
+ * How far from a corner the sampling pattern actually reaches.
+ *
+ * The pattern draws each coordinate from a square of half width SAMPLE_REACH, so a rotated
+ * pair reaches the diagonal, not the side. Guarding at the patch radius left 6% of sample
+ * points outside it, read from clamped pixels, which makes a descriptor depend on where the
+ * corner sits rather than on what is under it.
+ */
+const DESCRIBE_MARGIN = Math.ceil(Math.SQRT2 * 13);
+
 export function describeCorners(image: GrayscaleImage, corners: Corner[]): DescribedCorner[] {
   const described: DescribedCorner[] = [];
   for (const corner of corners) {
     if (
-      corner.x < PATCH_RADIUS ||
-      corner.y < PATCH_RADIUS ||
-      corner.x >= image.width - PATCH_RADIUS ||
-      corner.y >= image.height - PATCH_RADIUS
+      corner.x < DESCRIBE_MARGIN ||
+      corner.y < DESCRIBE_MARGIN ||
+      corner.x >= image.width - DESCRIBE_MARGIN ||
+      corner.y >= image.height - DESCRIBE_MARGIN
     ) {
       continue;
     }

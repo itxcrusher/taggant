@@ -80,7 +80,5 @@ self.addEventListener("message", (event: MessageEvent<SetTargets | Frame>) => {
     };
   });
   const reply: WorkerResult = { type: "result", id: message.id, poses };
-  // The frame buffer goes back with the answer so the page can reuse it instead of
-  // allocating a new one every frame.
-  (self as unknown as Worker).postMessage(reply, [message.data]);
+  (self as unknown as Worker).postMessage(reply);
 });

@@ -167,7 +167,9 @@ These hold for every release and are the reason the project exists in this shape
 
 The six packages are exercised by 190 tests, and the whole gate runs on every push.
 
-The runtime is driven in a real browser rather than asserted: the test writes a video file of the artwork sitting in a larger frame, hands it to Chromium as a camera, and waits for the page to reach its tracking state, then checks that the content landed where the feed actually put the artwork. The example was driven the same way, and the overlay came back within a pixel of the truth.
+The runtime is driven in a real browser rather than asserted: the test writes a video file of the artwork sitting in a larger frame, hands it to Chromium as a camera, and waits for the page to reach its tracking state, then checks that the content landed where the feed actually put the artwork. A published bundle is driven the same way, from a static folder with nothing else running, on artwork put through the real compiler first, which is the only place the two halves of the system meet.
+
+Descriptors are compared across engines, because the compiler runs in Node and the runtime runs in a browser and the whole thing rests on them agreeing. That test runs the same artwork through both and requires every descriptor to match.
 
 **Not verified: any real camera, and any real print.** Everything above is synthetic. The device matrix is empty and stays empty until it can be filled in with measurements, and the assumed camera resolving power in the print readiness report is an assumption until then.
 

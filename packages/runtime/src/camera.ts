@@ -37,6 +37,7 @@ export class Camera {
   private context: CanvasRenderingContext2D | null = null;
   /** Reused between frames. A fresh buffer several times a second is work for the collector. */
   private gray: Uint8Array | null = null;
+  private ended = false;
 
   constructor(
     private readonly video: HTMLVideoElement,
@@ -67,6 +68,15 @@ export class Camera {
         "unavailable",
         error instanceof Error ? error.message : "the camera could not be opened",
       );
+    }
+
+    // A camera can be taken away mid session: another app claims it, a phone is locked, a
+    // device is unplugged. Without this the loop goes on recognising a frame that stopped
+    // changing and the viewer is told to keep pointing at the artwork.
+    for (const track of this.stream.getTracks()) {
+      track.addEventListener("ended", () => {
+        this.ended = true;
+      });
     }
 
     this.video.srcObject = this.stream;
@@ -107,6 +117,11 @@ export class Camera {
       }, limit);
       this.video.addEventListener("loadedmetadata", done);
     });
+  }
+
+  /** Whether the camera has gone away since it was opened. */
+  get lost(): boolean {
+    return this.ended;
   }
 
   stop(): void {

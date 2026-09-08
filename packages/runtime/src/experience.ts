@@ -176,6 +176,16 @@ export async function mountExperience(options: {
 
   const recognise = async () => {
     while (running) {
+      if (camera.lost) {
+        for (const overlay of overlays.values()) {
+          overlay.element.hidden = true;
+          overlay.pose = null;
+        }
+        settings.onProblem?.("the camera stopped, which usually means another app took it");
+        setState("error");
+        running = false;
+        return;
+      }
       const frame = camera.grab();
       if (!frame) {
         await nextFrame();
