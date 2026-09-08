@@ -154,6 +154,32 @@ $ curl -s 'http://localhost:8080/01/09520123456788/10/ABC?linkType=linkset'
 
 The link table is plain JSON keyed by canonical Digital Link paths, which is the continuity promise in the same form the bundler makes it. A redirect table that cannot be read out and rehosted somewhere else is not a promise.
 
+## Running it
+
+Two containers and nothing else:
+
+```
+docker compose -f infra/compose.yaml up --build
+```
+
+The resolver answers Digital Link requests from a mounted table. A plain static host serves published bundles and knows nothing about Digital Links, GS1, or this project. A scan reaches the first and is sent to the second.
+
+The resolver's image is two stages, so what ships is the built service and a Node runtime: no package manager, no build tooling, no source. It runs as a user that is not root, read only, with no new privileges and every capability dropped, and answers a healthcheck from inside itself. Its link table is mounted rather than baked in, because the table is the one thing that changes without the code changing.
+
+**The stack is driven on every push.** Continuous integration builds the image, publishes a real bundle into it, and runs fifteen checks over the whole path: a scan redirects rather than answering itself, carries the request's own query through, points at the static host rather than at the resolver, and says where the linkset is even while redirecting; the bundle is served and carries its runtime, its worker, its vision build and its manifest; the resolver counts what it answered; and a code nothing is assigned to is a 404 rather than a guess.
+
+Then it stops the resolver and checks the bundle still serves. That is the continuity claim, and it is the difference between making it and testing it.
+
+## What a scan is
+
+Everyone who sells this kind of system counts scans and almost nobody says what one is, which is how two reports of the same week disagree by a factor of three. The definition is written down in `services/resolver/src/events.ts` and pinned by tests.
+
+An answer about an identifier is a scan. A redirect is one, and so is a linkset. A HEAD is one, because clients follow links with it and excluding it undercounts silently. An identifier nothing is linked to is one, recorded as unresolved, and it is the most useful number here: it is how a code that was printed but never assigned gets found. A request that could not be read as a Digital Link is not a scan, because it never named an identifier.
+
+Nothing identifying a person is recorded: no address, no user agent, no cookie. The language is kept, because it decides which link is chosen and a report that cannot explain its own redirects is not much of a report.
+
+Events go out as one JSON object per line. `/metrics` carries the same counts in the text format Prometheus and its imitators read. `/healthz` says the process is up; `/readyz` says it has a table worth asking about, and answers 503 until it does.
+
 ## Design commitments
 
 These hold for every release and are the reason the project exists in this shape.
@@ -165,7 +191,7 @@ These hold for every release and are the reason the project exists in this shape
 
 ## What has and has not been verified
 
-The six packages are exercised by 190 tests, and the whole gate runs on every push.
+The six packages are exercised by 215 tests, and the whole gate runs on every push.
 
 The runtime is driven in a real browser rather than asserted: the test writes a video file of the artwork sitting in a larger frame, hands it to Chromium as a camera, and waits for the page to reach its tracking state, then checks that the content landed where the feed actually put the artwork. A published bundle is driven the same way, from a static folder with nothing else running, on artwork put through the real compiler first, which is the only place the two halves of the system meet.
 
