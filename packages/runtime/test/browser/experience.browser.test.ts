@@ -186,6 +186,44 @@ describe("the runtime in a browser, against a camera", () => {
     await context.close();
   }, 120_000);
 
+  it("puts content on the artwork in a portrait container, not beside it", async () => {
+    if (!browser) throw new Error("no browser");
+    // A phone held upright. The other test uses a stage the same shape as the feed, which
+    // is the one container shape where getting the cover fit wrong is invisible.
+    const context = await browser.newContext({
+      permissions: ["camera"],
+      viewport: { width: 400, height: 700 },
+    });
+    const page = await context.newPage();
+    await page.goto(`${origin}/page.html?w=360&h=640`);
+    await page.waitForFunction(
+      () => document.querySelector("#stage")?.getAttribute("data-state") === "tracking",
+      { timeout: 60_000 },
+    );
+
+    const box = await page.locator('[data-taggant-target="front"]').boundingBox();
+    if (!box) throw new Error("expected the overlay to have a box");
+
+    // Where object-fit: cover actually puts the artwork in this container, computed the
+    // way the browser does: one scale for both axes, overflow split evenly.
+    const scale = Math.max(360 / FRAME.width, 640 / FRAME.height);
+    const offsetX = (360 - FRAME.width * scale) / 2;
+    const offsetY = (640 - FRAME.height * scale) / 2;
+    const expected = {
+      x: PLACED.x * scale + offsetX,
+      y: PLACED.y * scale + offsetY,
+      width: ART.width * scale,
+    };
+
+    expect(Math.abs(box.x - expected.x)).toBeLessThan(40);
+    expect(Math.abs(box.y - expected.y)).toBeLessThan(40);
+    // Width as well as position: getting the scaling wrong showed up as content at 42% of
+    // the artwork's width, which a position check on its own would have let through.
+    expect(box.width / expected.width).toBeGreaterThan(0.85);
+    expect(box.width / expected.width).toBeLessThan(1.15);
+    await context.close();
+  }, 120_000);
+
   it("refuses a fallback that is not http or https, rather than running it", async () => {
     if (!browser) throw new Error("no browser");
     const context = await browser.newContext({ permissions: [] });

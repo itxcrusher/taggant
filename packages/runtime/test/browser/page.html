@@ -5,6 +5,8 @@
     <title>taggant runtime harness</title>
     <style>
       body { margin: 0; background: #111; }
+      /* Sized from the query string, so a test can put the same feed in a container of a
+         different shape. Defaults to the shape of the feed. */
       #stage { width: 640px; height: 480px; }
     </style>
   </head>
@@ -12,6 +14,11 @@
     <div id="stage"></div>
     <script type="module">
       import { mountExperience } from "/runtime.js";
+
+      const params = new URLSearchParams(location.search);
+      const stage = document.getElementById("stage");
+      if (params.has("w")) stage.style.width = `${Number(params.get("w"))}px`;
+      if (params.has("h")) stage.style.height = `${Number(params.get("h"))}px`;
 
       const [manifest, target] = await Promise.all([
         fetch("/manifest.json").then((r) => r.json()),
@@ -32,7 +39,7 @@
         window.taggantExperience = await mountExperience({
           manifest,
           targets: [tracking],
-          container: document.getElementById("stage"),
+          container: stage,
           options: {
             resolve: (src) => `/${src}`,
             onStateChange: (state) => window.taggantStates.push(state),
