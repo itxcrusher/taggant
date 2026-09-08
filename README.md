@@ -149,7 +149,7 @@ $ curl -s 'http://localhost:8080/01/09520123456788/10/ABC?linkType=linkset'
 }
 ```
 
-**Conformance is tested, not claimed.** Every test is named with the requirement it checks, quoted from the conformance criteria GS1 publishes alongside its resolver test suite, and each one drives a real resolver over HTTP. Forty one of them, and they fail a pull request. GS1's own suite is a browser tool with a PHP helper that runs against a deployed resolver, so it is not something a build can run; pointing it at a deployment is a separate exercise from proving the behaviour on every commit.
+**Conformance is tested, not claimed.** Every test is named with the requirement it checks, quoted from the conformance criteria GS1 publishes alongside its resolver test suite, and each one drives a real resolver over HTTP. They fail a pull request. GS1's own suite is a browser tool with a PHP helper that runs against a deployed resolver, so it is not something a build can run; pointing it at a deployment is a separate exercise from proving the behaviour on every commit.
 
 **Compressed Digital Link URIs are not supported.** That is a SHALL in the standard. It is declared in the resolver description file at `/.well-known/gs1resolver`, where a client would look for it, and there is a test asserting it is declared. A resolver that claims conformance it does not have is worse than one that says where it stops.
 

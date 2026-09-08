@@ -65,7 +65,13 @@ console.log("\nfollowing it");
 const followed = await fetch(`${RESOLVER}${CODE}`, { redirect: "follow" });
 const html = await followed.text();
 check("the bundle is served", followed.ok, `status ${followed.status}`);
-check("and it is the entry page", html.includes("<title>"), `${html.length} bytes`);
+// Not just any page with a title: every nginx error page has one, and this check
+// reported ok on a 403 while the bundle was gone.
+check(
+  "and it is the entry page",
+  html.includes("data-taggant") || html.includes('id="scene"'),
+  `${html.length} bytes`,
+);
 
 const target = new URL(location);
 for (const path of ["runtime/index.js", "runtime/worker.js", "runtime/vision.js", "manifest.json"]) {
