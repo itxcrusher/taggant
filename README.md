@@ -165,7 +165,7 @@ docker compose -f infra/compose.yaml up --build
 
 The resolver answers Digital Link requests from a mounted table. A plain static host serves published bundles and knows nothing about Digital Links, GS1, or this project. A scan reaches the first and is sent to the second.
 
-The resolver's image is two stages, so what ships is the built service and a Node runtime: no package manager, no build tooling, no source. It runs as a user that is not root, read only, with no new privileges and every capability dropped, and answers a healthcheck from inside itself. Its link table is mounted rather than baked in, because the table is the one thing that changes without the code changing.
+The resolver's image is two stages, so what ships is the built service and a Node runtime: no package manager, no build tooling, no source. It runs as a user that is not root, read only, with no new privileges and every capability dropped, and answers a healthcheck from inside itself. Its link table is mounted rather than baked in, because the table is the one thing that changes without the code changing. An edit to it takes effect without a restart, and a table saved half written leaves the last good one answering while `/readyz` reports 503 and says why, because dropping every link on the floor because somebody was mid-save is worse than serving the previous table for a few seconds.
 
 **The stack is driven on every push.** Continuous integration builds the image, publishes a real bundle into it, and runs fifteen checks over the whole path: a scan redirects rather than answering itself, carries the request's own query through, points at the static host rather than at the resolver, and says where the linkset is even while redirecting; the bundle is served and carries its runtime, its worker, its vision build and its manifest; the resolver counts what it answered; and a code nothing is assigned to is a 404 rather than a guess.
 
@@ -192,7 +192,7 @@ These hold for every release and are the reason the project exists in this shape
 
 ## What has and has not been verified
 
-The six packages are exercised by 215 tests, and the whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them.
+The six packages are exercised by 237 tests, and the whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them.
 
 The runtime is driven in a real browser rather than asserted: the test writes a video file of the artwork sitting in a larger frame, hands it to Chromium as a camera, and waits for the page to reach its tracking state, then checks that the content landed where the feed actually put the artwork. A published bundle is driven the same way, from a static folder with nothing else running, on artwork put through the real compiler first, which is the only place the two halves of the system meet.
 
