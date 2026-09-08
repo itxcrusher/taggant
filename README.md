@@ -6,7 +6,7 @@ A taggant is a marker added to a material so that a later reader can identify it
 
 ## Status
 
-Early development. Six packages are usable, the rest are being built in the open. Nothing has been published to a registry and nothing is tagged, so interfaces change without notice.
+Early development. Every part of the path is usable and being built in the open. Nothing has been published to a registry and nothing is tagged, so interfaces change without notice.
 
 ## Judging artwork before it goes to press
 
@@ -64,7 +64,7 @@ The number the report cannot yet measure is the camera. Minimum print width assu
 | `@taggant/bundler` | usable | an experience published as a self-contained static folder |
 | `services/resolver` | usable | GS1 Digital Link resolution, conformant against the published criteria |
 | `infra` | usable | containers for the whole path, driven on every push |
-| `apps/console` | planned | authoring for products, artwork versions, targets and codes |
+| `apps/console` | usable | authoring: artwork in, print verdict, published bundle, code pointed at it |
 
 `@taggant/vision` carries no dependencies. The detector, the descriptor, the matcher and the homography solver are all in this repository, which is what lets the compiler and the browser produce identical descriptors from the same artwork.
 
@@ -155,6 +155,28 @@ $ curl -s 'http://localhost:8080/01/09520123456788/10/ABC?linkType=linkset'
 
 The link table is plain JSON keyed by canonical Digital Link paths, which is the continuity promise in the same form the bundler makes it. A redirect table that cannot be read out and rehosted somewhere else is not a promise.
 
+## Doing all of that without a terminal
+
+The console is the same path with a page in front of it: artwork in, a print verdict, a published bundle, and a code pointed at it.
+
+```
+$ node apps/console/dist/cli.js ./workspace --port 4000
+
+  taggant console on http://127.0.0.1:4000
+  workspace   X:\tmp\taggant-demo\workspace (0 experiences)
+  publishing  X:\tmp\taggant-demo\bundles
+  link table  X:\tmp\taggant-demo\links.json
+```
+
+**It has no database.** An experience is a manifest plus the files it names, which is what the bundler already consumes, so the workspace is a directory with one folder per experience holding its manifest, its artwork, its media and its compiled targets. Publishing is the bundler pointed at that folder. A project whose argument is that a bundle and a link table can be lifted and rehosted somewhere else cannot keep its own authoring state somewhere the operator has to ask for it back.
+
+**The schema is the gate on publishing, not on saving.** A manifest has to have a target, and a target has to have content, which is right for something that gets published and wrong for something being built up over an afternoon. So what is on disk is always the format and the page says what is still missing, in words rather than in JSON pointers, until the moment it can be published.
+
+**It has no authentication, and it binds to the loopback address.** Everything it does, it does with the rights of whoever started it: it writes files, it runs the compiler, and it replaces the link table every printed code depends on. Binding it anywhere else prints a warning, and it is not in the default container stack.
+
+The one screen worth describing is the verdict. It says whether the artwork is ready for press and how wide to print it, and the measurement behind that sentence is there underneath rather than instead of it. It also compares the width the artwork needs against the width the manifest says it will be printed at, and says so when the second is smaller than the first, which is the mistake that a press run makes permanent.
+
+
 ## Running it
 
 Two containers and nothing else:
@@ -165,7 +187,17 @@ docker compose -f infra/compose.yaml up --build
 
 The resolver answers Digital Link requests from a mounted table. A plain static host serves published bundles and knows nothing about Digital Links, GS1, or this project. A scan reaches the first and is sent to the second.
 
-The resolver's image is two stages, so what ships is the built service and a Node runtime: no package manager, no build tooling, no source. It runs as a user that is not root, read only, with no new privileges and every capability dropped, and answers a healthcheck from inside itself. Its link table is mounted rather than baked in, because the table is the one thing that changes without the code changing. An edit to it takes effect without a restart, and a table saved half written leaves the last good one answering while `/readyz` reports 503 and says why, because dropping every link on the floor because somebody was mid-save is worse than serving the previous table for a few seconds.
+The console is a third, and it is not one of the two because it is the only one that writes. It starts on request:
+
+```
+docker compose -f infra/compose.yaml --profile authoring up --build
+```
+
+Its port is published on the loopback address only, which is the whole of the protection rather than a precaution alongside one. The three of them share two directories and no interfaces: the console publishes into the folder the static host serves, and writes the table the resolver reads. Nothing calls anything.
+
+The resolver's image is two stages, so what ships is the built service and a Node runtime: no package manager, no build tooling, no source. It runs as a user that is not root, read only, with no new privileges and every capability dropped, and answers a healthcheck from inside itself. Its link table is mounted rather than baked in, because the table is the one thing that changes without the code changing. An edit to it takes effect within a couple of seconds and without a restart, and a table saved half written leaves the last good one answering while `/readyz` reports 503 and says why, because dropping every link on the floor because somebody was mid-save is worse than serving the previous table for a few seconds.
+
+That is a poll of the file rather than a watch on it, which is worth a sentence because the obvious version does not work. A watch bound to a path stops firing for good once the file is replaced by a rename, which is how anything that writes a file safely writes it, including this project's own console; and a bind mount frequently delivers no file events into a container at all. Both were measured against this stack, and both end the same way: the operator edits the table, the resolver keeps serving the old one, and nothing anywhere says so.
 
 **The stack is driven on every push.** Continuous integration builds the image, publishes a real bundle into it, and runs fifteen checks over the whole path: a scan redirects rather than answering itself, carries the request's own query through, points at the static host rather than at the resolver, and says where the linkset is even while redirecting; the bundle is served and carries its runtime, its worker, its vision build and its manifest; the resolver counts what it answered; and a code nothing is assigned to is a 404 rather than a guess.
 
@@ -192,7 +224,7 @@ These hold for every release and are the reason the project exists in this shape
 
 ## What has and has not been verified
 
-The six packages are exercised by 237 tests, and the whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them.
+The seven packages are exercised by 277 tests, and the whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all.
 
 The runtime is driven in a real browser rather than asserted: the test writes a video file of the artwork sitting in a larger frame, hands it to Chromium as a camera, and waits for the page to reach its tracking state, then checks that the content landed where the feed actually put the artwork. A published bundle is driven the same way, from a static folder with nothing else running, on artwork put through the real compiler first, which is the only place the two halves of the system meet.
 
