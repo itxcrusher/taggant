@@ -34,12 +34,22 @@ export interface TableSourceOptions {
   pollMs?: number;
   /** Called whenever the file on disk is not the one last seen. */
   onChange: () => void | Promise<void>;
+  /** Called when `onChange` throws, rather than letting it end the process. */
+  onError?: (error: unknown) => void;
 }
 
 export interface TableSource {
   /** Check now rather than waiting for the timer, and say whether it had changed. */
   check(): Promise<boolean>;
   stop(): void;
+  /**
+   * Drop the fast path and leave the timer alone.
+   *
+   * Only a test calls this. The interesting question about this module is what it does
+   * where file events are not delivered, and that is exactly the case a test on a working
+   * filesystem cannot otherwise produce.
+   */
+  stopWatchingForTest(): void;
 }
 
 /**
@@ -52,7 +62,11 @@ export interface TableSource {
 async function stampOf(path: string): Promise<string | null> {
   try {
     const found = await stat(path);
-    return `${found.mtimeMs}:${found.size}:${found.ino}`;
+    // `ctimeMs` as well as `mtimeMs`, because a writer can hold the modification time
+    // still and the change time cannot be set: `rsync -a --inplace`, `cp -p` over an
+    // existing file, and a restore from backup all preserve mtime, and a same-size edit
+    // then left every field identical and the change invisible for good.
+    return `${found.mtimeMs}:${found.ctimeMs}:${found.size}:${found.ino}`;
   } catch {
     return null;
   }
@@ -77,9 +91,16 @@ export async function watchTable(path: string, options: TableSourceOptions): Pro
     }
   };
 
-  const timer = setInterval(() => {
-    void check();
-  }, options.pollMs ?? DEFAULT_POLL_MS);
+  // `check` is called from a timer and from a watcher, so a rejecting `onChange` has
+  // nowhere to go and took the whole process down with it. The contract does not say
+  // `onChange` cannot reject, so this catches rather than requiring that it does not.
+  const tick = (): void => {
+    void check().catch((error) => {
+      options.onError?.(error);
+    });
+  };
+
+  const timer = setInterval(tick, options.pollMs ?? DEFAULT_POLL_MS);
   // The timer is the mechanism, and it must not be the reason the process stays alive.
   timer.unref?.();
 
@@ -90,7 +111,7 @@ export async function watchTable(path: string, options: TableSourceOptions): Pro
   try {
     const name = basename(path);
     watcher = watch(dirname(path), { persistent: false }, (_event, changed) => {
-      if (changed === null || changed === undefined || changed === name) void check();
+      if (changed === null || changed === undefined || changed === name) tick();
     });
     watcher.on("error", () => {
       // A watch that fails later is the ordinary case on a network file system.
@@ -103,6 +124,10 @@ export async function watchTable(path: string, options: TableSourceOptions): Pro
 
   return {
     check,
+    stopWatchingForTest() {
+      watcher?.close();
+      watcher = undefined;
+    },
     stop() {
       stopped = true;
       clearInterval(timer);

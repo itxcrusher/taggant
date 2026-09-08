@@ -94,6 +94,34 @@ describe("noticing that the table changed", () => {
     source.stop();
   });
 
+  it("sees a write that put the modification time straight back", async () => {
+    // `rsync -a --inplace`, `cp -p` over an existing file and a restore from backup all
+    // preserve mtime. With the same length and the same inode, size and mtime alone were
+    // identical and the edit was invisible for good. The watch is closed here because the
+    // places this matters, a bind mount and NFS, deliver no events at all.
+    const { utimes } = await import("node:fs/promises");
+    const fixed = new Date(1_700_000_000_000);
+    const path = await scratch();
+    await writeFile(path, "aaaaa");
+    await utimes(path, fixed, fixed);
+
+    let changes = 0;
+    const source = await watchTable(path, {
+      pollMs: 30,
+      onChange: () => {
+        changes++;
+      },
+    });
+    source.stopWatchingForTest();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(changes).toBe(0);
+
+    await writeFile(path, "bbbbb");
+    await utimes(path, fixed, fixed);
+    expect(await until(() => changes >= 1)).toBe(true);
+    source.stop();
+  });
+
   it("says nothing when nothing changed", async () => {
     const path = await scratch();
     await writeFile(path, "1");
