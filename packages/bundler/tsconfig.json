@@ -1,0 +1,7 @@
+{
+  "extends": "../../tsconfig.base.json",
+  // The bundler is Node code, but its browser test runs functions inside a page, so the
+  // DOM types have to be here for those to typecheck.
+  "compilerOptions": { "noEmit": true, "lib": ["ES2022", "DOM"] },
+  "include": ["src", "test"]
+}

@@ -27,6 +27,18 @@ importers:
         specifier: 2.1.8
         version: 2.1.8(@types/node@22.10.2)
 
+  packages/bundler:
+    dependencies:
+      '@taggant/manifest':
+        specifier: workspace:*
+        version: link:../manifest
+      '@taggant/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+      '@taggant/vision':
+        specifier: workspace:*
+        version: link:../vision
+
   packages/compiler:
     dependencies:
       '@taggant/manifest':

@@ -1,0 +1,22 @@
+{
+  "name": "@taggant/bundler",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "taggant-bundle": "./dist/cli.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/index.ts src/cli.ts --format esm --dts --clean",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@taggant/manifest": "workspace:*",
+    "@taggant/runtime": "workspace:*",
+    "@taggant/vision": "workspace:*"
+  }
+}
