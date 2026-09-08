@@ -51,14 +51,19 @@ jobs:
           node packages/compiler/dist/cli.js examples/postcard/artwork.png             --id front --scan-distance 350 --out front.target.json
           node packages/bundler/dist/cli.js examples/postcard/manifest.json             --target front=front.target.json --out infra/bundles/postcard
 
-      - run: docker compose -f infra/compose.yaml up -d --build
+      # `--wait` rather than `up -d` on its own: the latter returns once containers are
+      # created, not once they answer, and the smoke tests then raced the servers.
+      - run: docker compose -f infra/compose.yaml up -d --build --wait
       - run: node infra/smoke.mjs
 
       # The authoring loop, from nothing. This one is here because the step it ends on was
       # broken and everything else was green: the resolver noticed a changed link table
       # with a file watch, which dies when the file is replaced by a rename and which a
       # bind mount often never feeds at all.
-      - run: docker compose -f infra/compose.yaml --profile authoring up -d --build console
+      # The console writes directories this checkout owns, so it runs as this user rather
+      # than as the image's. See the comment in compose.yaml.
+      - run: |
+          TAGGANT_UID=$(id -u) TAGGANT_GID=$(id -g)             docker compose -f infra/compose.yaml --profile authoring up -d --build --wait console
       - run: node infra/authoring-smoke.mjs
 
       # The continuity claim, checked rather than stated: a bundle outlives the service

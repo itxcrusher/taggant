@@ -23,6 +23,14 @@ docker compose -f infra/compose.yaml --profile authoring up --build
 |---|---|
 | `console` on `127.0.0.1:4000` | authoring: artwork in, a print verdict, a published bundle, a code pointed at it |
 
+On Linux it has to run as somebody who can write the directories this checkout owns, which the image's own user is not:
+
+```
+TAGGANT_UID=$(id -u) TAGGANT_GID=$(id -g)   docker compose -f infra/compose.yaml --profile authoring up --build
+```
+
+Without that, every other container is healthy, the console starts and serves pages, and writing the link table fails with a permission error. Windows and macOS hide it, because their bind mounts do not carry ownership at all, so it appears first on a Linux host or in continuous integration, which is where it did appear.
+
 It is the only one that writes, and it has no authentication of any kind. Its port is published on the loopback address and that is the whole of the protection rather than one precaution among several: anyone who can reach it can write files, run the compiler, and replace the link table every printed code depends on. It publishes into `infra/bundles/` and writes `infra/links/links.json`, which is to say it talks to the other two by leaving files where they look, and not otherwise.
 
 The separation is the point rather than an arrangement of convenience. A scan reaches the resolver, the resolver redirects to a published bundle, and the bundle is served by something that knows nothing about Digital Links, GS1, or this project. Stop the resolver and every bundle already published keeps working; only the routing of new scans stops.
@@ -54,7 +62,7 @@ Then point a link at it, in `infra/links/links.json`:
 
 The resolver runs as a user that is not root, read only, with no new privileges and every capability dropped. It carries no package manager, no build tooling and no source: the build stage has the workspace and the runtime stage has the output. Its link table is mounted rather than baked in.
 
-The console runs as a user that is not root, with no new privileges and every capability dropped. It is not read only, because writing is its job: the workspace it authors into, the folder it publishes to and the link table are all mounted, and none of them is in the image. It is larger than the resolver because it compiles artwork, and that means a native image library.
+The console runs as a user that is not root, with no new privileges and every capability dropped, and as the uid the command line gives it rather than the image's own. It is not read only, because writing is its job: the workspace it authors into, the folder it publishes to and the link table are all mounted, and none of them is in the image. It is larger than the resolver because it compiles artwork, and that means a native image library.
 
 ## Checking it
 
