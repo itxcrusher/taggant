@@ -171,3 +171,55 @@ describe("within", () => {
     expect(within("/srv/experience", "media/clip.mp4")).toMatch(/clip\.mp4$/);
   });
 });
+
+describe("publishing again", () => {
+  it("leaves the folder holding this bundle and nothing else", async () => {
+    const { sourceDir, outDir } = await scratch();
+    // Distinct content, or content addressing correctly stores the two as one.
+    await writeFile(join(sourceDir, "other.svg"), '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>');
+    const both = structuredClone(MANIFEST) as typeof MANIFEST;
+    both.targets[0]?.content.push({ type: "image", src: "other.svg" });
+    await bundle({ manifest: both, targets: { front: TARGET }, sourceDir, outDir, runtimeDir: RUNTIME_DIST });
+    expect((await readdir(join(outDir, "assets"))).length).toBe(2);
+
+    // The author takes one piece of content out and publishes again.
+    await bundle({
+      manifest: MANIFEST,
+      targets: { front: TARGET },
+      sourceDir,
+      outDir,
+      runtimeDir: RUNTIME_DIST,
+    });
+    // The withdrawn asset must not go on being served from its hashed address.
+    expect((await readdir(join(outDir, "assets"))).length).toBe(1);
+  });
+
+  it("refuses a folder it did not publish, rather than emptying it", async () => {
+    const { sourceDir, outDir } = await scratch();
+    await mkdir(outDir, { recursive: true });
+    await writeFile(join(outDir, "someone-elses-file.txt"), "not ours");
+    await expect(
+      bundle({ manifest: MANIFEST, targets: { front: TARGET }, sourceDir, outDir, runtimeDir: RUNTIME_DIST }),
+    ).rejects.toThrow(/was not published by this tool/);
+  });
+
+  it("does not ship files that were already sitting in the folder", async () => {
+    const { sourceDir, outDir } = await scratch();
+    await bundle({
+      manifest: MANIFEST,
+      targets: { front: TARGET },
+      sourceDir,
+      outDir,
+      runtimeDir: RUNTIME_DIST,
+    });
+    await writeFile(join(outDir, "stray.txt"), "left behind");
+    await bundle({
+      manifest: MANIFEST,
+      targets: { front: TARGET },
+      sourceDir,
+      outDir,
+      runtimeDir: RUNTIME_DIST,
+    });
+    expect(await readdir(outDir)).not.toContain("stray.txt");
+  });
+});

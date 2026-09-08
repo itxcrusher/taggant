@@ -1,4 +1,4 @@
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { validateManifest } from "@taggant/manifest";
@@ -38,6 +38,38 @@ export interface BundleResult {
  * which is the promise being made to anyone who prints a code on something that will
  * outlive a vendor.
  */
+/** Written into every bundle, so publishing again knows what it is allowed to replace. */
+const MARKER = ".taggant-bundle";
+
+/**
+ * Make the output directory hold this bundle and nothing else.
+ *
+ * A published folder has to be authoritative, and it was not. Publishing again left the
+ * assets of the previous publish in place, so content an author had removed went on being
+ * served from its hashed address forever, and publishing into a directory that already had
+ * something in it shipped that too.
+ *
+ * Emptying a directory is not something to do on a guess, so it is only done to a directory
+ * this has published to before, which is what the marker file records. Anything else is
+ * refused by name.
+ */
+async function prepare(outDir: string): Promise<void> {
+  let existing: string[];
+  try {
+    existing = await readdir(outDir);
+  } catch {
+    await mkdir(outDir, { recursive: true });
+    return;
+  }
+  if (existing.length === 0) return;
+  if (!existing.includes(MARKER)) {
+    throw new Error(
+      `${outDir} already holds files and was not published by this tool, so it will not be emptied. Publish into a new directory, or empty this one yourself.`,
+    );
+  }
+  for (const entry of existing) await rm(join(outDir, entry), { recursive: true, force: true });
+}
+
 export async function bundle(options: BundleOptions): Promise<BundleResult> {
   const validated = validateManifest(options.manifest);
   if (!validated.ok) {
@@ -68,7 +100,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     }
   }
 
-  await mkdir(options.outDir, { recursive: true });
+  await prepare(options.outDir);
 
   const assets: CopiedAsset[] = [];
   const seen = new Map<string, string>();
@@ -96,6 +128,11 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   }
 
   const runtime = await vendorRuntime(options.outDir, options.runtimeDir);
+  await writeFile(
+    join(options.outDir, MARKER),
+    `${new Date().toISOString()}
+`,
+  );
   await writeFile(join(options.outDir, "manifest.json"), JSON.stringify(rewritten, null, 2));
   await writeFile(
     join(options.outDir, "index.html"),
@@ -107,6 +144,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     assets,
     targets: names,
     files: [
+      MARKER,
       "index.html",
       "manifest.json",
       ...names.map((name) => `targets/${name}.json`),
