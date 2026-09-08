@@ -19,12 +19,19 @@ export interface ExperienceOptions extends CameraOptions {
    */
   patience?: number;
   onStateChange?: (state: ExperienceState) => void;
+  /**
+   * Told about anything that went wrong but did not stop the experience: a refused
+   * fallback, a compiled target nothing claims, recognition dying mid session.
+   */
+  onProblem?: (message: string) => void;
 }
 
 export interface MountedExperience {
   readonly state: ExperienceState;
   /** Content types in the manifest this build cannot show. */
   readonly unsupported: readonly string[];
+  /** Compiled targets that no manifest target claims, so nothing was built for them. */
+  readonly unmatchedTargets: readonly string[];
   /** Whether recognition got a thread of its own. False means the page will stutter. */
   readonly threaded: boolean;
   stop(): void;
@@ -78,9 +85,16 @@ export async function mountExperience(options: {
       processed: { width: number; height: number } | null;
     }
   >();
+  const unmatched: string[] = [];
   for (const target of options.targets) {
     const described = options.manifest.targets.find((entry) => entry.id === target.id);
-    if (!described) continue;
+    if (!described) {
+      // Silence here is the worst outcome: nothing is drawn, the camera runs, and the
+      // author sees an experience that never finds anything. Mismatched ids between a
+      // manifest and a compiled target is one of the likeliest mistakes in authoring this.
+      unmatched.push(target.id);
+      continue;
+    }
     const built = buildContent(described, resolve);
     for (const type of built.unsupported) unsupported.add(type);
     stage.append(built.element);
@@ -109,16 +123,28 @@ export async function mountExperience(options: {
     setState(error instanceof CameraError && error.reason === "denied" ? "denied" : "error");
     // The fallback exists for exactly this: the viewer scanned something and the camera
     // is not going to open, so send them where the manifest says to send them.
+    //
+    // The scheme is checked here even though the schema already restricts it, because
+    // nothing forces a caller to run the validator and this project's own example did not.
+    // A manifest is a format other people write, so it is the input least worth trusting,
+    // and `javascript:` in this line runs in the viewer's page.
     const fallback = options.manifest.fallback;
-    if (fallback) globalThis.location?.assign(fallback);
+    if (fallback && isSafeUrl(fallback)) globalThis.location?.assign(fallback);
+    else if (fallback)
+      settings.onProblem?.(`refused to follow a fallback that is not http or https: ${fallback}`);
     return {
       get state() {
         return state;
       },
       unsupported: [...unsupported],
+      unmatchedTargets: unmatched,
       threaded: false,
       stop: () => camera.stop(),
     };
+  }
+
+  for (const id of unmatched) {
+    settings.onProblem?.(`no target in the manifest is called ${id}, so nothing was built for it`);
   }
 
   setState("searching");
@@ -152,7 +178,23 @@ export async function mountExperience(options: {
         await nextFrame();
         continue;
       }
-      const poses = await recogniser.submit(frame);
+      let poses: Awaited<ReturnType<typeof recogniser.submit>>;
+      try {
+        poses = await recogniser.submit(frame);
+      } catch (error) {
+        // Recognition has stopped and is not coming back. Say so, take the content away
+        // rather than leaving it welded to a pose the camera has moved off, and stop.
+        for (const overlay of overlays.values()) {
+          overlay.element.hidden = true;
+          overlay.pose = null;
+        }
+        settings.onProblem?.(
+          `recognition stopped: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        setState("error");
+        running = false;
+        return;
+      }
       if (!poses) {
         await nextFrame();
         continue;
@@ -185,6 +227,7 @@ export async function mountExperience(options: {
       return state;
     },
     unsupported: [...unsupported],
+    unmatchedTargets: unmatched,
     threaded: recogniser.threaded,
     stop() {
       running = false;
@@ -197,4 +240,19 @@ export async function mountExperience(options: {
 /** Yield to the browser, so recognition never starves painting or input. */
 function nextFrame(): Promise<void> {
   return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+/**
+ * Whether a URL is one this runtime will send a viewer to.
+ *
+ * Only http and https. Everything else, `javascript:` above all, is a way for a manifest
+ * to run code in the page that loaded it.
+ */
+function isSafeUrl(value: string): boolean {
+  try {
+    const url = new URL(value, globalThis.location?.href);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }

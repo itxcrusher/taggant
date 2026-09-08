@@ -58,7 +58,11 @@
         "placement": { "$ref": "#/$defs/placement", "default": {} },
         "autoplay": { "type": "boolean", "default": true },
         "loop": { "type": "boolean", "default": true },
-        "muted": { "type": "boolean", "default": false }
+        "muted": {
+          "type": "boolean",
+          "default": true,
+          "description": "Muted by default because no browser will autoplay a video with sound. Set autoplay to false to let a viewer start it with sound themselves."
+        }
       }
     },
     "placement": {

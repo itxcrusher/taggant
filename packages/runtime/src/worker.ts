@@ -29,6 +29,7 @@ export interface SerialisedTarget {
   features: Array<{
     x: number;
     y: number;
+    scale: number;
     angle: number;
     strength: number;
     descriptor: number[] | Uint32Array;
@@ -51,7 +52,7 @@ function rebuild(serialised: SerialisedTarget[]): TrackingTarget[] {
     features: target.features.map((feature) => ({
       x: feature.x,
       y: feature.y,
-      scale: 1,
+      scale: feature.scale,
       angle: feature.angle,
       strength: feature.strength,
       // Descriptors cross the wire as plain arrays; a typed array does not survive JSON,

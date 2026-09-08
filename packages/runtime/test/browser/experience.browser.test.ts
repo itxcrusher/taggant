@@ -10,6 +10,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 declare global {
   interface Window {
     taggantExperience?: { threaded: boolean };
+    // Set by the bare page below, so a test can mount its own manifest.
+    mountExperience?: (options: Record<string, unknown>) => Promise<{
+      state: string;
+      threaded: boolean;
+      unmatchedTargets: readonly string[];
+    }>;
+    taggantReady?: boolean;
+    taggantProblems?: string[];
   }
 }
 import { artwork, inView, writeFeed } from "./feed.js";
@@ -33,6 +41,16 @@ const MANIFEST = {
     },
   ],
 };
+
+/** A page that exposes the runtime and mounts nothing, for tests that supply their own manifest. */
+const BARE = `<!doctype html><html><head><meta charset="utf-8"><title>bare</title></head>
+<body><div id="scene" style="width:640px;height:480px"></div>
+<script type="module">
+  import { mountExperience } from "/runtime.js";
+  window.taggantProblems = [];
+  window.mountExperience = mountExperience;
+  window.taggantReady = true;
+</script></body></html>`;
 
 /** A one pixel SVG, so the page has real content to place without shipping a binary. */
 const OVERLAY =
@@ -63,6 +81,8 @@ beforeAll(async () => {
     ["/manifest.json", { body: Buffer.from(JSON.stringify(MANIFEST)), type: "application/json" }],
     ["/target.json", { body: Buffer.from(JSON.stringify(target)), type: "application/json" }],
     ["/overlay.svg", { body: Buffer.from(OVERLAY), type: "image/svg+xml" }],
+    // A page with no manifest of its own, so a test can mount whatever it needs to.
+    ["/bare.html", { body: Buffer.from(BARE), type: "text/html" }],
   ]);
 
   const server = createServer((request, response) => {
@@ -163,6 +183,124 @@ describe("the runtime in a browser, against a camera", () => {
     expect(pacing.long).toBeLessThan(5);
 
     expect(failures).toEqual([]);
+    await context.close();
+  }, 120_000);
+
+  it("refuses a fallback that is not http or https, rather than running it", async () => {
+    if (!browser) throw new Error("no browser");
+    const context = await browser.newContext({ permissions: [] });
+    const page = await context.newPage();
+    // No camera at all, which is the path that follows the fallback.
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined });
+    });
+    await page.goto(`${origin}/bare.html`);
+    await page.waitForFunction(() => window.taggantReady === true);
+
+    const result = await page.evaluate(async () => {
+      (window as unknown as { ran?: boolean }).ran = false;
+      const mounted = await window.mountExperience?.({
+        manifest: {
+          schemaVersion: "1.0.0",
+          id: "probe",
+          targets: [],
+          // A manifest is a format other people write. Nothing forces a caller to run the
+          // validator first, so the runtime has to refuse this itself.
+          fallback: "javascript:window.ran=true;void 0",
+        },
+        targets: [],
+        container: document.getElementById("scene"),
+        options: { onProblem: (message: string) => window.taggantProblems?.push(message) },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return {
+        state: mounted?.state,
+        ran: (window as unknown as { ran?: boolean }).ran,
+        problems: window.taggantProblems,
+      };
+    });
+
+    expect(result.ran).toBe(false);
+    expect(result.problems?.[0]).toMatch(/refused to follow a fallback/i);
+    await context.close();
+  }, 60_000);
+
+  it("says when a compiled target is not claimed by any target in the manifest", async () => {
+    if (!browser) throw new Error("no browser");
+    const context = await browser.newContext({ permissions: ["camera"] });
+    const page = await context.newPage();
+    await page.goto(`${origin}/bare.html`);
+    await page.waitForFunction(() => window.taggantReady === true);
+
+    const result = await page.evaluate(async () => {
+      const mounted = await window.mountExperience?.({
+        manifest: {
+          schemaVersion: "1.0.0",
+          id: "probe",
+          targets: [
+            {
+              id: "back",
+              source: "a.png",
+              physicalWidthMm: 100,
+              content: [{ type: "image", src: "overlay.svg" }],
+            },
+          ],
+        },
+        // Called front; the manifest only describes back.
+        targets: [{ id: "front", width: 100, height: 100, features: [] }],
+        container: document.getElementById("scene"),
+        options: { onProblem: (message: string) => window.taggantProblems?.push(message) },
+      });
+      return {
+        unmatched: mounted?.unmatchedTargets,
+        overlays: document.querySelectorAll("[data-taggant-target]").length,
+        problems: window.taggantProblems,
+      };
+    });
+
+    expect([...(result.unmatched ?? [])]).toEqual(["front"]);
+    expect(result.overlays).toBe(0);
+    expect(result.problems?.some((message) => message.includes("front"))).toBe(true);
+    await context.close();
+  }, 60_000);
+
+  it("gives up and takes the content away when recognition stops answering", async () => {
+    if (!browser) throw new Error("no browser");
+    const context = await browser.newContext({ permissions: ["camera"] });
+    const page = await context.newPage();
+    // Capture the worker so the test can end it, which is what a browser does under
+    // memory pressure. A terminated worker fires neither a reply nor an error.
+    await page.addInitScript(() => {
+      const created: Worker[] = [];
+      (window as unknown as { taggantWorkers: Worker[] }).taggantWorkers = created;
+      const Real = window.Worker;
+      window.Worker = class extends Real {
+        constructor(...args: ConstructorParameters<typeof Worker>) {
+          super(...args);
+          created.push(this);
+        }
+      };
+    });
+    await page.goto(`${origin}/page.html`);
+    await page.waitForFunction(
+      () => document.querySelector("#stage")?.getAttribute("data-state") === "tracking",
+      { timeout: 60_000 },
+    );
+
+    const outcome = await page.evaluate(async () => {
+      for (const worker of (window as unknown as { taggantWorkers: Worker[] }).taggantWorkers)
+        worker.terminate();
+      await new Promise((resolve) => setTimeout(resolve, 9000));
+      return {
+        state: document.querySelector("#stage")?.getAttribute("data-state"),
+        hidden: (document.querySelector("[data-taggant-target]") as HTMLElement | null)?.hidden,
+      };
+    });
+
+    // The failure this guards against is the page going on saying "tracking" with content
+    // frozen where the artwork used to be, which is what it did before there was a timeout.
+    expect(outcome.state).toBe("error");
+    expect(outcome.hidden).toBe(true);
     await context.close();
   }, 120_000);
 

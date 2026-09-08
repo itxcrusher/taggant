@@ -7,6 +7,16 @@ export interface Pose {
   inliers: number;
 }
 
+/**
+ * How long a frame may sit with the worker before it is treated as gone.
+ *
+ * Generous next to the couple of hundred milliseconds recognition takes, because a busy
+ * phone can be slow without being broken. A worker that is terminated fires neither a
+ * reply nor an error, so without this the loop waits on a promise that never settles and
+ * the page goes on claiming it is tracking with content frozen on screen.
+ */
+const REPLY_TIMEOUT_MS = 5000;
+
 export interface Recogniser {
   /**
    * Answer for this frame, or null if one is already being worked on.
@@ -29,6 +39,7 @@ function serialise(targets: TrackingTarget[]): SerialisedTarget[] {
     features: target.features.map((feature) => ({
       x: feature.x,
       y: feature.y,
+      scale: feature.scale,
       angle: feature.angle,
       strength: feature.strength,
       descriptor: [...feature.descriptor],
@@ -58,15 +69,17 @@ export function createRecogniser(targets: TrackingTarget[]): Recogniser {
       if (busy) return null;
       busy = true;
       const id = nextId++;
-      // The buffer is transferred rather than copied, so a frame costs no allocation on
-      // the way out; the worker sends it back with the answer.
       const copy = frame.data.slice();
       try {
         return await new Promise<Pose[]>((resolve, reject) => {
-          const done = (event: MessageEvent<WorkerResult>) => {
-            if (event.data?.type !== "result" || event.data.id !== id) return;
+          const finish = () => {
+            clearTimeout(timer);
             worker.removeEventListener("message", done);
             worker.removeEventListener("error", failed);
+          };
+          const done = (event: MessageEvent<WorkerResult>) => {
+            if (event.data?.type !== "result" || event.data.id !== id) return;
+            finish();
             resolve(
               event.data.poses.map((pose) => ({
                 id: pose.id,
@@ -76,12 +89,17 @@ export function createRecogniser(targets: TrackingTarget[]): Recogniser {
             );
           };
           const failed = (event: ErrorEvent) => {
-            worker.removeEventListener("message", done);
-            worker.removeEventListener("error", failed);
-            reject(new Error(event.message));
+            finish();
+            reject(new Error(event.message || "the recognition worker failed"));
           };
+          const timer = setTimeout(() => {
+            finish();
+            reject(new Error(`the recognition worker did not answer within ${REPLY_TIMEOUT_MS} ms`));
+          }, REPLY_TIMEOUT_MS);
           worker.addEventListener("message", done);
           worker.addEventListener("error", failed);
+          // The buffer is transferred rather than copied, so a frame costs no allocation
+          // on the way out.
           worker.postMessage(
             { type: "frame", id, width: frame.width, height: frame.height, data: copy.buffer },
             [copy.buffer],
