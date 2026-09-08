@@ -1,10 +1,12 @@
-import { mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ID_PATTERN,
   ID_PATTERN_ATTRIBUTE,
+  TARGET_ID_PATTERN,
+  TARGET_ID_PATTERN_ATTRIBUTE,
   WorkspaceError,
   createWorkspace,
   safeFilename,
@@ -39,6 +41,14 @@ describe("what an id may be", () => {
   it("refuses an id that differs from another only by case, because two file systems disagree about that", async () => {
     const store = await workspace();
     expect(() => store.directoryFor("Botanica")).toThrow(WorkspaceError);
+  });
+
+  it("gives the browser a target id pattern it can compile too", () => {
+    // The same trap, walked into a second time by a new pattern written from the schema.
+    const attribute = new RegExp(`^(?:${TARGET_ID_PATTERN_ATTRIBUTE})$`, "v");
+    for (const id of ["abc", "front-panel", "ab", "Front", "a b", "x".repeat(65)]) {
+      expect(attribute.test(id), id).toBe(TARGET_ID_PATTERN.test(id));
+    }
   });
 
   it("gives the browser a pattern it can actually compile, meaning the same thing", () => {
@@ -160,7 +170,7 @@ describe("changing an experience while something else is changing it", () => {
     const store = await workspace();
     await store.create("race", "Race");
     await Promise.all(
-      ["a", "b", "c", "d"].map((id) =>
+      ["one", "two", "three", "four"].map((id) =>
         store.update("race", (manifest) => ({
           ...manifest,
           targets: [
@@ -171,7 +181,7 @@ describe("changing an experience while something else is changing it", () => {
       ),
     );
     const saved = await store.read("race");
-    expect(saved.manifest.targets.map((target) => target.id).sort()).toEqual(["a", "b", "c", "d"]);
+    expect(saved.manifest.targets.map((target) => target.id).sort()).toEqual(["four", "one", "three", "two"]);
   });
 
   it("does not wedge the queue when one change throws", async () => {
@@ -208,13 +218,26 @@ describe("what the list shows", () => {
 });
 
 describe("writing", () => {
+  it("steps around a name something else already has", async () => {
+    const store = await workspace();
+    await store.create("pack", "Pack");
+    const first = await store.storeFile("pack", "artwork", "logo.png", new Uint8Array([1]));
+    const second = await store.storeFile("pack", "artwork", "LOGO.PNG", new Uint8Array([2]));
+    expect(first).not.toBe(second);
+    expect(second).toMatch(/logo-2\.png$/);
+    const stored = await readdir(join(store.root, "pack", "artwork"));
+    expect(stored.sort()).toEqual(["logo-2.png", "logo.png"]);
+  });
+
   it("leaves nothing behind when a write fails", async () => {
     const store = await workspace();
     await store.create("pack", "Pack");
-    // A directory where the manifest should be: the rename cannot succeed.
-    await mkdir(join(store.root, "pack", "artwork", "taken.png"), { recursive: true });
-    await expect(store.storeFile("pack", "artwork", "taken.png", new Uint8Array([1]))).rejects.toThrow();
-    const left = await readdir(join(store.root, "pack", "artwork"));
+    // A directory where the manifest has to go, so the rename into place cannot succeed.
+    // The staging file it built beside it must not survive that.
+    await rm(join(store.root, "pack", "manifest.json"));
+    await mkdir(join(store.root, "pack", "manifest.json"), { recursive: true });
+    await expect(store.save("pack", { schemaVersion: "1.0.0", id: "pack", targets: [] })).rejects.toThrow();
+    const left = await readdir(join(store.root, "pack"));
     expect(left.filter((name) => name.includes(".writing-"))).toEqual([]);
   });
 

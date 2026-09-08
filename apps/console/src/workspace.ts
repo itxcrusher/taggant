@@ -127,6 +127,29 @@ export function assertId(id: string): string {
 }
 
 /**
+ * What a target id may be, which is the schema's rule rather than a second opinion.
+ *
+ * The console holds drafts the schema would reject, deliberately, because authoring passes
+ * through incomplete states. An id is not one of those: it is either the shape the format
+ * allows or it is something that can never be published. A 4000 character id and one
+ * carrying a carriage return and a null byte were both stored, slugged onto disk, and only
+ * refused later at the publish gate.
+ */
+export const TARGET_ID_PATTERN = /^[a-z0-9][a-z0-9\-]{2,63}$/;
+
+/** The same rule for the form, escaped for the flag a pattern attribute is compiled with. */
+export const TARGET_ID_PATTERN_ATTRIBUTE = TARGET_ID_PATTERN.source.replace(/^\^/, "").replace(/\$$/, "");
+
+export function assertTargetId(id: string): string {
+  if (!TARGET_ID_PATTERN.test(id)) {
+    throw new WorkspaceError(
+      `${JSON.stringify(id.slice(0, 40))} is not a usable target id: lower case letters, digits and hyphens, starting with a letter or digit, three to sixty four characters`,
+    );
+  }
+  return id;
+}
+
+/**
  * A name safe to write into the store, built from an uploaded one rather than taken.
  *
  * The name arrives from a browser and is whatever the sender put in the multipart part,
@@ -137,6 +160,11 @@ export function assertId(id: string): string {
  */
 export function safeFilename(name: string): string {
   const last = basename(name.replace(/\\/g, "/").split("/").pop() ?? "");
+  // A name that is only an extension has no stem, and `extname` reports nothing for it,
+  // so `.png` was stored as a file called `png` with no extension at all.
+  if (/^\.[a-z0-9]+$/i.test(last)) {
+    return `file-${randomBytes(4).toString("hex")}${last.toLowerCase()}`;
+  }
   // An extension is a dot followed by something. `...` has an `extname` of `.`, and a
   // name ending in a dot is one Windows will not store as written.
   const found = extname(last)
@@ -173,6 +201,26 @@ export function targetFilename(targetId: string): string {
       .slice(0, 48) || "target";
   const digest = createHash("sha256").update(targetId, "utf8").digest("hex").slice(0, 8);
   return `${slug}-${digest}.target.json`;
+}
+
+/**
+ * A name in this folder that nothing else has taken.
+ *
+ * Two uploaded names that reduce to one safe name is ordinary, and writing over the first
+ * left a manifest entry pointing at a different target's image.
+ */
+async function freeName(directory: string, wanted: string): Promise<string> {
+  const extension = extname(wanted);
+  const stem = wanted.slice(0, wanted.length - extension.length);
+  for (let attempt = 0; attempt < 1000; attempt++) {
+    const candidate = attempt === 0 ? wanted : `${stem}-${attempt + 1}${extension}`;
+    try {
+      await stat(join(directory, candidate));
+    } catch {
+      return candidate;
+    }
+  }
+  throw new WorkspaceError(`there are already a thousand files called something like ${wanted}`);
 }
 
 function reasonFor(error: unknown): string {
@@ -282,24 +330,30 @@ export function createWorkspace(root: string): Workspace {
    * upload written through a link goes wherever the link points. The bundler shipped
    * exactly this defect and it took an adversarial pass to find it.
    */
-  const realFolder = async (id: string, folder: string): Promise<string> => {
-    const lexical = join(directoryFor(id), folder);
+  const inside = async (lexical: string, what: string): Promise<string> => {
     await mkdir(lexical, { recursive: true });
     const real = await realpath(lexical);
     const realBase = await realpath(base);
     if (!real.startsWith(realBase + sep)) {
-      throw new WorkspaceError(`${folder} in ${id} resolves to ${real}, which is outside the workspace`);
+      throw new WorkspaceError(`${what} resolves to ${real}, which is outside the workspace`);
     }
     return real;
   };
 
+  /** The experience's own directory, resolved on disk. */
+  const realDirectory = async (id: string): Promise<string> => await inside(directoryFor(id), id);
+
+  const realFolder = async (id: string, folder: string): Promise<string> =>
+    // The experience's own directory is checked first, because a junction there takes
+    // everything under it with it and the folder below would resolve inside the target.
+    await inside(join(await realDirectory(id), folder), `${folder} in ${id}`);
+
   /** The write itself, called only from inside a turn. */
   const write = async (id: string, manifest: DraftManifest): Promise<Experience> => {
-    const directory = directoryFor(id);
     if (manifest.id !== id) {
       throw new WorkspaceError(`the manifest says its id is ${manifest.id}, and it is stored as ${id}`);
     }
-    await mkdir(directory, { recursive: true });
+    const directory = await realDirectory(id);
     await writeAtomic(join(directory, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     return interpret(id, manifest);
   };
@@ -327,6 +381,20 @@ export function createWorkspace(root: string): Workspace {
     const draft = raw as Partial<DraftManifest>;
     if (typeof draft.id !== "string" || !Array.isArray(draft.targets)) {
       throw new WorkspaceError(`${id} holds JSON, but not a manifest: it needs an id and a list of targets`);
+    }
+    // Shaped enough for a page to render, which is a separate question from valid. One
+    // hand written manifest whose targets had no `content` took out the whole index: the
+    // view reached for `target.content.length`, threw, and every other experience became
+    // unreachable behind a 500 that named nothing.
+    const shaped = draft.targets.every(
+      (target: unknown) =>
+        typeof target === "object" &&
+        target !== null &&
+        typeof (target as DraftTarget).id === "string" &&
+        Array.isArray((target as DraftTarget).content),
+    );
+    if (!shaped) {
+      throw new WorkspaceError(`${id} has a target that is not one: each needs an id and a list of content`);
     }
     const result = validateManifest(structuredClone(raw));
     return {
@@ -383,9 +451,12 @@ export function createWorkspace(root: string): Workspace {
       if (await exists(id)) {
         throw new WorkspaceError(`${id} already exists`);
       }
-      await mkdir(join(directory, "artwork"), { recursive: true });
-      await mkdir(join(directory, "media"), { recursive: true });
-      await mkdir(join(directory, "targets"), { recursive: true });
+      // Through `realFolder`, so a link left in the workspace cannot put the manifest and
+      // its folders somewhere else. That check was written for uploads and guarded only
+      // those, so a junction named after an experience took the manifest write with it.
+      await realFolder(id, "artwork");
+      await realFolder(id, "media");
+      await realFolder(id, "targets");
       const draft: DraftManifest = { schemaVersion: "1.0.0", id, title, targets: [] };
       await writeAtomic(join(directory, "manifest.json"), `${JSON.stringify(draft, null, 2)}\n`);
       return interpret(id, draft);
@@ -409,7 +480,11 @@ export function createWorkspace(root: string): Workspace {
       bytes: Uint8Array,
     ): Promise<string> {
       const directory = await realFolder(id, folder);
-      const filename = safeFilename(name);
+      // Two names that reduce to one is the ordinary case, not a corner: `logo.png` and
+      // `LOGO.PNG`, or `photo one.png` and `photo-one.png`. Writing the safe name blind
+      // deleted the first file and left the first target's manifest entry pointing at the
+      // second target's image, with nothing saying so.
+      const filename = await freeName(directory, safeFilename(name));
       await writeAtomic(join(directory, filename), bytes);
       return `${folder}/${filename}`;
     },
