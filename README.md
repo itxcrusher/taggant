@@ -6,7 +6,7 @@ A taggant is a marker added to a material so that a later reader can identify it
 
 ## Status
 
-Early development. Five packages are usable, the rest are being built in the open. Nothing has been published to a registry and nothing is tagged, so interfaces change without notice.
+Early development. Six packages are usable, the rest are being built in the open. Nothing has been published to a registry and nothing is tagged, so interfaces change without notice.
 
 ## Judging artwork before it goes to press
 
@@ -62,7 +62,7 @@ The number the report cannot yet measure is the camera. Minimum print width assu
 | `@taggant/compiler` | usable | artwork to compiled target, with a print readiness report, as a library and a command line |
 | `@taggant/runtime` | usable | camera, recognition and placing content on the artwork, in the browser |
 | `@taggant/bundler` | usable | an experience published as a self-contained static folder |
-| `services/resolver` | planned | code lifecycle and GS1 Digital Link resolution |
+| `services/resolver` | usable | GS1 Digital Link resolution, conformant against the published criteria |
 | `apps/console` | planned | authoring for products, artwork versions, targets and codes |
 
 `@taggant/vision` carries no dependencies. The detector, the descriptor, the matcher and the homography solver are all in this repository, which is what lets the compiler and the browser produce identical descriptors from the same artwork.
@@ -112,6 +112,48 @@ That is a claim, so it is tested as one. A test serves the folder from a plain s
 
 Content addressing is why republishing an experience whose video did not change does not invalidate that video, and why the same file is never stored twice. Paths in a manifest are resolved against the manifest's own directory and refused if they leave it: publishing runs with the rights of whoever publishes, and a manifest is a format other people write.
 
+## Resolving a printed code
+
+A code printed on a thing is a promise that scanning it will reach something. The resolver keeps that promise, and it does so the way the standard says to rather than the way that is convenient.
+
+```
+$ curl -sI 'http://localhost:8080/01/09520123456788?utm_source=pack' | grep -i '^location'
+location: https://example.com/product?utm_source=pack
+
+$ curl -sI -H 'Accept-Language: fr' 'http://localhost:8080/gtin/09520123456788' | grep -i '^location'
+location: https://example.com/produit
+```
+
+The first request carries its own query string through to the destination, which is what lets a printed code carry a campaign parameter the resolver knows nothing about. The second asks in French, in the alphabetic path form the standard also allows, and gets the French page: the default holds unless the request says something that allows a better match.
+
+Anything that would rather read than follow asks for the linkset, and gets every link about that identifier, including the ones attached further up its own hierarchy:
+
+```
+$ curl -s 'http://localhost:8080/01/09520123456788/10/ABC?linkType=linkset'
+{
+  "linkset": [
+    {
+      "anchor": "http://localhost:8080/01/09520123456788/10/ABC",
+      "https://gs1.org/voc/certificationInfo": [
+        { "href": "https://example.com/batch/ABC", "title": "Certification for batch ABC", "hreflang": ["en"] }
+      ]
+    },
+    {
+      "anchor": "http://localhost:8080/01/09520123456788",
+      "https://gs1.org/voc/pip": [
+        { "href": "https://example.com/product", "title": "Product information page", "hreflang": ["en"], "type": "text/html" }
+      ]
+    }
+  ]
+}
+```
+
+**Conformance is tested, not claimed.** Every test is named with the requirement it checks, quoted from the conformance criteria GS1 publishes alongside its resolver test suite, and each one drives a real resolver over HTTP. Forty one of them, and they fail a pull request. GS1's own suite is a browser tool with a PHP helper that runs against a deployed resolver, so it is not something a build can run; pointing it at a deployment is a separate exercise from proving the behaviour on every commit.
+
+**Compressed Digital Link URIs are not supported.** That is a SHALL in the standard. It is declared in the resolver description file at `/.well-known/gs1resolver`, where a client would look for it, and there is a test asserting it is declared. A resolver that claims conformance it does not have is worse than one that says where it stops.
+
+The link table is plain JSON keyed by canonical Digital Link paths, which is the continuity promise in the same form the bundler makes it. A redirect table that cannot be read out and rehosted somewhere else is not a promise.
+
 ## Design commitments
 
 These hold for every release and are the reason the project exists in this shape.
@@ -120,11 +162,10 @@ These hold for every release and are the reason the project exists in this shape
 - The manifest format is open, versioned and documented, so anything else can read or write it. A manifest is data: it cannot carry a script destination, and its asset paths stay inside the bundle.
 - Image targets first. Handheld web AR has no camera pose on every platform, and printed artwork is the trigger that works everywhere.
 - No proprietary runtime dependency that cannot be redistributed.
-- When the resolver exists, its conformance will be proven against the published GS1 Digital Link test suite in continuous integration rather than asserted here.
 
 ## What has and has not been verified
 
-The five packages are exercised by 149 tests, and the whole gate runs on every push.
+The six packages are exercised by 190 tests, and the whole gate runs on every push.
 
 The runtime is driven in a real browser rather than asserted: the test writes a video file of the artwork sitting in a larger frame, hands it to Chromium as a camera, and waits for the page to reach its tracking state, then checks that the content landed where the feed actually put the artwork. The example was driven the same way, and the overlay came back within a pixel of the truth.
 
