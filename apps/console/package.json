@@ -1,0 +1,27 @@
+{
+  "name": "@taggant/console",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "taggant-console": "./dist/cli.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/index.ts src/cli.ts --format esm --dts --clean",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@taggant/bundler": "workspace:*",
+    "@taggant/compiler": "workspace:*",
+    "@taggant/manifest": "workspace:*",
+    "@taggant/resolver": "workspace:*",
+    "@taggant/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "sharp": "0.33.5"
+  }
+}

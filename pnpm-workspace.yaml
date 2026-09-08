@@ -1,6 +1,7 @@
 packages:
   - "packages/*"
   - "services/*"
+  - "apps/*"
 
 # pnpm 11 requires an explicit decision for every dependency that ships a build script.
 # All three below compile or link a native binary that the toolchain then executes locally

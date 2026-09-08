@@ -18,7 +18,9 @@
       "@taggant/vision": ["packages/vision/src/index.ts"],
       "@taggant/runtime": ["packages/runtime/src/index.ts"],
       "@taggant/bundler": ["packages/bundler/src/index.ts"],
-      "@taggant/compiler": ["packages/compiler/src/index.ts"]
+      "@taggant/compiler": ["packages/compiler/src/index.ts"],
+      "@taggant/resolver": ["services/resolver/src/index.ts"],
+      "@taggant/console": ["apps/console/src/index.ts"]
     },
     "forceConsistentCasingInFileNames": true
   }

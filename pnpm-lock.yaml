@@ -27,6 +27,28 @@ importers:
         specifier: 2.1.8
         version: 2.1.8(@types/node@22.10.2)
 
+  apps/console:
+    dependencies:
+      '@taggant/bundler':
+        specifier: workspace:*
+        version: link:../../packages/bundler
+      '@taggant/compiler':
+        specifier: workspace:*
+        version: link:../../packages/compiler
+      '@taggant/manifest':
+        specifier: workspace:*
+        version: link:../../packages/manifest
+      '@taggant/resolver':
+        specifier: workspace:*
+        version: link:../../services/resolver
+      '@taggant/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+    devDependencies:
+      sharp:
+        specifier: 0.33.5
+        version: 0.33.5
+
   packages/bundler:
     dependencies:
       '@taggant/manifest':
