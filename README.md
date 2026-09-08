@@ -57,7 +57,7 @@ The number the report cannot yet measure is the camera. Minimum print width assu
 
 | Package | State | Purpose |
 |---|---|---|
-| `@taggant/manifest` | usable | the versioned experience format, its validator, and types generated from the schema |
+| [`@taggant/manifest`](packages/manifest/README.md) | usable | the versioned experience format, its validator, and types generated from the schema |
 | `@taggant/vision` | usable | detection, description, matching and pose: the part the compiler and the runtime must agree on exactly |
 | `@taggant/compiler` | usable | artwork to compiled target, with a print readiness report, as a library and a command line |
 | `@taggant/runtime` | usable | camera, recognition and placing content on the artwork, in the browser |
@@ -218,13 +218,13 @@ Events go out as one JSON object per line. `/metrics` carries the same counts in
 These hold for every release and are the reason the project exists in this shape.
 
 - A published experience is a static bundle. It carries its own runtime and assets, and it does not call this project's services to work.
-- The manifest format is open, versioned and documented, so anything else can read or write it. A manifest is data: it cannot carry a script destination, and its asset paths stay inside the bundle.
+- The manifest format is open, versioned and [documented](packages/manifest/README.md), so anything else can read or write it. A manifest is data: it cannot carry a script destination, and its asset paths stay inside the bundle.
 - Image targets first. Handheld web AR has no camera pose on every platform, and printed artwork is the trigger that works everywhere.
 - No proprietary runtime dependency that cannot be redistributed.
 
 ## What has and has not been verified
 
-The seven packages are exercised by 299 tests, and the whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all.
+The seven packages are exercised by 309 tests, and the whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all.
 
 The runtime is driven in a real browser rather than asserted: the test writes a video file of the artwork sitting in a larger frame, hands it to Chromium as a camera, and waits for the page to reach its tracking state, then checks that the content landed where the feed actually put the artwork. A published bundle is driven the same way, from a static folder with nothing else running, on artwork put through the real compiler first, which is the only place the two halves of the system meet.
 

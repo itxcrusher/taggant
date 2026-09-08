@@ -7,18 +7,38 @@
   "required": ["schemaVersion", "id", "targets"],
   "additionalProperties": false,
   "properties": {
-    "schemaVersion": { "const": "1.0.0" },
-    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,63}$" },
-    "title": { "type": "string", "maxLength": 200 },
+    "schemaVersion": {
+      "description": "The version of this format the manifest is written to. A reader that does not know a version refuses the file rather than guessing at what changed.",
+      "const": "1.0.0"
+    },
+    "id": {
+      "description": "Identifies this experience. It becomes the name of the folder a published bundle is written to, and so part of the address that folder is served from, which fixes it once anything carrying that address has been printed.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"
+    },
+    "title": {
+      "description": "A name for people rather than for machines. Nothing renders it; it is what makes a list of manifests readable.",
+      "type": "string",
+      "maxLength": 200
+    },
     "subject": {
+      "description": "What physical thing this experience belongs to. Nothing in this project reads it. It is here so a manifest carries its own answer to what it is for, without a database alongside it to ask.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "kind": { "enum": ["product", "print", "artwork", "other"] },
-        "reference": { "type": "string", "maxLength": 200 }
+        "kind": {
+          "description": "The sort of thing it is.",
+          "enum": ["product", "print", "artwork", "other"]
+        },
+        "reference": {
+          "description": "What the subject is called wherever it is already catalogued: a product code, an artwork reference, a job number. Free text, because it names something outside this format.",
+          "type": "string",
+          "maxLength": 200
+        }
       }
     },
     "targets": {
+      "description": "The artwork a camera recognises, and what is anchored to each piece of it. At least one, because a manifest with nothing to recognise describes nothing.",
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/$defs/target" }
@@ -37,10 +57,28 @@
       "required": ["id", "source", "physicalWidthMm", "content"],
       "additionalProperties": false,
       "properties": {
-        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,63}$" },
-        "source": { "type": "string", "maxLength": 300 },
-        "physicalWidthMm": { "type": "number", "exclusiveMinimum": 0, "maximum": 5000 },
-        "content": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/content" } }
+        "id": {
+          "description": "Identifies this target within the experience. A compiled target file is matched to it by this name, so it is the one thing the compiler output and this manifest have to agree on.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"
+        },
+        "source": {
+          "description": "Path to the artwork this target was compiled from, relative to the manifest. Carried so the target can be built again from the thing it was made from, rather than from whoever remembers which file it was.",
+          "type": "string",
+          "maxLength": 300
+        },
+        "physicalWidthMm": {
+          "description": "How wide the artwork is on the finished piece, in millimetres. This is the number the print readiness report is measured against: the compiler says the smallest width the artwork can still be read at, and a piece printed narrower than that will not be recognised, whatever else is right.",
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 5000
+        },
+        "content": {
+          "description": "What is shown when this target is found. At least one, because a target that recognises artwork and then shows nothing is not an experience.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/content" }
+        }
       }
     },
     "content": {
@@ -48,16 +86,31 @@
       "required": ["type", "src"],
       "additionalProperties": false,
       "properties": {
-        "type": { "enum": ["image", "video", "model", "audio"] },
+        "type": {
+          "description": "What kind of asset this is. A runtime that cannot show one of these names it rather than dropping it in silence. Image and video are rendered today; model and audio are part of the format and are not built yet.",
+          "enum": ["image", "video", "model", "audio"]
+        },
         "src": {
           "description": "Path to the asset, relative to the manifest. Relative by design: a published experience is a self contained bundle, so an absolute URL would make it depend on a host that can go away. Parent directory steps are refused because the path is resolved against a bundle directory.",
           "type": "string",
           "maxLength": 300,
           "pattern": "^(?!/)(?!.*(?:^|/)[.][.](?:/|$))(?![A-Za-z][A-Za-z0-9+.-]*:)[A-Za-z0-9._~/-]+(#[A-Za-z0-9._~-]+)?$"
         },
-        "placement": { "$ref": "#/$defs/placement", "default": {} },
-        "autoplay": { "type": "boolean", "default": true },
-        "loop": { "type": "boolean", "default": true },
+        "placement": {
+          "description": "Where the content sits on the target. Left out, it covers the target exactly.",
+          "$ref": "#/$defs/placement",
+          "default": {}
+        },
+        "autoplay": {
+          "description": "Whether a video starts on its own once the target is found.",
+          "type": "boolean",
+          "default": true
+        },
+        "loop": {
+          "description": "Whether a video starts again when it reaches the end.",
+          "type": "boolean",
+          "default": true
+        },
         "muted": {
           "type": "boolean",
           "default": true,
@@ -66,13 +119,38 @@
       }
     },
     "placement": {
+      "description": "Position and size relative to the target, never in pixels. The target is a physical thing whose size in the frame changes every time the viewer moves, so a pixel would mean something different in every frame.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 20, "default": 1 },
-        "offsetX": { "type": "number", "minimum": -10, "maximum": 10, "default": 0 },
-        "offsetY": { "type": "number", "minimum": -10, "maximum": 10, "default": 0 },
-        "rotationDeg": { "type": "number", "minimum": -360, "maximum": 360, "default": 0 }
+        "scale": {
+          "description": "Size as a fraction of the target. 1 covers the target exactly; 0.5 is half its width and half its height.",
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 20,
+          "default": 1
+        },
+        "offsetX": {
+          "description": "How far across from the centre of the target, as a fraction of the target width. 0 is centred; 0.5 is half a target width to the right.",
+          "type": "number",
+          "minimum": -10,
+          "maximum": 10,
+          "default": 0
+        },
+        "offsetY": {
+          "description": "How far down from the centre of the target, as a fraction of the target height. 0 is centred; positive is down.",
+          "type": "number",
+          "minimum": -10,
+          "maximum": 10,
+          "default": 0
+        },
+        "rotationDeg": {
+          "description": "Rotation about the content own centre, in degrees, clockwise, in the plane of the artwork.",
+          "type": "number",
+          "minimum": -360,
+          "maximum": 360,
+          "default": 0
+        }
       }
     }
   }

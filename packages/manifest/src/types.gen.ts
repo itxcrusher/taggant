@@ -9,14 +9,34 @@
  * Describes one published experience: the physical thing it belongs to, the targets that recognise it, and the content anchored to each target.
  */
 export interface TaggantExperienceManifest {
+  /**
+   * The version of this format the manifest is written to. A reader that does not know a version refuses the file rather than guessing at what changed.
+   */
   schemaVersion: "1.0.0";
+  /**
+   * Identifies this experience. It becomes the name of the folder a published bundle is written to, and so part of the address that folder is served from, which fixes it once anything carrying that address has been printed.
+   */
   id: string;
+  /**
+   * A name for people rather than for machines. Nothing renders it; it is what makes a list of manifests readable.
+   */
   title?: string;
+  /**
+   * What physical thing this experience belongs to. Nothing in this project reads it. It is here so a manifest carries its own answer to what it is for, without a database alongside it to ask.
+   */
   subject?: {
+    /**
+     * The sort of thing it is.
+     */
     kind?: "product" | "print" | "artwork" | "other";
+    /**
+     * What the subject is called wherever it is already catalogued: a product code, an artwork reference, a job number. Free text, because it names something outside this format.
+     */
     reference?: string;
   };
   /**
+   * The artwork a camera recognises, and what is anchored to each piece of it. At least one, because a manifest with nothing to recognise describes nothing.
+   *
    * @minItems 1
    */
   targets: [Target, ...Target[]];
@@ -26,28 +46,66 @@ export interface TaggantExperienceManifest {
   fallback?: string;
 }
 export interface Target {
+  /**
+   * Identifies this target within the experience. A compiled target file is matched to it by this name, so it is the one thing the compiler output and this manifest have to agree on.
+   */
   id: string;
+  /**
+   * Path to the artwork this target was compiled from, relative to the manifest. Carried so the target can be built again from the thing it was made from, rather than from whoever remembers which file it was.
+   */
   source: string;
+  /**
+   * How wide the artwork is on the finished piece, in millimetres. This is the number the print readiness report is measured against: the compiler says the smallest width the artwork can still be read at, and a piece printed narrower than that will not be recognised, whatever else is right.
+   */
   physicalWidthMm: number;
   /**
+   * What is shown when this target is found. At least one, because a target that recognises artwork and then shows nothing is not an experience.
+   *
    * @minItems 1
    */
   content: [Content, ...Content[]];
 }
 export interface Content {
+  /**
+   * What kind of asset this is. A runtime that cannot show one of these names it rather than dropping it in silence. Image and video are rendered today; model and audio are part of the format and are not built yet.
+   */
   type: "image" | "video" | "model" | "audio";
   /**
    * Path to the asset, relative to the manifest. Relative by design: a published experience is a self contained bundle, so an absolute URL would make it depend on a host that can go away. Parent directory steps are refused because the path is resolved against a bundle directory.
    */
   src: string;
   placement?: Placement;
+  /**
+   * Whether a video starts on its own once the target is found.
+   */
   autoplay?: boolean;
+  /**
+   * Whether a video starts again when it reaches the end.
+   */
   loop?: boolean;
+  /**
+   * Muted by default because no browser will autoplay a video with sound. Set autoplay to false to let a viewer start it with sound themselves.
+   */
   muted?: boolean;
 }
+/**
+ * Where the content sits on the target. Left out, it covers the target exactly.
+ */
 export interface Placement {
+  /**
+   * Size as a fraction of the target. 1 covers the target exactly; 0.5 is half its width and half its height.
+   */
   scale?: number;
+  /**
+   * How far across from the centre of the target, as a fraction of the target width. 0 is centred; 0.5 is half a target width to the right.
+   */
   offsetX?: number;
+  /**
+   * How far down from the centre of the target, as a fraction of the target height. 0 is centred; positive is down.
+   */
   offsetY?: number;
+  /**
+   * Rotation about the content own centre, in degrees, clockwise, in the plane of the artwork.
+   */
   rotationDeg?: number;
 }
