@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { watch } from "node:fs";
 import { readFile } from "node:fs/promises";
 import process, { argv, stderr, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import { parseTable } from "./links.js";
 import { createResolver } from "./server.js";
+import { watchTable } from "./table-source.js";
 
 export const EXIT = { ok: 0, usage: 1, cannotRead: 3 } as const;
 
@@ -95,13 +95,10 @@ export async function main(args: string[]): Promise<number> {
     }
   };
 
-  try {
-    watch(path, { persistent: false }, () => {
-      void reload();
-    });
-  } catch {
-    stderr.write("could not watch the link table for changes; edits will need a restart\n");
-  }
+  // Not a watch on the file. A watch dies when the file is replaced by a rename, which is
+  // how anything that writes safely writes, and a bind mount often delivers no events at
+  // all. Both were measured against this stack; the reasoning is in `table-source.ts`.
+  await watchTable(path, { onChange: reload });
 
   const server = createResolver({
     table: () => current,

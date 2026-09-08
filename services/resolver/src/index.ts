@@ -25,3 +25,5 @@ export { CONTEXT, buildLinkset } from "./linkset.js";
 export { Counters, jsonLines } from "./events.js";
 export type { Event, EventSink, ProblemEvent, ScanEvent } from "./events.js";
 export type { Linkset, LinksetTarget } from "./linkset.js";
+export { watchTable, DEFAULT_POLL_MS } from "./table-source.js";
+export type { TableSource, TableSourceOptions } from "./table-source.js";
