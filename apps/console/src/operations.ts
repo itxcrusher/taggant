@@ -11,7 +11,13 @@ import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { bundle, realWithin } from "@taggant/bundler";
 import { type Report, compileTarget, toTargetJson } from "@taggant/compiler";
-import { type LinkTable, parseDigitalLink, parseTable } from "@taggant/resolver";
+import {
+  type LinkTable,
+  type StoredLink,
+  parseDigitalLink,
+  parseTable,
+  sameLinkType,
+} from "@taggant/resolver";
 import { type Experience, type Workspace, WorkspaceError, publishable } from "./workspace.js";
 
 /**
@@ -133,7 +139,7 @@ export async function publish(
 export async function registerCode(
   tablePath: string,
   entry: { path: string; href: string; title: string; linkType?: string; language?: string },
-): Promise<{ path: string; replaced: boolean }> {
+): Promise<{ path: string; replaced: number; kept: number }> {
   // The path is the key the resolver looks scans up by, so it is canonicalised here by
   // the resolver's own parser rather than taken as typed. A code written as an EAN-13
   // and a code written as a GTIN-14 are the same code, and a table holding both under
@@ -169,21 +175,39 @@ export async function registerCode(
   // A title is required rather than optional, because the resolver's own parser refuses a
   // link without one. Optional here meant this function could build a table the resolver
   // would then reject, which is the shape of a defect that only appears in production.
-  const link: Record<string, unknown> = {
+  const linkType = entry.linkType ?? "gs1:pip";
+  const link: StoredLink = {
     href: entry.href,
-    linkType: entry.linkType ?? "gs1:pip",
+    linkType,
     title: entry.title,
     default: true,
+    ...(entry.language === undefined ? {} : { hreflang: [entry.language] }),
   };
-  if (entry.language !== undefined) link.hreflang = [entry.language];
 
-  const replaced = Object.hasOwn(current.entries, canonical);
+  /**
+   * A code carries several links, and this replaces the ones it is about.
+   *
+   * Writing the whole array deleted every sibling: against this repository's own worked
+   * table, registering one destination took a code from an English page, a French page and
+   * a certification link down to one, and said "replacing what it pointed at before" while
+   * it did it. A certification link is a different fact about the same product and has no
+   * business being removed because the product page moved.
+   *
+   * What does go is every link of the same type. Those are the same fact in another
+   * language and they point at the old destination. Keeping them looks tidier and is
+   * worse: the resolver picks the best language match among siblings of the default's
+   * type, so a French page left behind would go on answering French scans with the old
+   * address while the console reported that the code now points somewhere else.
+   */
+  const existing = current.entries[canonical] ?? [];
+  const adjusted = existing.filter((other) => !sameLinkType(other.linkType, linkType));
+  const replaced = existing.length - adjusted.length;
   // Exactly the two fields the format has, rather than a spread of whatever was on disk.
   // Spreading carried unknown top-level keys forward, `__proto__` among them, so a table
   // this console rewrote kept junk that neither it nor the resolver understands.
   const next = {
     version: current.version,
-    entries: { ...current.entries, [canonical]: [link] },
+    entries: { ...current.entries, [canonical]: [...adjusted, link] },
   };
   // Validated before it is written, so a table this console produced is one the resolver
   // will accept. Writing a table the resolver then refuses would take every other code
@@ -204,7 +228,7 @@ export async function registerCode(
     await rm(staging, { force: true });
     throw error;
   }
-  return { path: canonical, replaced };
+  return { path: canonical, replaced, kept: adjusted.length };
 }
 
 /** Where an experience publishes to, under the folder the static host serves. */
