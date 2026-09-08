@@ -26,7 +26,8 @@ docker compose -f infra/compose.yaml --profile authoring up --build
 On Linux it has to run as somebody who can write the directories this checkout owns, which the image's own user is not:
 
 ```
-TAGGANT_UID=$(id -u) TAGGANT_GID=$(id -g)   docker compose -f infra/compose.yaml --profile authoring up --build
+TAGGANT_UID=$(id -u) TAGGANT_GID=$(id -g) \
+  docker compose -f infra/compose.yaml --profile authoring up --build
 ```
 
 Without that, every other container is healthy, the console starts and serves pages, and writing the link table fails with a permission error. Windows and macOS hide it, because their bind mounts do not carry ownership at all, so it appears first on a Linux host or in continuous integration, which is where it did appear.
