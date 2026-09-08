@@ -16,7 +16,7 @@
  * uploaded name is reduced to a base name and rebuilt rather than trusted.
  */
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join, resolve, sep } from "node:path";
 import { type ManifestError, type TaggantExperienceManifest, validateManifest } from "@taggant/manifest";
@@ -153,12 +153,16 @@ export function safeFilename(name: string): string {
 }
 
 /**
- * A target id reduced to something that can be a filename.
+ * A target id reduced to something that can be a filename, without two ids becoming one.
  *
- * The schema lets a target id be any non-empty string, and the compiled target for it has
- * to be written somewhere, so the id is slugged rather than trusted. Two ids that slug to
- * the same name would collide, which is why the slug keeps enough of the original to be
- * recognisable and the caller looks targets up by the same function that wrote them.
+ * The schema lets a target id be any non-empty string and the compiled target has to be
+ * written somewhere, so the id is slugged. Slugging alone is not enough: `front panel`
+ * and `front-panel` both reduce to `front-panel`, and a manifest may legitimately carry
+ * both. With only the slug, compiling the second overwrote the first, and the runtime was
+ * then handed the wrong target for one of them with nothing anywhere saying so.
+ *
+ * So the name carries a short digest of the id itself. The slug is what makes the folder
+ * readable; the digest is what makes the name a function of the id and nothing else.
  */
 export function targetFilename(targetId: string): string {
   const slug =
@@ -166,8 +170,9 @@ export function targetFilename(targetId: string): string {
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
-      .slice(0, 60) || "target";
-  return `${slug}.target.json`;
+      .slice(0, 48) || "target";
+  const digest = createHash("sha256").update(targetId, "utf8").digest("hex").slice(0, 8);
+  return `${slug}-${digest}.target.json`;
 }
 
 function reasonFor(error: unknown): string {
@@ -200,6 +205,16 @@ export interface Workspace {
   exists(id: string): Promise<boolean>;
   create(id: string, title: string): Promise<Experience>;
   save(id: string, manifest: DraftManifest): Promise<Experience>;
+  /**
+   * Read an experience, change it, and write it back, with nothing else touching it in
+   * between.
+   *
+   * Every caller that adds a target or a piece of content has to use this rather than a
+   * read followed by a save. Four targets added at the same moment through the separate
+   * calls left one in the manifest and three pieces of artwork orphaned on disk, because
+   * each request read the manifest before any of the others had written theirs.
+   */
+  update(id: string, change: (manifest: DraftManifest) => DraftManifest): Promise<Experience>;
   /** Store an upload under `artwork/` or `media/` and return its manifest-relative path. */
   storeFile(id: string, folder: "artwork" | "media", name: string, bytes: Uint8Array): Promise<string>;
   writeTarget(id: string, targetId: string, target: unknown): Promise<string>;
@@ -209,6 +224,32 @@ export interface Workspace {
 
 export function createWorkspace(root: string): Workspace {
   const base = resolve(root);
+
+  /**
+   * One queue per experience, so a read and the write that follows it are not separated.
+   *
+   * This is a self-hosted tool for the people who own the artwork, so the process is the
+   * boundary and an in-process queue is the right size of answer. It is not a lock file
+   * and it does not defend against two consoles pointed at one directory, which is a thing
+   * the documentation says not to do rather than a thing this pretends to survive.
+   */
+  const queues = new Map<string, Promise<void>>();
+  const inTurn = <T>(id: string, work: () => Promise<T>): Promise<T> => {
+    const previous = queues.get(id) ?? Promise.resolve();
+    // Run on either outcome of the one before, so a failed operation does not wedge the
+    // queue behind it.
+    const result = previous.then(work, work);
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    queues.set(id, settled);
+    // Dropped only when nothing queued behind it, so an idle workspace holds nothing.
+    void settled.then(() => {
+      if (queues.get(id) === settled) queues.delete(id);
+    });
+    return result;
+  };
 
   const directoryFor = (id: string): string => {
     const directory = resolve(base, assertId(id));
@@ -250,6 +291,17 @@ export function createWorkspace(root: string): Workspace {
       throw new WorkspaceError(`${folder} in ${id} resolves to ${real}, which is outside the workspace`);
     }
     return real;
+  };
+
+  /** The write itself, called only from inside a turn. */
+  const write = async (id: string, manifest: DraftManifest): Promise<Experience> => {
+    const directory = directoryFor(id);
+    if (manifest.id !== id) {
+      throw new WorkspaceError(`the manifest says its id is ${manifest.id}, and it is stored as ${id}`);
+    }
+    await mkdir(directory, { recursive: true });
+    await writeAtomic(join(directory, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+    return interpret(id, manifest);
   };
 
   const exists = async (id: string): Promise<boolean> => {
@@ -340,13 +392,14 @@ export function createWorkspace(root: string): Workspace {
     },
 
     async save(id: string, manifest: DraftManifest): Promise<Experience> {
-      const directory = directoryFor(id);
-      if (manifest.id !== id) {
-        throw new WorkspaceError(`the manifest says its id is ${manifest.id}, and it is stored as ${id}`);
-      }
-      await mkdir(directory, { recursive: true });
-      await writeAtomic(join(directory, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-      return interpret(id, manifest);
+      return await inTurn(id, () => write(id, manifest));
+    },
+
+    async update(id: string, change: (manifest: DraftManifest) => DraftManifest): Promise<Experience> {
+      return await inTurn(id, async () => {
+        const current = interpret(id, await readManifestFile(id));
+        return await write(id, change(current.manifest));
+      });
     },
 
     async storeFile(

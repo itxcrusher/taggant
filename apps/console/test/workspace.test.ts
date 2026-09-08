@@ -77,9 +77,19 @@ describe("what an uploaded filename becomes", () => {
   });
 
   it("names a compiled target after the target, not after a path", () => {
-    expect(targetFilename("front-panel")).toBe("front-panel.target.json");
-    expect(targetFilename("../../x")).toBe("x.target.json");
-    expect(targetFilename("!!!")).toBe("target.target.json");
+    expect(targetFilename("front-panel")).toMatch(/^front-panel-[0-9a-f]{8}\.target\.json$/);
+    expect(targetFilename("../../x")).toMatch(/^x-[0-9a-f]{8}\.target\.json$/);
+    expect(targetFilename("!!!")).toMatch(/^target-[0-9a-f]{8}\.target\.json$/);
+  });
+
+  it("does not give two different target ids the same compiled filename", () => {
+    // Both slug to `front-panel`, and a manifest may carry both. Without the digest,
+    // compiling the second overwrote the first and the runtime was handed the wrong
+    // target for one of them with nothing anywhere saying so.
+    expect(targetFilename("front panel")).not.toBe(targetFilename("front-panel"));
+    expect(targetFilename("a/b")).not.toBe(targetFilename("a-b"));
+    // And the same id always gives the same name, or nothing could be found again.
+    expect(targetFilename("front-panel")).toBe(targetFilename("front-panel"));
   });
 });
 
@@ -140,6 +150,39 @@ describe("a draft is not yet a manifest, and that is allowed", () => {
     await expect(store.save("pack", { schemaVersion: "1.0.0", id: "other", targets: [] })).rejects.toThrow(
       /says its id is other/,
     );
+  });
+});
+
+describe("changing an experience while something else is changing it", () => {
+  it("keeps every target when four are added at once", async () => {
+    // Read and save as separate calls lost three of these four: each read the manifest
+    // before any of the others had written theirs, and the last write won.
+    const store = await workspace();
+    await store.create("race", "Race");
+    await Promise.all(
+      ["a", "b", "c", "d"].map((id) =>
+        store.update("race", (manifest) => ({
+          ...manifest,
+          targets: [
+            ...manifest.targets,
+            { id, source: `artwork/${id}.png`, physicalWidthMm: 62, content: [] },
+          ],
+        })),
+      ),
+    );
+    const saved = await store.read("race");
+    expect(saved.manifest.targets.map((target) => target.id).sort()).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("does not wedge the queue when one change throws", async () => {
+    const store = await workspace();
+    await store.create("wedge", "Wedge");
+    const failing = store.update("wedge", () => {
+      throw new WorkspaceError("no");
+    });
+    await expect(failing).rejects.toThrow("no");
+    const after = await store.update("wedge", (manifest) => ({ ...manifest, title: "still works" }));
+    expect(after.manifest.title).toBe("still works");
   });
 });
 
