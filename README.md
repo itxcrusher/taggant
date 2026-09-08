@@ -238,7 +238,7 @@ Descriptors are compared across engines, because the compiler runs in Node and t
 
 The numbers it shows under the lamp are this repository's own: they are what `packages/compiler` reports for `examples/postcard/artwork.png` at a 350 mm reading distance, and they are meant to be checked against it rather than admired.
 
-Publishing it is a manual job on purpose. Turn on GitHub Pages with Actions as the source, then run the `pages` workflow from the Actions tab. It is not wired to `push`, because a repository with Pages turned off would fail that job on every commit and a red build that means nothing is worse than none.
+Publishing it is a manual job on purpose. Turn on GitHub Pages with Actions as the source, then run the `pages` workflow from the Actions tab. It is not wired to `push`, because a repository with Pages turned off would fail that job on every commit and a red build that means nothing is worse than none. A manually run workflow is only offered on the default branch, so it appears there once this has landed on `main`.
 
 ## Working on it
 

@@ -36,20 +36,20 @@
   .stagehint{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:6;
         font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--label);
         pointer-events:none;transition:opacity .25s}
-  .stage.lit .stagehint{opacity:0}
+  .stage.lit.touched .stagehint{opacity:0}
 
   .article{position:relative;width:min(820px,100%);margin:0 auto;aspect-ratio:720/430}
   .visible{position:absolute;inset:0;background:var(--stock);border-radius:2px;
            box-shadow:0 26px 60px -30px #000, 0 0 0 1px #C9CBD8 inset}
   .uv{position:absolute;inset:0;background:#050506;border-radius:2px;
-      -webkit-mask-image:radial-gradient(circle var(--r,150px) at var(--x,-999px) var(--y,-999px),#000 60%,transparent 100%);
-      mask-image:radial-gradient(circle var(--r,150px) at var(--x,-999px) var(--y,-999px),#000 60%,transparent 100%);
+      -webkit-mask-image:radial-gradient(circle var(--r,150px) at var(--x,-999px) var(--y,-999px),#000 86%,transparent 100%);
+      mask-image:radial-gradient(circle var(--r,150px) at var(--x,-999px) var(--y,-999px),#000 86%,transparent 100%);
       -webkit-mask-repeat:no-repeat;mask-repeat:no-repeat}
   .article svg{position:absolute;inset:0;width:100%;height:100%;display:block}
 
   .beam{position:absolute;width:var(--d,300px);height:var(--d,300px);border-radius:50%;pointer-events:none;
         left:0;top:0;transform:translate(calc(var(--x,-999px) - var(--d,300px)/2), calc(var(--y,-999px) - var(--d,300px)/2));
-        background:radial-gradient(circle,var(--beamtint,rgba(129,151,255,.42)) 0%,rgba(129,151,255,.10) 55%,transparent 72%);
+        background:radial-gradient(circle,var(--beamtint,rgba(129,151,255,.14)) 0%,rgba(129,151,255,.05) 58%,transparent 74%);
         mix-blend-mode:screen;opacity:0;transition:opacity .18s;z-index:5}
   .stage.lit .beam{opacity:1}
   .beam::after{content:"";position:absolute;inset:0;border-radius:50%;border:1px solid rgba(180,195,255,.22);box-shadow:0 0 40px 6px rgba(120,140,255,.10) inset}
@@ -78,6 +78,10 @@
   ul.commit{list-style:none;margin:0 0 54px;padding:0}
   ul.commit li{display:flex;gap:16px;padding:13px 0;border-bottom:1px solid var(--rail);font-size:15.5px}
   /* The reference is one token. Left to wrap it broke as "C-" over "01" on a phone. */
+  ul.record{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:3px}
+  ul.record li{font-family:var(--mono);font-size:11.5px;line-height:1.5;overflow-wrap:anywhere}
+  .controls .ctl.wide{grid-column:span 1}
+  @media(max-width:900px){.controls .ctl.wide{grid-column:1 / -1}}
   ul.commit li span{font-family:var(--mono);font-size:10px;color:var(--fl-green);letter-spacing:.12em;padding-top:4px;white-space:nowrap;flex:0 0 auto}
   table{width:100%;border-collapse:collapse;margin-bottom:54px;font-size:15px}
   th{text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:.2em;text-transform:uppercase;color:var(--label);
@@ -110,14 +114,14 @@
           <rect x="40" y="40" width="286" height="180" fill="#009AE2"/>
           <rect x="40" y="236" width="286" height="60" fill="#DA017E"/>
           <rect x="40" y="312" width="180" height="24" fill="#F9DF00"/>
-          <text x="366" y="86" font-family="Public Sans" font-size="34" font-weight="700" fill="#282828">Botanica</text>
-          <text x="366" y="122" font-family="Public Sans" font-size="17" fill="#282828">Cold pressed rapeseed oil</text>
-          <text x="366" y="148" font-family="Public Sans" font-size="17" fill="#282828">500 ml</text>
-          <text x="366" y="214" font-family="IBM Plex Mono" font-size="13" fill="#282828">01 05012345678900</text>
-          <text x="366" y="236" font-family="IBM Plex Mono" font-size="13" fill="#282828">21 A7X4K2</text>
+          <text x="366" y="86" font-family="Public Sans, system-ui, -apple-system, Segoe UI, sans-serif" font-size="34" font-weight="700" fill="#282828">Botanica</text>
+          <text x="366" y="122" font-family="Public Sans, system-ui, -apple-system, Segoe UI, sans-serif" font-size="17" fill="#282828">Cold pressed rapeseed oil</text>
+          <text x="366" y="148" font-family="Public Sans, system-ui, -apple-system, Segoe UI, sans-serif" font-size="17" fill="#282828">500 ml</text>
+          <text x="366" y="214" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#282828">01 09520123456788</text>
+          <text x="366" y="236" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#282828">21 A7X4K2</text>
           <g stroke="#282828" stroke-width="1" fill="none"><path d="M366 268h300M366 268v10M666 268v10"/></g>
-          <text x="366" y="300" font-family="IBM Plex Mono" font-size="11" fill="#6B6B6B">BEST BEFORE 09 2027</text>
-          <text x="40" y="380" font-family="IBM Plex Mono" font-size="11" fill="#6B6B6B">CARTON FRONT PANEL, ARTWORK AT 300 dpi</text>
+          <text x="366" y="300" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#6B6B6B">BEST BEFORE 09 2027</text>
+          <text x="40" y="380" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#6B6B6B">CARTON FRONT PANEL, ARTWORK AT 300 dpi</text>
         </svg>
       </div>
       <div class="uv" id="uvlayer">
@@ -127,26 +131,26 @@
           <g id="layer365" filter="url(#bloom)">
             <rect x="40" y="40" width="286" height="180" fill="none" stroke="#F2E24A" stroke-width="1.4" stroke-dasharray="7 5" opacity=".95"/>
             <g id="features"></g>
-            <text x="366" y="86" font-family="IBM Plex Mono" font-size="15" fill="#F2E24A">COMPILED 640 x 454 px</text>
-            <text x="366" y="112" font-family="IBM Plex Mono" font-size="13" fill="#5BE07E">tracking quality 100 / 100</text>
-            <text x="366" y="134" font-family="IBM Plex Mono" font-size="13" fill="#5BE07E">248 features, 16 of 16 areas</text>
-            <text x="366" y="156" font-family="IBM Plex Mono" font-size="13" fill="#5BE07E">min width 70 mm to read at 350 mm</text>
-            <text x="366" y="178" font-family="IBM Plex Mono" font-size="13" fill="#F2E24A">29% of features have a look-alike</text>
-            <text x="366" y="212" font-family="IBM Plex Mono" font-size="14" fill="#5BE07E">VERDICT READY FOR PRESS</text>
-            <text x="40" y="380" font-family="IBM Plex Mono" font-size="11" fill="#5AA8FF">365 nm FLUORESCENT LAYER</text>
+            <text x="366" y="86" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" fill="#F2E24A">COMPILED 640 x 454 px</text>
+            <text x="366" y="112" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#5BE07E">tracking quality 100 / 100</text>
+            <text x="366" y="134" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#5BE07E">248 features, 16 of 16 areas</text>
+            <text x="366" y="156" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#5BE07E">min width 70 mm to read at 350 mm</text>
+            <text x="366" y="178" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#5BE07E">29% of features have a look-alike, normal</text>
+            <text x="366" y="212" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" fill="#5BE07E">VERDICT READY FOR PRESS</text>
+            <text x="40" y="380" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#5AA8FF">365 nm FLUORESCENT LAYER</text>
           </g>
           <g id="layer395" opacity="0" filter="url(#bloom)">
             <g id="phos"></g>
-            <text x="366" y="86" font-family="IBM Plex Mono" font-size="14" fill="#5BE07E">GET /01/05012345678900</text>
-            <text x="366" y="112" font-family="IBM Plex Mono" font-size="13" fill="#5BE07E">307 to the published bundle</text>
-            <text x="366" y="134" font-family="IBM Plex Mono" font-size="13" fill="#5BE07E">linkType=linkset for every link</text>
-            <text x="40" y="380" font-family="IBM Plex Mono" font-size="11" fill="#5AA8FF">395 nm PHOSPHORESCENT LAYER</text>
+            <text x="366" y="86" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" fill="#5BE07E">GET /01/09520123456788</text>
+            <text x="366" y="112" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#5BE07E">307 to the published bundle</text>
+            <text x="366" y="134" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#5BE07E">linkType=linkset for every link</text>
+            <text x="40" y="380" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#5AA8FF">395 nm PHOSPHORESCENT LAYER</text>
           </g>
           <g id="layerfail" opacity="0">
             <rect x="0" y="0" width="720" height="430" fill="#CFE0FF" opacity=".55"/>
-            <text x="40" y="220" font-family="IBM Plex Mono" font-size="16" fill="#0A0A0C">SUBSTRATE FLUORESCES BLUE-WHITE</text>
-            <text x="40" y="246" font-family="IBM Plex Mono" font-size="13" fill="#0A0A0C">optical brighteners present, stock is not the specified UV-dull carton</text>
-            <text x="40" y="380" font-family="IBM Plex Mono" font-size="11" fill="#0A0A0C">FAIL STATE</text>
+            <text x="40" y="220" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16" fill="#0A0A0C">SUBSTRATE FLUORESCES BLUE-WHITE</text>
+            <text x="40" y="246" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#0A0A0C">optical brighteners present, stock is not the specified UV-dull carton</text>
+            <text x="40" y="380" font-family="IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" fill="#0A0A0C">FAIL STATE</text>
           </g>
         </svg>
       </div>
@@ -169,9 +173,29 @@
         <button type="button" data-sub="fail" aria-pressed="false">Uncontrolled stock</button>
       </div>
     </div>
-    <div class="ctl">
+    <div class="ctl wide">
       <h4>Reading</h4>
-      <p class="readout" id="readout"><b>365 nm</b><span id="rdline">move the lamp over the carton</span></p>
+      <p class="readout" id="readout" role="status" aria-live="polite"><b>365 nm</b><span id="rdline">move the lamp over the carton</span></p>
+      <!--
+        The record itself, not a description of it. On a phone the article scales to under
+        half size and the marks drawn on it fall below six pixels, so this is the only
+        place the payload can actually be read. Its lines are taken out of the layer being
+        revealed rather than written a second time.
+      -->
+      <ul class="record" id="record" aria-label="The record under the lamp">
+        <!--
+          The 365 nm record, written out so the panel says something with no script at all.
+          Script replaces these with whichever layer is being revealed; without it, this is
+          what the lamp would show, which is the page's payload either way.
+        -->
+        <li style="color:#F2E24A">COMPILED 640 x 454 px</li>
+        <li style="color:#5BE07E">tracking quality 100 / 100</li>
+        <li style="color:#5BE07E">248 features, 16 of 16 areas</li>
+        <li style="color:#5BE07E">min width 70 mm to read at 350 mm</li>
+        <li style="color:#5BE07E">29% of features have a look-alike, normal</li>
+        <li style="color:#5BE07E">VERDICT READY FOR PRESS</li>
+        <li style="color:#5AA8FF">365 nm FLUORESCENT LAYER</li>
+      </ul>
     </div>
   </div>
   <p class="note">A filtered 365 nm head emits about 8.6 lux of visible light, so the field reads black rather than violet, and the substrate is specified UV dull. Blue-white is the documented failure state, not a feature. Fluorescence stops the moment the beam leaves. The sources for all of that name the fluorescence colours and never publish values, so the colours here are an interpretation and are said to be one.</p>
@@ -230,10 +254,14 @@
   var beam = document.getElementById('beam');
   var rdWl = document.querySelector('#readout b');
   var rdLine = document.getElementById('rdline');
+  var rec = document.getElementById('record');
   var l365 = document.getElementById('layer365');
   var l395 = document.getElementById('layer395');
   var lfail = document.getElementById('layerfail');
   var wl = 365, sub = 'spec';
+  // Where the lamp is, so a control that changes what is revealed can redraw from it
+  // rather than leaving the panel describing the layer that is no longer showing.
+  var last = null;
   // Wide enough that a block of the machine record can be read in one position. A
   // narrower head looked more like a lamp and left every line of it cut in half.
   var D = 420;
@@ -281,6 +309,7 @@
   function tint(){ return wl === 365 ? 'rgba(129,151,255,.42)' : 'rgba(163,96,255,.52)'; }
 
   function place(cx, cy){
+    last = { cx: cx, cy: cy };
     var r = article.getBoundingClientRect(), sr = stage.getBoundingClientRect();
     uv.style.setProperty('--x', (cx - r.left) + 'px');
     uv.style.setProperty('--y', (cy - r.top) + 'px');
@@ -299,20 +328,70 @@
       rdWl.textContent = wl + ' nm at x ' + lx + ' y ' + ly;
       rdLine.textContent = over;
       rdLine.className = (sub === 'fail') ? 'em' : '';
+    } else {
+      // Inside the stage but off the article: the gutters either side are 200 px wide, and
+      // leaving the last reading standing there had the panel describing a part of the
+      // carton the lamp was nowhere near.
+      rdWl.textContent = wl + ' nm';
+      rdLine.textContent = 'lamp beside the article';
+      rdLine.className = '';
     }
+    record();
+  }
+
+  /**
+   * The reading panel carries the record itself, taken out of the layer being revealed.
+   *
+   * Read out of the SVG rather than written twice, so the two cannot drift apart. It is
+   * also the only way the record is legible on a phone: the article scales to 45% there,
+   * which puts the 13 px marks in the drawing at under 6 CSS px.
+   */
+  function record(){
+    var layer = (sub === 'fail') ? lfail : (wl === 365 ? l365 : l395);
+    var lines = Array.prototype.map.call(layer.querySelectorAll('text'), function(t){
+      return { text: t.textContent, fill: t.getAttribute('fill') };
+    });
+    rec.innerHTML = '';
+    lines.forEach(function(line){
+      var li = document.createElement('li');
+      li.textContent = line.text;
+      li.style.color = line.fill;
+      rec.appendChild(li);
+    });
   }
 
   function on(e){
     stage.classList.add('lit');
+    stage.classList.add('touched');
     var t = e.touches ? e.touches[0] : e;
     place(t.clientX, t.clientY);
     if (e.cancelable && e.type === 'touchmove') e.preventDefault();
   }
   function off(){
     stage.classList.remove('lit');
+    // The page prints "fluorescence stops the moment the beam leaves" a few lines below
+    // this. Without putting the mask back, the beam faded out and the whole record stayed
+    // lit underneath it, which is the opposite of what the sentence says.
+    uv.style.setProperty('--x', '-999px');
+    uv.style.setProperty('--y', '-999px');
+    last = null;
     rdWl.textContent = wl + ' nm';
     rdLine.textContent = 'lamp off the article';
     rdLine.className = '';
+    record();
+  }
+
+  /**
+   * Draw again from wherever the lamp already is.
+   *
+   * The two controls changed the layer and left the reading alone, so pressing 395 nm
+   * showed the resolver record while the panel still said 365 nm, and pressing the
+   * uncontrolled stock washed the article blue while the panel still described the tracked
+   * region. A resize moved the article out from under the beam the same way.
+   */
+  function redraw(){
+    if (last) place(last.cx, last.cy);
+    else record();
   }
 
   stage.addEventListener('pointermove', on);
@@ -329,6 +408,7 @@
       l365.setAttribute('opacity', wl === 365 ? '1' : '0');
       l395.setAttribute('opacity', wl === 395 ? '1' : '0');
       beam.style.setProperty('--beamtint', tint());
+      redraw();
     });
   });
   Array.prototype.forEach.call(document.querySelectorAll('[data-sub]'), function(b){
@@ -338,14 +418,21 @@
         o.setAttribute('aria-pressed', String(o.dataset.sub === sub));
       });
       lfail.setAttribute('opacity', sub === 'fail' ? '1' : '0');
+      redraw();
     });
   });
 
-  // Rest state: the lamp already sits on the tracked region, so the page shows what it does before anyone touches it.
+  // A resize moves the article out from under a lamp placed against the old geometry.
+  window.addEventListener('resize', redraw);
+
+  // Rest state: the lamp sits on the record itself, so the first frame shows the thing the
+  // page is about rather than a corner of the artwork. It was over the tracked region at
+  // 27% across, which left the record at the far edge of the reveal and half a glyph of it
+  // visible, on a page whose whole payload is that record.
   requestAnimationFrame(function(){
     var r = article.getBoundingClientRect();
     stage.classList.add('lit');
-    place(r.left + r.width * 0.27, r.top + r.height * 0.42);
+    place(r.left + r.width * 0.72, r.top + r.height * 0.33);
   });
 })();
 </script>
