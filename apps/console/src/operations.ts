@@ -132,7 +132,7 @@ export async function publish(
  */
 export async function registerCode(
   tablePath: string,
-  entry: { path: string; href: string; linkType?: string; title?: string; language?: string },
+  entry: { path: string; href: string; title: string; linkType?: string; language?: string },
 ): Promise<{ path: string; replaced: boolean }> {
   // The path is the key the resolver looks scans up by, so it is canonicalised here by
   // the resolver's own parser rather than taken as typed. A code written as an EAN-13
@@ -166,23 +166,35 @@ export async function registerCode(
     current = { version: 1, entries: {} };
   }
 
+  // A title is required rather than optional, because the resolver's own parser refuses a
+  // link without one. Optional here meant this function could build a table the resolver
+  // would then reject, which is the shape of a defect that only appears in production.
   const link: Record<string, unknown> = {
     href: entry.href,
     linkType: entry.linkType ?? "gs1:pip",
+    title: entry.title,
     default: true,
   };
-  if (entry.title !== undefined) link.title = entry.title;
   if (entry.language !== undefined) link.hreflang = [entry.language];
 
   const replaced = Object.hasOwn(current.entries, canonical);
+  // Exactly the two fields the format has, rather than a spread of whatever was on disk.
+  // Spreading carried unknown top-level keys forward, `__proto__` among them, so a table
+  // this console rewrote kept junk that neither it nor the resolver understands.
   const next = {
-    ...current,
+    version: current.version,
     entries: { ...current.entries, [canonical]: [link] },
   };
   // Validated before it is written, so a table this console produced is one the resolver
   // will accept. Writing a table the resolver then refuses would take every other code
   // down with it.
-  parseTable(next);
+  try {
+    parseTable(next);
+  } catch (error) {
+    throw new WorkspaceError(
+      `that would have written a table the resolver refuses, so nothing was written: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 
   const staging = `${tablePath}.writing-${randomBytes(4).toString("hex")}`;
   try {
