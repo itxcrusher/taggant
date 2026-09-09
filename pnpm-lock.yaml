@@ -44,6 +44,9 @@ importers:
       '@taggant/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@taggant/vision':
+        specifier: workspace:*
+        version: link:../../packages/vision
     devDependencies:
       sharp:
         specifier: 0.33.5

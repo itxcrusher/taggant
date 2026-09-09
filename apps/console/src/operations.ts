@@ -18,6 +18,7 @@ import {
   parseTable,
   sameLinkType,
 } from "@taggant/resolver";
+import { fromTargetFile } from "@taggant/vision";
 import { type Experience, type Workspace, WorkspaceError, publishable } from "./workspace.js";
 
 /**
@@ -96,10 +97,25 @@ export async function publish(
   const compiled: CompileOutcome[] = [];
   const targets: Record<string, unknown> = {};
   for (const target of manifest.targets) {
-    if (!(await workspace.hasTarget(experience.id, target.id))) {
-      compiled.push(await compile(workspace, experience, target.id, options.scanDistanceMm));
+    // Usable, not merely present. A target file can exist and still be one the runtime
+    // cannot read: compiled before the descriptor's sampling pattern changed, half
+    // written, or edited by hand. The workspace holds the artwork it was built from, so
+    // the answer is to build it again rather than to refuse and leave the operator with a
+    // message about a file format and no way to act on it.
+    let stored: unknown;
+    if (await workspace.hasTarget(experience.id, target.id)) {
+      try {
+        stored = await workspace.readTarget(experience.id, target.id);
+        fromTargetFile(stored);
+      } catch {
+        stored = undefined;
+      }
     }
-    targets[target.id] = await workspace.readTarget(experience.id, target.id);
+    if (stored === undefined) {
+      compiled.push(await compile(workspace, experience, target.id, options.scanDistanceMm));
+      stored = await workspace.readTarget(experience.id, target.id);
+    }
+    targets[target.id] = stored;
   }
   if (Object.keys(targets).length === 0) {
     throw new WorkspaceError(`${experience.id} has no targets, so there is nothing to recognise`);

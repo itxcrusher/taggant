@@ -3,6 +3,7 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { registerCode } from "../src/operations.js";
 import { createConsole } from "../src/server.js";
@@ -101,6 +102,40 @@ describe("H3: two uploads whose names reduce to one", () => {
   it("keeps the extension on a name that is only an extension", () => {
     expect(safeFilename(".png")).toMatch(/^file-[0-9a-f]{8}\.png$/);
   });
+});
+
+describe("a workspace from before a format change", () => {
+  it("rebuilds a target the runtime cannot read, rather than refusing", async () => {
+    // An operator who used the console before the descriptor's sampling pattern changed
+    // has targets on disk that parse as JSON, carry the right shape, and match nothing.
+    // The workspace still holds the artwork they were built from, so the answer is to
+    // build them again, not to hand back a message about a file format.
+    const { compile, publish } = await import("../src/operations.js");
+    const { readFile: read, writeFile: write } = await import("node:fs/promises");
+    const artwork = fileURLToPath(new URL("../../../examples/postcard/artwork.png", import.meta.url));
+    const overlay = fileURLToPath(new URL("../../../examples/postcard/overlay.svg", import.meta.url));
+    const runtimeDir = fileURLToPath(new URL("../../../packages/runtime/dist", import.meta.url));
+
+    const created = await workspace.create("stale-format", "Stale");
+    const source = await workspace.storeFile(created.id, "artwork", "artwork.png", await read(artwork));
+    const media = await workspace.storeFile(created.id, "media", "overlay.svg", await read(overlay));
+    await workspace.save(created.id, {
+      ...created.manifest,
+      targets: [{ id: "front", source, physicalWidthMm: 148, content: [{ type: "image", src: media }] }],
+    });
+
+    const outcome = await compile(workspace, await workspace.read(created.id), "front", 350);
+    const path = join(workspace.directoryFor(created.id), outcome.path);
+    const stored = JSON.parse(await read(path, "utf8"));
+    expect(stored.formatVersion).toBe(3);
+    await write(path, JSON.stringify({ ...stored, formatVersion: 2 }));
+
+    const out = join(root, "republished");
+    const published = await publish(workspace, await workspace.read(created.id), out, { runtimeDir });
+    expect(published.compiled).toHaveLength(1);
+    const shipped = JSON.parse(await read(join(out, "targets", "front.json"), "utf8"));
+    expect(shipped.formatVersion).toBe(3);
+  }, 60_000);
 });
 
 describe("H5: registering a code", () => {

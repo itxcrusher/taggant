@@ -19,7 +19,8 @@
     "@taggant/compiler": "workspace:*",
     "@taggant/manifest": "workspace:*",
     "@taggant/resolver": "workspace:*",
-    "@taggant/runtime": "workspace:*"
+    "@taggant/runtime": "workspace:*",
+    "@taggant/vision": "workspace:*"
   },
   "devDependencies": {
     "sharp": "0.33.5"
