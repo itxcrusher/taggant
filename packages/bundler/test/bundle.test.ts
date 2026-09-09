@@ -247,6 +247,27 @@ describe("an asset referenced by a fragment", () => {
   });
 });
 
+describe("a target the runtime could not read", () => {
+  it("is refused at publish time rather than shipped to a phone", async () => {
+    // Publishing is the last cheap place to find this. The page calls `fromTargetFile` in
+    // the viewer's browser, so without this check a target compiled before the descriptor
+    // pattern changed publishes successfully and recognises nothing on the device.
+    const { sourceDir, outDir } = await scratch();
+    const stale = { ...TARGET, formatVersion: 2 };
+    await expect(
+      bundle({ manifest: MANIFEST, targets: { front: stale }, sourceDir, outDir, runtimeDir: RUNTIME_DIST }),
+    ).rejects.toThrow(/recognises nothing/);
+  });
+
+  it("names the target and the reason", async () => {
+    const { sourceDir, outDir } = await scratch();
+    const stale = { ...TARGET, formatVersion: 2 };
+    await expect(
+      bundle({ manifest: MANIFEST, targets: { front: stale }, sourceDir, outDir, runtimeDir: RUNTIME_DIST }),
+    ).rejects.toThrow(/front.*format 2 is not supported/s);
+  });
+});
+
 describe("what the README says a bundle is", () => {
   it("writes the number of files the README quotes", async () => {
     // The count changed when a marker file was added to make republishing safe, and the

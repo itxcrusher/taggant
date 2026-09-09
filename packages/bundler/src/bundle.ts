@@ -2,6 +2,7 @@ import { copyFile, mkdir, readdir, rename, rm, writeFile } from "node:fs/promise
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { validateManifest } from "@taggant/manifest";
+import { fromTargetFile } from "@taggant/vision";
 import { type CopiedAsset, copyAsset } from "./assets.js";
 import { entryPage } from "./page.js";
 
@@ -146,6 +147,19 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     const targetDir = join(into, "targets");
     await mkdir(targetDir, { recursive: true });
     for (const target of manifest.targets) {
+      // Read it the way the published page will read it, before shipping it. The page
+      // calls `fromTargetFile` in the viewer's browser; without this, a target the page
+      // cannot read is published successfully and fails on a phone instead, which is the
+      // most expensive place to find out. A target compiled before the descriptor's
+      // sampling pattern changed is exactly this case: it parses as JSON, carries the
+      // right shape, and matches nothing.
+      try {
+        fromTargetFile(options.targets[target.id]);
+      } catch (error) {
+        throw new Error(
+          `the compiled target for ${target.id} cannot be read by the runtime, so publishing it would ship a bundle that recognises nothing: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
       await writeFile(join(targetDir, `${target.id}.json`), JSON.stringify(options.targets[target.id]));
       names.push(target.id);
     }
