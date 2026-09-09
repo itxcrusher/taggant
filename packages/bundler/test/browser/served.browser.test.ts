@@ -218,9 +218,8 @@ describe("a bundle that cannot start", () => {
   const setFallback = async (value: string | undefined) => {
     const manifestPath = join(outDir, "manifest.json");
     const good = await readFile(manifestPath, "utf8");
-    const manifest = JSON.parse(good);
-    if (value === undefined) delete manifest.fallback;
-    else manifest.fallback = value;
+    const { fallback: _existing, ...rest } = JSON.parse(good);
+    const manifest = value === undefined ? rest : { ...rest, fallback: value };
     await writeFile(manifestPath, JSON.stringify(manifest));
     return () => writeFile(manifestPath, good);
   };
