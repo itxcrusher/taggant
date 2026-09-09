@@ -104,10 +104,10 @@ describe("H3: two uploads whose names reduce to one", () => {
   });
 });
 
-describe("a workspace from before a format change", () => {
-  it("rebuilds a target the runtime cannot read, rather than refusing", async () => {
-    // An operator who used the console before the descriptor's sampling pattern changed
-    // has targets on disk that parse as JSON, carry the right shape, and match nothing.
+describe("a target on disk the runtime cannot read", () => {
+  it("is rebuilt rather than refused, because the workspace holds the artwork", async () => {
+    // A target file can be present and unusable: an older format, a half written file, or
+    // one edited by hand. It parses as JSON, carries the right shape, and matches nothing.
     // The workspace still holds the artwork they were built from, so the answer is to
     // build them again, not to hand back a message about a file format.
     const { compile, publish } = await import("../src/operations.js");
@@ -127,14 +127,14 @@ describe("a workspace from before a format change", () => {
     const outcome = await compile(workspace, await workspace.read(created.id), "front", 350);
     const path = join(workspace.directoryFor(created.id), outcome.path);
     const stored = JSON.parse(await read(path, "utf8"));
-    expect(stored.formatVersion).toBe(3);
-    await write(path, JSON.stringify({ ...stored, formatVersion: 2 }));
+    expect(stored.formatVersion).toBe(2);
+    await write(path, JSON.stringify({ ...stored, formatVersion: 1 }));
 
     const out = join(root, "republished");
     const published = await publish(workspace, await workspace.read(created.id), out, { runtimeDir });
     expect(published.compiled).toHaveLength(1);
     const shipped = JSON.parse(await read(join(out, "targets", "front.json"), "utf8"));
-    expect(shipped.formatVersion).toBe(3);
+    expect(shipped.formatVersion).toBe(2);
   }, 60_000);
 });
 

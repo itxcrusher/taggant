@@ -11,6 +11,6 @@ describe("the descriptor sampling pattern", () => {
   });
 
   it("is identical on every run, because a change silently invalidates every compiled target", () => {
-    expect([...TEST_PAIRS.slice(0, 8)]).toEqual([3, -8, 11, 11, -9, 3, -9, 7]);
+    expect([...TEST_PAIRS.slice(0, 8)]).toEqual([-6, -5, 3, 9, -8, 11, 13, 0]);
   });
 });

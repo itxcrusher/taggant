@@ -6,7 +6,7 @@ describe("formatReportLines", () => {
     const lines = formatReportLines(
       "front.tif",
       {
-        formatVersion: 3,
+        formatVersion: 2,
         id: "front-panel",
         width: 1200,
         height: 800,
@@ -36,7 +36,7 @@ describe("formatReportLines", () => {
     const lines = formatReportLines(
       "front.tif",
       {
-        formatVersion: 3,
+        formatVersion: 2,
         id: "front-panel",
         width: 1200,
         height: 800,

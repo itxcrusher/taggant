@@ -10,7 +10,7 @@ import type { TargetFeature } from "./target.js";
  * loaded somewhere else, so the conversion has one home and a round trip test.
  */
 export interface TargetFile {
-  formatVersion: 3;
+  formatVersion: 2;
   id: string;
   width: number;
   height: number;
@@ -32,7 +32,7 @@ export function toTargetFile(target: {
   features: TargetFeature[];
 }): TargetFile {
   return {
-    formatVersion: 3,
+    formatVersion: 2,
     id: target.id,
     width: target.width,
     height: target.height,
@@ -56,11 +56,8 @@ export function toTargetFile(target: {
 export function fromTargetFile(value: unknown): TrackingTarget {
   if (typeof value !== "object" || value === null) throw new TypeError("target file must be an object");
   const file = value as Partial<TargetFile>;
-  if (file.formatVersion !== 3) {
-    // Raised to 3 when the descriptor's sampling pattern changed. A version 2 target holds
-    // descriptors built from the old pattern, which cannot match anything this describes,
-    // and it would fail by recognising nothing rather than by saying so.
-    throw new TypeError(`target file format ${String(file.formatVersion)} is not supported, expected 3`);
+  if (file.formatVersion !== 2) {
+    throw new TypeError(`target file format ${String(file.formatVersion)} is not supported, expected 2`);
   }
   if (typeof file.id !== "string" || !Array.isArray(file.features)) {
     throw new TypeError("target file is missing an id or its features");

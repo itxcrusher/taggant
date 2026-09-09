@@ -23,7 +23,7 @@ const MANIFEST = {
   ],
 };
 
-const TARGET = { formatVersion: 3, id: "front", width: 100, height: 100, features: [] };
+const TARGET = { formatVersion: 2, id: "front", width: 100, height: 100, features: [] };
 
 async function scratch(): Promise<{ sourceDir: string; outDir: string }> {
   const root = await mkdtemp(join(tmpdir(), "taggant-bundle-"));
@@ -250,10 +250,11 @@ describe("an asset referenced by a fragment", () => {
 describe("a target the runtime could not read", () => {
   it("is refused at publish time rather than shipped to a phone", async () => {
     // Publishing is the last cheap place to find this. The page calls `fromTargetFile` in
-    // the viewer's browser, so without this check a target compiled before the descriptor
-    // pattern changed publishes successfully and recognises nothing on the device.
+    // the viewer's browser, so without this check a target the page cannot read publishes
+    // successfully and shows nothing on the device: a target from an older format, one
+    // written half way, or one edited by hand.
     const { sourceDir, outDir } = await scratch();
-    const stale = { ...TARGET, formatVersion: 2 };
+    const stale = { ...TARGET, formatVersion: 1 };
     await expect(
       bundle({ manifest: MANIFEST, targets: { front: stale }, sourceDir, outDir, runtimeDir: RUNTIME_DIST }),
     ).rejects.toThrow(/recognises nothing/);
@@ -261,10 +262,10 @@ describe("a target the runtime could not read", () => {
 
   it("names the target and the reason", async () => {
     const { sourceDir, outDir } = await scratch();
-    const stale = { ...TARGET, formatVersion: 2 };
+    const stale = { ...TARGET, formatVersion: 1 };
     await expect(
       bundle({ manifest: MANIFEST, targets: { front: stale }, sourceDir, outDir, runtimeDir: RUNTIME_DIST }),
-    ).rejects.toThrow(/front.*format 2 is not supported/s);
+    ).rejects.toThrow(/front.*format 1 is not supported/s);
   });
 });
 

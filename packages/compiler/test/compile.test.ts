@@ -65,7 +65,7 @@ describe("compileTarget", () => {
 
   it("records the format version so a runtime can refuse what it cannot read", async () => {
     const target = await compileTarget(await noisyArtwork(), { id: "front-panel", scanDistanceMm: 400 });
-    expect(target.formatVersion).toBe(3);
+    expect(target.formatVersion).toBe(2);
   });
 
   it("serialises to JSON and back without losing features", async () => {
