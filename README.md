@@ -135,6 +135,8 @@ That is a claim, so it is tested as one. A test serves the folder from a plain s
 
 Content addressing is why republishing an experience whose video did not change does not invalidate that video, and why the same file is never stored twice. Paths in a manifest are resolved against the manifest's own directory and refused if they leave it: publishing runs with the rights of whoever publishes, and a manifest is a format other people write.
 
+An SVG carrying a script element, an event handler, a `javascript:` link or a `foreignObject` is refused by name. An SVG is a document rather than a picture, and although the runtime loads content through an `img` element and would run none of it, the file also sits at its own address in the bundle, where a browser opening it directly would. A bundle is meant to be served by any static host, including one that sets no headers, so this cannot be left to the host. It is refused rather than stripped, because stripping publishes a drawing nobody drew.
+
 ## Resolving a printed code
 
 A code printed on a thing is a promise that scanning it will reach something. The resolver keeps that promise, and it does so the way the standard says to rather than the way that is convenient.
@@ -246,7 +248,7 @@ These hold for every release and are the reason the project exists in this shape
 
 ## What has and has not been verified
 
-The seven packages are exercised by 318 tests, and the whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all.
+The seven packages are exercised by 324 tests, and the whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all.
 
 The runtime is driven in a real browser rather than asserted: the test writes a video file of the artwork sitting in a larger frame, hands it to Chromium as a camera, and waits for the page to reach its tracking state, then checks that the content landed where the feed actually put the artwork. A published bundle is driven the same way, from a static folder with nothing else running, on artwork put through the real compiler first, which is the only place the two halves of the system meet.
 

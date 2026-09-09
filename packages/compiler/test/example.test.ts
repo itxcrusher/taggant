@@ -80,6 +80,34 @@ describe("the postcard example", () => {
     }
   });
 
+  it("quotes the compiler correctly on the project page, which nothing else checks", async () => {
+    // These are printed under the lamp on `site/index.html`, and the page invites the
+    // reader to check them against the tool. Six figures with nothing running over them:
+    // the repetition one went stale there once already and was caught by grep.
+    const page = await readFile(join(EXAMPLE, "../../site/index.html"), "utf8");
+    const target = await compileTarget(await readFile(join(EXAMPLE, "artwork.png")), {
+      id: "front",
+      scanDistanceMm: 350,
+    });
+    const report = target.report;
+    const across = Math.round(report.smallestUsableScale * report.analysisWidth);
+    for (const claim of [
+      `COMPILED ${target.width} x ${target.height} px`,
+      `tracking quality ${report.score} / 100`,
+      `${report.featureCount} features, ${report.areasWithFeatures} of ${report.areas} areas`,
+      `min width ${report.minimumWidthMm} mm to read at 350 mm`,
+      `${Math.round((report.repetition ?? 0) * 100)}% of features have a look-alike`,
+      report.pass ? "VERDICT READY FOR PRESS" : "VERDICT NOT READY",
+    ]) {
+      expect(page, `the project page does not say: ${claim}`).toContain(claim);
+    }
+    // The page draws one mark per feature. Drawn and stated have to agree, because a
+    // reader counts the claim and sees the drawing.
+    const marks = page.match(/for \((?:let|var) j = 0; j < (\d+); j\+\+\)/)?.[1];
+    expect(marks, "the loop drawing the feature marks was not found on the page").toBeDefined();
+    expect(Number(marks)).toBe(report.featureCount);
+  });
+
   it("names files that exist", async () => {
     const manifest = JSON.parse(await readFile(join(EXAMPLE, "manifest.json"), "utf8"));
     for (const target of manifest.targets) {

@@ -247,6 +247,55 @@ describe("an asset referenced by a fragment", () => {
   });
 });
 
+describe("an SVG that carries script", () => {
+  const publish = async (svg: string) => {
+    const { sourceDir, outDir } = await scratch();
+    await writeFile(join(sourceDir, "overlay.svg"), svg);
+    return bundle({
+      manifest: MANIFEST,
+      targets: { front: TARGET },
+      sourceDir,
+      outDir,
+      runtimeDir: RUNTIME_DIST,
+    });
+  };
+
+  // A bundle is served by any static host, including one that sets no headers, and the
+  // console takes uploads: an operator can be handed an SVG and publish it onto their own
+  // domain without opening it. The runtime loads content through an img element and would
+  // not run any of this; navigating straight to the asset would.
+  const active: [string, string][] = [
+    [
+      "a script element",
+      '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("//evil.example")</script></svg>',
+    ],
+    ["an event handler", '<svg xmlns="http://www.w3.org/2000/svg"><rect onload="fetch(1)" /></svg>'],
+    [
+      "a javascript: link",
+      '<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:alert(1)"><rect /></a></svg>',
+    ],
+    [
+      "a foreignObject",
+      '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><b>x</b></foreignObject></svg>',
+    ],
+  ];
+  for (const [what, svg] of active) {
+    it(`refuses ${what}`, async () => {
+      await expect(publish(svg)).rejects.toThrow(/carrying/);
+    });
+  }
+
+  it("publishes an ordinary drawing, including one that says the word script", async () => {
+    // The refusal has to be about what a browser would run, not about a word appearing.
+    const result = await publish(
+      '<svg xmlns="http://www.w3.org/2000/svg"><title>A script of the play</title>' +
+        "<!-- <script>once, in a comment</script> -->" +
+        '<path d="M0 0h10v10H0z" /></svg>',
+    );
+    expect(result.assets).toHaveLength(1);
+  });
+});
+
 describe("a target the runtime could not read", () => {
   it("is refused at publish time rather than shipped to a phone", async () => {
     // Publishing is the last cheap place to find this. The page calls `fromTargetFile` in

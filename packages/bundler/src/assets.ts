@@ -28,12 +28,49 @@ export async function copyAsset(source: string, sourceDir: string, outDir: strin
 
   const absolute = await realWithin(sourceDir, file);
   const bytes = await readFile(absolute);
+  if (extname(file).toLowerCase() === ".svg") refuseActiveSvg(source, bytes);
   const digest = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
   const name = `${digest}${extname(file).toLowerCase()}`;
   const assets = join(outDir, "assets");
   await mkdir(assets, { recursive: true });
   await copyFile(absolute, join(assets, name));
   return { from: source, to: `assets/${name}${fragment}`, bytes: bytes.length };
+}
+
+/**
+ * An SVG is a document, not a picture, and it can carry script.
+ *
+ * The runtime loads content through an `img` element, which does not run script, so this
+ * is not reachable through the experience. Navigating straight to the asset is: the file
+ * sits at its own address in the bundle, and a browser opening it runs whatever is inside
+ * on the bundle's own origin.
+ *
+ * This was written down as something only a header on the host could fix. That is wrong in
+ * a way that matters here, because a bundle is meant to be served by any static host,
+ * including one that sets no headers, and the console accepts uploads: an operator can be
+ * handed an SVG by a designer or a client and publish it onto their own domain without
+ * ever opening it.
+ *
+ * So it is refused rather than stripped. Stripping would quietly change somebody's artwork
+ * and publish a thing they did not draw; refusing tells them which file and what is in it.
+ */
+function refuseActiveSvg(source: string, bytes: Buffer): void {
+  // Comments first, or a commented-out handler reads as live and an author is refused for
+  // nothing. Text nodes are not stripped: script inside a `title` is still inside the file
+  // a browser parses.
+  const text = bytes.toString("utf8").replace(/<!--[\s\S]*?-->/g, "");
+  const found: string[] = [];
+  if (/<\s*script[\s>/]/i.test(text)) found.push("a script element");
+  // Any `on*` attribute is an event handler. Matched on the attribute position rather than
+  // anywhere in the text, so a word like `one=` inside a path or a title does not trip it.
+  if (/\son[a-z]+\s*=\s*["']/i.test(text)) found.push("an event handler attribute");
+  if (/(?:href|xlink:href)\s*=\s*["']\s*javascript:/i.test(text)) found.push("a javascript: link");
+  // Anything inside this is HTML, parsed as HTML, script included.
+  if (/<\s*foreignObject[\s>/]/i.test(text)) found.push("a foreignObject");
+  if (found.length === 0) return;
+  throw new Error(
+    `${source} is an SVG carrying ${found.join(" and ")}, and a bundle is served from a host that may set no headers. Take it out, or export the artwork as a PNG.`,
+  );
 }
 
 /**
