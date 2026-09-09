@@ -40,8 +40,7 @@ export function entryPage(options: { title: string; targets: string[] }): string
     <div id="scene"></div>
     <p id="status">Starting.</p>
     <script type="module">
-      import { mountExperience } from "./runtime/index.js";
-      import { fromTargetFile } from "./runtime/vision.js";
+      import { mountExperience, fromTargetFile } from "./runtime/index.js";
 
       const status = document.getElementById("status");
       const say = {

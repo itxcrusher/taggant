@@ -129,7 +129,7 @@ $ node packages/bundler/dist/cli.js examples/postcard/manifest.json     --target
   Serve that folder over HTTPS or from localhost. It needs nothing else.
 ```
 
-What comes out is a folder: an entry page, the manifest rewritten to point at what was copied, the compiled targets, the assets under names taken from their own content, the runtime carried in rather than linked, and one marker file. The marker is what makes republishing safe: publishing empties a folder only when this tool wrote it, so pointing `--out` at the wrong directory is refused by name rather than acted on. Nothing in it reaches for the network.
+What comes out is a folder: an entry page, the manifest rewritten to point at what was copied, the compiled targets, the assets under names taken from their own content, the runtime carried in rather than linked, and one marker file. The runtime is about 45 KB across three files that share one chunk, which matters because the person fetching it has just scanned something printed and is probably on a phone. The marker is what makes republishing safe: publishing empties a folder only when this tool wrote it, so pointing `--out` at the wrong directory is refused by name rather than acted on. Nothing in it reaches for the network.
 
 That is a claim, so it is tested as one. A test serves the folder from a plain static server with nothing else running, drives it in a real browser against a synthetic camera, and waits for it to find the artwork. It fails on any request that leaves the origin and on any request the folder cannot answer. A second test reads every file the bundle ships and refuses an absolute address in any of them.
 
@@ -223,7 +223,7 @@ The resolver's image is two stages, so what ships is the built service and a Nod
 
 That is a poll of the file rather than a watch on it, which is worth a sentence because the obvious version does not work. A watch bound to a path stops firing for good once the file is replaced by a rename, which is how anything that writes a file safely writes it, including this project's own console; and a bind mount frequently delivers no file events into a container at all. Both were measured against this stack, and both end the same way: the operator edits the table, the resolver keeps serving the old one, and nothing anywhere says so.
 
-**The stack is driven on every push.** Continuous integration builds the image, publishes a real bundle into it, and runs fifteen checks over the whole path: a scan redirects rather than answering itself, carries the request's own query through, points at the static host rather than at the resolver, and says where the linkset is even while redirecting; the bundle is served and carries its runtime, its worker, its vision build and its manifest; the resolver counts what it answered; and a code nothing is assigned to is a 404 rather than a guess.
+**The stack is driven on every push.** Continuous integration builds the image, publishes a real bundle into it, and runs sixteen checks over the whole path: a scan redirects rather than answering itself, carries the request's own query through, points at the static host rather than at the resolver, and says where the linkset is even while redirecting; the bundle is served and carries its runtime, its worker, its vision build and its manifest; the resolver counts what it answered; and a code nothing is assigned to is a 404 rather than a guess.
 
 Then it stops the resolver and checks the bundle still serves. That is the continuity claim, and it is the difference between making it and testing it.
 

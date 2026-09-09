@@ -200,18 +200,22 @@ async function vendorRuntime(outDir: string, runtimeDir?: string): Promise<strin
   const into = join(outDir, "runtime");
   await mkdir(into, { recursive: true });
 
-  const copies: Array<[string, string]> = [
-    [join(source, "index.js"), join(into, "index.js")],
-    [join(source, "worker.js"), join(into, "worker.js")],
-  ];
-  for (const [from, to] of copies) await copyFile(from, to);
+  // Everything the runtime build emitted, not a list of names written here. Naming them
+  // meant this file had to be edited whenever that build changed shape, and forgetting
+  // would publish a bundle missing a file it imports: no error here, and a page that does
+  // not start on somebody's phone.
+  const emitted = (await readdir(source)).filter((name) => name.endsWith(".js")).sort();
+  if (!emitted.includes("index.js") || !emitted.includes("worker.js")) {
+    throw new Error(
+      `the runtime at ${source} does not look built: expected index.js and worker.js, found ${emitted.join(", ") || "nothing"}`,
+    );
+  }
+  for (const name of emitted) await copyFile(join(source, name), join(into, name));
 
-  // The page rebuilds target files into tracking targets, so that one build travels with
-  // it. The validator does not: it was already run, here, on the manifest being written,
-  // and its build imports a JSON schema library that a browser cannot resolve. Shipping it
-  // would put a broken import in a bundle whose whole claim is that it runs on its own.
-  const visionDir = dirname(createRequire(import.meta.url).resolve("@taggant/vision"));
-  await copyFile(join(visionDir, "index.js"), join(into, "vision.js"));
-
-  return ["runtime/index.js", "runtime/worker.js", "runtime/vision.js"];
+  // No separate copy of the vision core. The page rebuilds target files into tracking
+  // targets and the runtime re-exports the one function that takes, so it comes from the
+  // build already here rather than from a second one. The manifest validator is still not
+  // shipped: it was run here, on the manifest being written, and its build imports a JSON
+  // schema library a browser cannot resolve.
+  return emitted.map((name) => `runtime/${name}`);
 }

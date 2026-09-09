@@ -97,7 +97,19 @@ describe("bundle", () => {
     // The worker is loaded by URL from beside the runtime, so it has to travel with it.
     // The validator does not travel: its build imports a JSON schema library that no
     // browser can resolve, and a bundle that ships a broken import is not self contained.
-    expect(runtime.sort()).toEqual(["index.js", "vision.js", "worker.js"]);
+    // Whatever the runtime build emits, plus the guarantee that matters: nothing the
+    // bundle imports is missing from it.
+    expect(runtime).toContain("index.js");
+    expect(runtime).toContain("worker.js");
+    for (const name of ["index.js", "worker.js"]) {
+      const source = await readFile(join(outDir, "runtime", name), "utf8");
+      for (const match of source.matchAll(/from\s*"(\.[^"]+)"/g)) {
+        const relative = match[1] ?? "";
+        expect(runtime, `${name} imports ${relative}, which is not in the bundle`).toContain(
+          relative.replace(/^\.\//, ""),
+        );
+      }
+    }
   });
 
   it("refuses a manifest that does not validate", async () => {

@@ -74,9 +74,23 @@ check(
 );
 
 const target = new URL(location);
-for (const path of ["runtime/index.js", "runtime/worker.js", "runtime/vision.js", "manifest.json"]) {
+for (const path of ["runtime/index.js", "runtime/worker.js", "manifest.json"]) {
   const response = await fetch(new URL(path, target).toString());
   check(`the bundle carries ${path}`, response.ok, `status ${response.status}`);
+}
+
+// And whatever those two import, which is where a missing file actually bites: the page
+// starts, the worker does not, and recognition quietly falls back to the main thread.
+// Naming the runtime's files here meant this check had to be edited whenever that build
+// changed shape, and it was, once, in the wrong direction.
+for (const from of ["runtime/index.js", "runtime/worker.js"]) {
+  const source = await (await fetch(new URL(from, target).toString())).text();
+  const imports = [...source.matchAll(/from\s*"(\.[^"]+)"/g)].map((match) => match[1]);
+  for (const relative of imports) {
+    const resolved = new URL(relative, new URL(from, target)).toString();
+    const response = await fetch(resolved);
+    check(`${from} can load ${relative}`, response.ok, `status ${response.status}`);
+  }
 }
 
 console.log("\nwhat it reports about itself");

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -76,14 +76,23 @@ beforeAll(async () => {
   const files = new Map<string, { body: Buffer; type: string }>([
     ["/page.html", { body: await readFile(join(here, "page.html")), type: "text/html" }],
     ["/runtime.js", { body: await readFile(RUNTIME), type: "text/javascript" }],
-    // The worker is loaded by URL from beside the runtime, so it has to be served too.
-    ["/worker.js", { body: await readFile(join(dirname(RUNTIME), "worker.js")), type: "text/javascript" }],
     ["/manifest.json", { body: Buffer.from(JSON.stringify(MANIFEST)), type: "application/json" }],
     ["/target.json", { body: Buffer.from(JSON.stringify(target)), type: "application/json" }],
     ["/overlay.svg", { body: Buffer.from(OVERLAY), type: "image/svg+xml" }],
     // A page with no manifest of its own, so a test can mount whatever it needs to.
     ["/bare.html", { body: Buffer.from(BARE), type: "text/html" }],
   ]);
+
+  // Everything the build emitted, under its own name. The worker is loaded by URL from
+  // beside the runtime and both import a shared chunk, so naming the files here meant this
+  // server had to be edited whenever that build changed shape. It was not, and the whole
+  // suite went red at once with a 404 nobody could see from the assertion that failed.
+  const dist = dirname(RUNTIME);
+  for (const name of await readdir(dist)) {
+    if (name.endsWith(".js")) {
+      files.set(`/${name}`, { body: await readFile(join(dist, name)), type: "text/javascript" });
+    }
+  }
 
   const server = createServer((request, response) => {
     const file = files.get((request.url ?? "").split("?")[0] ?? "");
