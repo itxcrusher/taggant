@@ -64,6 +64,6 @@ describe("the target file", () => {
   it("refuses something that is not a target file at all", () => {
     expect(() => fromTargetFile(null)).toThrow(/must be an object/i);
     expect(() => fromTargetFile("target")).toThrow(/must be an object/i);
-    expect(() => fromTargetFile({ formatVersion: 2 })).toThrow(/missing an id/i);
+    expect(() => fromTargetFile({ formatVersion: 3 })).toThrow(/missing an id/i);
   });
 });

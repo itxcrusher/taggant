@@ -23,7 +23,7 @@ const MANIFEST = {
   ],
 };
 
-const TARGET = { formatVersion: 2, id: "front", width: 100, height: 100, features: [] };
+const TARGET = { formatVersion: 3, id: "front", width: 100, height: 100, features: [] };
 
 async function scratch(): Promise<{ sourceDir: string; outDir: string }> {
   const root = await mkdtemp(join(tmpdir(), "taggant-bundle-"));

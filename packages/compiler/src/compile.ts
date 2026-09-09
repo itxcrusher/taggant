@@ -11,7 +11,7 @@ export interface CompileOptions {
 }
 
 export interface CompiledTarget {
-  formatVersion: 2;
+  formatVersion: 3;
   id: string;
   width: number;
   height: number;
@@ -40,7 +40,7 @@ export async function compileTarget(artwork: Buffer, options: CompileOptions): P
     scanDistanceMm: options.scanDistanceMm,
   });
 
-  return { formatVersion: 2, id: options.id, width: image.width, height: image.height, features, report };
+  return { formatVersion: 3, id: options.id, width: image.width, height: image.height, features, report };
 }
 
 /** The target in the shape that is written to disk, with the report alongside it. */
