@@ -76,6 +76,28 @@ A camera frame is described at two sizes for the same reason and one more: a fra
 
 Recognition is measured against known mappings rather than asserted. Artwork is warped by a homography the test chose, located, and the four corners of the artwork are checked against where that mapping puts them: under 4 px square on, under 6 px turned on its side, under 8 px held at an angle, and it is still found through two passes of blur.
 
+### Measuring whether a change to it helps
+
+```
+$ node packages/vision/bench/recognition.mjs
+
+  3 images x 21 conditions = 63 trials
+  found means a pose whose worst artwork corner is within 25 px of the truth
+
+  scale 0.45             #################### 3/3
+  rotated 135            #################### 3/3
+  noise 30               #############....... 2/3
+  worst case             #######............. 1/3
+  ...
+  found            60 of 63 (95.2%)
+  wrong pose taken 0
+  corner error     median 1.10 px, mean 1.28 px
+```
+
+Pass it a folder of artwork and it uses that as well. Ten real pieces are worth far more than the generated ones.
+
+This exists because descriptor quality and recognition are not the same thing, and it is easy to improve the first and report it as the second. A change to the descriptor's sampling pattern once measured better on every quality figure taken, bit balance, dead bits, and the distance between distinct features, and moved recognition by four trials in 336. The matcher applies a ratio test, a mutual best check, a 72 bit ceiling and a ten inlier floor, and those absorb descriptor quality before it reaches a decision. Run this before and after any change to detection, description, matching or pose fitting, and compare the two numbers rather than one.
+
 ## Showing something on a print
 
 `examples/postcard` is the whole path in one directory: a hand written manifest, the artwork it names, and a page that opens the camera and puts content on that artwork when it finds it. Its README has the three commands.
