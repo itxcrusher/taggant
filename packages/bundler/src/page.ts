@@ -53,13 +53,6 @@ export function entryPage(options: { title: string; targets: string[] }): string
         tracking: "Found it.",
       };
 
-      // Anything that goes wrong before the experience mounts is told to the viewer.
-      // Without this a file lost in a copy, which is the failure that actually happens,
-      // leaves the page saying "Starting." forever with the reason only in the console.
-      window.addEventListener("unhandledrejection", (event) => {
-        status.textContent = "This experience could not be loaded: " + (event.reason?.message ?? event.reason);
-      });
-
       const names = ${targets};
       // This manifest was validated when the bundle was written, and rewritten by the same
       // step that copied the files it names, so the page does not validate it again. The
@@ -70,20 +63,52 @@ export function entryPage(options: { title: string; targets: string[] }): string
         if (!response.ok) throw new Error(path + " is missing from this bundle (" + response.status + ")");
         return response.json();
       };
-      const [manifest, ...targetFiles] = await Promise.all([
-        load("./manifest.json"),
-        ...names.map((name) => load("./targets/" + name + ".json")),
-      ]);
+      // The manifest is read first and on its own, because its fallback is the only thing
+      // that can help if anything after it fails.
+      let fallback = null;
+      const start = async () => {
+        const manifest = await load("./manifest.json");
+        if (typeof manifest.fallback === "string") fallback = manifest.fallback;
+        const targetFiles = await Promise.all(
+          names.map((name) => load("./targets/" + name + ".json")),
+        );
+        window.taggantExperience = await mountExperience({
+          manifest,
+          targets: targetFiles.map(fromTargetFile),
+          container: document.getElementById("scene"),
+          options: {
+            onStateChange: (state) => { status.textContent = say[state] ?? state; },
+            onProblem: (message) => { status.textContent = message; },
+          },
+        });
+      };
 
-      window.taggantExperience = await mountExperience({
-        manifest,
-        targets: targetFiles.map(fromTargetFile),
-        container: document.getElementById("scene"),
-        options: {
-          onStateChange: (state) => { status.textContent = say[state] ?? state; },
-          onProblem: (message) => { status.textContent = message; },
-        },
-      });
+      // Everything above runs inside this, rather than at the top of the module, because a
+      // module that throws while it is being evaluated is a page error and not a rejection:
+      // an unhandledrejection handler never sees it, and the viewer is left reading
+      // "Starting." forever with the reason in a console they do not have. A file lost in a
+      // copy and a target this build cannot read both arrive that way.
+      //
+      // The fallback is followed here for the same reason the runtime follows it when the
+      // camera will not open. Somebody scanned a printed code; the manifest says where they
+      // should go when the experience cannot be shown, and a bundle that cannot start is
+      // exactly that case.
+      const safe = (value) => {
+        try {
+          const url = new URL(value, location.href);
+          return url.protocol === "http:" || url.protocol === "https:";
+        } catch {
+          return false;
+        }
+      };
+      const failed = (reason) => {
+        const message = reason?.message ?? String(reason);
+        document.getElementById("scene").dataset.state = "error";
+        status.textContent = "This experience could not be loaded: " + message;
+        if (fallback && safe(fallback)) location.replace(fallback);
+      };
+      window.addEventListener("unhandledrejection", (event) => failed(event.reason));
+      start().catch(failed);
     </script>
   </body>
 </html>

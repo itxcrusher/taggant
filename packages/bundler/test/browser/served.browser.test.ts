@@ -198,3 +198,67 @@ describe("a published bundle", () => {
     expect(offending).toEqual([]);
   });
 });
+
+describe("a bundle that cannot start", () => {
+  // The page used to do its work at the top of the module. A module that throws while it
+  // is being evaluated is a page error, not a rejection, so the unhandledrejection handler
+  // never fired: whoever scanned a printed code was left reading "Starting." with the
+  // reason in a console they do not have, and the fallback the manifest exists to provide
+  // was never reached. That is worse than a camera which will not open.
+  //
+  // Two cases rather than one, because following the fallback destroys the page: asserting
+  // on the message and on the navigation in the same run is a race with the navigation.
+  const breakTheTarget = async () => {
+    const targetPath = join(outDir, "targets", "front.json");
+    const good = await readFile(targetPath, "utf8");
+    // Valid JSON, wrong shape: exactly how an unreadable target arrives.
+    await writeFile(targetPath, JSON.stringify({ formatVersion: 99 }));
+    return () => writeFile(targetPath, good);
+  };
+  const setFallback = async (value: string | undefined) => {
+    const manifestPath = join(outDir, "manifest.json");
+    const good = await readFile(manifestPath, "utf8");
+    const manifest = JSON.parse(good);
+    if (value === undefined) delete manifest.fallback;
+    else manifest.fallback = value;
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    return () => writeFile(manifestPath, good);
+  };
+
+  it("says so, instead of leaving the viewer on Starting forever", async () => {
+    if (!browser) throw new Error("no browser");
+    const restoreTarget = await breakTheTarget();
+    const restoreManifest = await setFallback(undefined);
+    const page = await browser.newPage();
+    try {
+      await page.goto(`${origin}/index.html`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => !(document.getElementById("status")?.textContent ?? "").startsWith("Starting"),
+        undefined,
+        { timeout: 20_000 },
+      );
+      expect(await page.textContent("#status")).toContain("could not be loaded");
+      expect(await page.getAttribute("#scene", "data-state")).toBe("error");
+    } finally {
+      await page.close().catch(() => undefined);
+      await restoreTarget();
+      await restoreManifest();
+    }
+  }, 60_000);
+
+  it("sends the viewer where the manifest says to go", async () => {
+    if (!browser) throw new Error("no browser");
+    const restoreTarget = await breakTheTarget();
+    const restoreManifest = await setFallback(`${origin}/fallback-reached`);
+    const page = await browser.newPage();
+    try {
+      await page.goto(`${origin}/index.html`, { waitUntil: "domcontentloaded" });
+      await page.waitForURL(/fallback-reached/, { timeout: 20_000 });
+      expect(page.url()).toContain("/fallback-reached");
+    } finally {
+      await page.close().catch(() => undefined);
+      await restoreTarget();
+      await restoreManifest();
+    }
+  }, 60_000);
+});
