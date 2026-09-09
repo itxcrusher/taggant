@@ -20,11 +20,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r typecheck
       - run: pnpm check
-      # Two packages drive a real Chromium against a synthetic camera, so the browser has
-      # to be here before the tests run. Those tests also work on build output rather than
-      # source: the runtime is loaded into a page as a built module, and the bundler's job
-      # is to package built modules, so everything is built before anything is tested.
-      - run: pnpm exec playwright install --with-deps chromium
+      # Two packages drive a real browser against a synthetic camera, so the browsers have
+      # to be here before the tests run. All three engines are installed rather than only
+      # Chromium: the descriptor comparison runs in every one that starts, and installing
+      # one is how it would quietly go back to checking a single engine. Those tests also
+      # work on build output rather than source: the runtime is loaded into a page as a
+      # built module, and the bundler's job is to package built modules, so everything is
+      # built before anything is tested.
+      - run: pnpm exec playwright install --with-deps chromium firefox webkit
       - run: pnpm -r build
       - run: pnpm -r test
 

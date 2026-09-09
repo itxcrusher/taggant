@@ -248,11 +248,11 @@ These hold for every release and are the reason the project exists in this shape
 
 ## What has and has not been verified
 
-The seven packages are exercised by 324 tests, and the whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all.
+The seven packages are exercised by 327 tests, and the whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all.
 
 The runtime is driven in a real browser rather than asserted: the test writes a video file of the artwork sitting in a larger frame, hands it to Chromium as a camera, and waits for the page to reach its tracking state, then checks that the content landed where the feed actually put the artwork. A published bundle is driven the same way, from a static folder with nothing else running, on artwork put through the real compiler first, which is the only place the two halves of the system meet.
 
-Descriptors are compared across engines, because the compiler runs in Node and the runtime runs in a browser and the whole thing rests on them agreeing. That test runs the same artwork through both and requires every descriptor to match.
+Descriptors are compared across engines, because the compiler runs in Node and the runtime runs in a browser and the whole thing rests on them agreeing. That test runs the same artwork through Node and through every engine Playwright can start, which on a machine with all of them installed is Chromium, Firefox and WebKit, and requires every descriptor to match in each. It is not an argument from the source being shared: it once failed, over one unit in the last place of `Math.atan2`. On the last run, Chromium and WebKit each measured 63 of 356 feature angles differently from Node and produced identical descriptors anyway, which is what the angle quantisation is for; Firefox agreed outright. Those counts are printed rather than asserted, because they belong to the engine builds rather than to this project. A machine where none of them starts fails the file rather than passing it having compared Node against itself.
 
 **Not verified: any real camera, and any real print.** Everything above is synthetic. The device matrix is empty and stays empty until it can be filled in with measurements, and the assumed camera resolving power in the print readiness report is an assumption until then.
 
