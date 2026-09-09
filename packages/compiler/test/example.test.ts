@@ -57,6 +57,29 @@ describe("the postcard example", () => {
     expect(readme).toContain(`needs ${across} px across and so ${target.report.minimumWidthMm} mm at 350 mm`);
   });
 
+  it("quotes the whole compile in the example README, not only the width", async () => {
+    // The previous round pinned the width line and the repetition line went stale anyway,
+    // in two files, and was caught by reading rather than by anything running. The example
+    // README prints the compiler's output verbatim, so every line of it is a claim.
+    const readme = await readFile(join(EXAMPLE, "README.md"), "utf8");
+    const target = await compileTarget(await readFile(join(EXAMPLE, "artwork.png")), {
+      id: "front",
+      scanDistanceMm: 350,
+    });
+    const report = target.report;
+    const across = Math.round(report.smallestUsableScale * report.analysisWidth);
+    const repetition = Math.round((report.repetition ?? 0) * 100);
+    for (const line of [
+      `size                  ${target.width} x ${target.height} px`,
+      `tracking quality      ${report.score} / 100`,
+      `features              ${report.featureCount}, reaching ${report.areasWithFeatures} of ${report.areas} areas`,
+      `minimum print width   ${report.minimumWidthMm} mm to be read from 350 mm away, being ${across} px across the artwork`,
+      `repeated detail       ${repetition}% of features have a look-alike`,
+    ]) {
+      expect(readme, `the README does not say: ${line}`).toContain(line);
+    }
+  });
+
   it("names files that exist", async () => {
     const manifest = JSON.parse(await readFile(join(EXAMPLE, "manifest.json"), "utf8"));
     for (const target of manifest.targets) {

@@ -1,6 +1,6 @@
 import type { Corner } from "./features.js";
 import { type GrayscaleImage, sample } from "./image.js";
-import { DESCRIPTOR_BITS, PATCH_RADIUS, TEST_PAIRS } from "./pattern.js";
+import { DESCRIPTOR_BITS, PATCH_RADIUS, SAMPLE_RADIUS, TEST_PAIRS } from "./pattern.js";
 
 export interface DescribedCorner extends Corner {
   /** Radians. The dominant direction of the patch, so rotating the print does not change the bits. */
@@ -94,12 +94,15 @@ function rotationFor(angle: number): { cos: number; sin: number } {
 /**
  * How far from a corner the sampling pattern actually reaches.
  *
- * The pattern draws each coordinate from a square of half width SAMPLE_REACH, so a rotated
- * pair reaches the diagonal, not the side. Guarding at the patch radius left 6% of sample
- * points outside it, read from clamped pixels, which makes a descriptor depend on where the
- * corner sits rather than on what is under it.
+ * The pattern draws each coordinate from a square of half width `SAMPLE_RADIUS`, so a
+ * rotated pair reaches the diagonal of that square rather than its side. Guarding at the
+ * patch radius left 6% of sample points outside it, read from clamped pixels, which makes a
+ * descriptor depend on where the corner sits rather than on what is under it.
+ *
+ * Derived from the constant rather than repeating its value, because the two drifting apart
+ * is silent: a wider pattern would read past this guard and nothing would say so.
  */
-const DESCRIBE_MARGIN = Math.ceil(Math.SQRT2 * 13);
+export const DESCRIBE_MARGIN = Math.ceil(Math.SQRT2 * SAMPLE_RADIUS);
 
 export function describeCorners(image: GrayscaleImage, corners: Corner[]): DescribedCorner[] {
   const described: DescribedCorner[] = [];
