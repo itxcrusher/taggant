@@ -43,6 +43,8 @@
           options: {
             resolve: (src) => `/${src}`,
             onStateChange: (state) => window.taggantStates.push(state),
+            // So a test about the camera deadline does not have to wait the real one out.
+            ...(params.has("ready") ? { readyTimeoutMs: Number(params.get("ready")) } : {}),
           },
         });
       } catch (error) {

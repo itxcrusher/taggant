@@ -376,6 +376,43 @@ describe("the runtime in a browser, against a camera", () => {
     await context.close();
   }, 120_000);
 
+  /**
+   * A camera can be handed over and never become playable. A virtual device with nothing
+   * behind it does this, and so does an engine on a runner: WebKit on Linux produced a live
+   * video track with a resolution and no picture, which is how this was found.
+   *
+   * `video.play()` then neither resolves nor rejects. That is worse than either, because
+   * nothing above it can see it: the mount never settles, the container never reaches an
+   * error state, the entry page's own catch never runs, and the fallback the manifest
+   * exists to provide is never followed. The viewer reads "asking for the camera" for as
+   * long as they are willing to wait. Only the wait for a picture was bounded, one line
+   * below the wait for playback that was not.
+   */
+  it("gives up on a camera that opens and never plays, rather than asking for ever", async () => {
+    if (!browser) throw new Error("no browser");
+    const context = await browser.newContext({ permissions: [] });
+    const page = await context.newPage();
+    // A stream with no track in it: accepted by `srcObject`, never playable. No device is
+    // reachable from here, and none is asked for.
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "mediaDevices", {
+        configurable: true,
+        value: { getUserMedia: async () => new MediaStream() },
+      });
+    });
+    await page.goto(`${origin}/page.html?ready=1200`);
+    await page.waitForFunction(
+      () => {
+        const state = document.querySelector("#stage")?.getAttribute("data-state");
+        return state === "error" || state === "denied";
+      },
+      undefined,
+      { timeout: 30_000 },
+    );
+    expect(await page.locator("#stage").getAttribute("data-state")).toBe("error");
+    await context.close();
+  }, 60_000);
+
   it("reports a refused camera as denied rather than failing silently", async () => {
     if (!browser) throw new Error("no browser");
     const context = await browser.newContext({ permissions: [] });

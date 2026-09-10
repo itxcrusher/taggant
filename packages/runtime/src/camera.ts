@@ -82,8 +82,42 @@ export class Camera {
     this.video.srcObject = this.stream;
     this.video.setAttribute("playsinline", "");
     this.video.muted = true;
-    await this.video.play();
+    // Both of these have to be bounded, and only the second one was.
+    //
+    // A stream can be handed over and never become playable: a virtual device with nothing
+    // behind it, a track that goes live and delivers no frame. `play()` then neither
+    // resolves nor rejects, which is worse than either, because nothing above here can see
+    // it. `mountExperience` never settles, so the page never reaches an error state, the
+    // entry page's own catch never runs, and the fallback a manifest exists to provide is
+    // never followed. The viewer is left reading "asking for the camera" for as long as
+    // they are willing to wait. Found by an engine on a runner doing exactly that.
+    const limit = this.options.readyTimeoutMs ?? 10_000;
+    await this.before(
+      this.video.play(),
+      limit,
+      `the camera opened but would not start playing within ${limit} ms`,
+    );
     await this.ready();
+  }
+
+  /**
+   * Whichever comes first, the promise or the deadline.
+   *
+   * A browser promise that never settles is not an error anyone can catch, so it is turned
+   * into one here rather than waited on.
+   */
+  private async before<T>(work: Promise<T>, limit: number, complaint: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        work,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new CameraError("unavailable", complaint)), limit);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   /**
@@ -93,6 +127,9 @@ export class Camera {
    * holding it, a virtual device with no source behind it. Waiting on `loadedmetadata`
    * with nothing behind it meant the promise from `mountExperience` never settled at all,
    * so the page sat on "asking for the camera" and the caller could not even say why.
+   *
+   * That was fixed here and left in place one line above, in the `play()` this used to
+   * follow unguarded. Both are bounded now.
    */
   private ready(): Promise<void> {
     if (this.video.videoWidth > 0) return Promise.resolve();
