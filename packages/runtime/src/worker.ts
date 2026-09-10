@@ -3,10 +3,11 @@ import { type TrackingTarget, locate } from "@taggant/vision";
 /**
  * Recognition, off the page's thread.
  *
- * Finding artwork in a frame takes a couple of hundred milliseconds, and on the main
- * thread that is a couple of hundred milliseconds where the camera preview does not
- * repaint and nothing the viewer touches responds. Measured at 480 by 360 in Chromium:
- * a median of 212 ms per frame, which is five freezes a second.
+ * Finding artwork in a frame costs tens of milliseconds, and on the main thread that is
+ * time where the camera preview does not repaint and nothing the viewer touches responds.
+ * `bench/cost.mjs` measures it against the compiled example at 480 by 360: on a desktop,
+ * medians of 49 ms and 73 ms across two runs, single calls from 22 ms to 168 ms. The
+ * spread matters more than the median, and a phone is slower by an unmeasured amount.
  */
 
 interface SetTargets {

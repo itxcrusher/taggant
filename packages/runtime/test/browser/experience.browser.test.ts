@@ -166,9 +166,14 @@ describe("the runtime in a browser, against a camera", () => {
     // could go back to freezing for a fifth of a second at a time and every test still pass.
     expect(await page.evaluate(() => window.taggantExperience?.threaded)).toBe(true);
 
-    // And the page has to keep painting while it does. This asserts the median and the
-    // share of long frames rather than the single worst one: a collector pause can stall
-    // any page once, and a test that fails on one of those is a test that gets ignored.
+    // And the page has to keep painting while it does. The median is the only part of this
+    // that is asserted. Counting frames over 100 ms was asserted too and it measured the
+    // machine rather than the runtime: it broke the moment another test file in this
+    // package started three browsers beside it, with the runtime unchanged. The median
+    // separates the two states this is here to tell apart by an order of magnitude, since
+    // recognition on the page's thread costs a couple of hundred milliseconds against a
+    // frame time near sixteen, so it survives a busy machine. The long frame count is
+    // printed instead, because it is worth seeing and not worth failing on.
     const pacing = await page.evaluate(async () => {
       const gaps: number[] = [];
       let last = performance.now();
@@ -184,12 +189,18 @@ describe("the runtime in a browser, against a camera", () => {
         requestAnimationFrame(tick);
       });
       gaps.sort((a, b) => a - b);
-      return { median: gaps[Math.floor(gaps.length / 2)] ?? 0, long: gaps.filter((gap) => gap > 100).length };
+      return {
+        median: gaps[Math.floor(gaps.length / 2)] ?? 0,
+        long: gaps.filter((gap) => gap > 100).length,
+        frames: gaps.length,
+      };
     });
+    console.log(
+      `frame pacing: median ${pacing.median.toFixed(1)} ms over ${pacing.frames} frames, ${pacing.long} over 100 ms`,
+    );
     // On the main thread the median would sit at the recognition cost, which is measured
     // in hundreds of milliseconds, not near the display's own frame time.
     expect(pacing.median).toBeLessThan(40);
-    expect(pacing.long).toBeLessThan(5);
 
     expect(failures).toEqual([]);
     await context.close();

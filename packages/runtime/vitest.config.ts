@@ -10,11 +10,15 @@ export default defineConfig({
   test: {
     testTimeout: 120_000,
     hookTimeout: 120_000,
-    // One file at a time. One of these files measures frame pacing on the machine it is
-    // running on, and another starts three browser engines; run together, the measurement
-    // reads the machine being busy rather than the runtime being slow, and it failed that
-    // way on the run that added the third engine. A performance number taken while
-    // something else is starting a browser is not a measurement of this code.
+    // One file at a time, and it is worth being honest about what that does and does not
+    // buy. It does keep the file that starts three browser engines from running beside the
+    // file that measures frame pacing, which was measured: the engines are not alive while
+    // the pacing sample is taken. It is also slightly faster here, around 48 seconds
+    // against 60 for this package. What it does not fix is the larger contention, which is
+    // that the gate runs `pnpm -r test` and pnpm runs packages concurrently, so the
+    // compiler package is working through the runtime package's first minute; the runtime
+    // package takes about 48 seconds alone and about 174 inside the recursive run. That is
+    // why the pacing test no longer asserts anything load sensitive.
     fileParallelism: false,
   },
 });
