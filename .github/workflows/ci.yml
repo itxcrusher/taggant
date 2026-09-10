@@ -20,16 +20,28 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r typecheck
       - run: pnpm check
-      # Two packages drive a real browser against a synthetic camera, so the browsers have
-      # to be here before the tests run. All three engines are installed rather than only
-      # Chromium: the descriptor comparison runs in every one that starts, and installing
-      # one is how it would quietly go back to checking a single engine. Those tests also
-      # work on build output rather than source: the runtime is loaded into a page as a
-      # built module, and the bundler's job is to package built modules, so everything is
-      # built before anything is tested.
+      # Two packages drive a real browser against a synthetic camera, and the descriptor
+      # comparison drives all three engines, so the browsers have to be here before the
+      # tests run. Those tests also work on build output rather than source: the runtime is
+      # loaded into a page as a built module, and the bundler's job is to package built
+      # modules, so everything is built before anything is tested.
+      #
+      # The browser downloads are the largest thing this job fetches and they only change
+      # when the lockfile does. `playwright install` still runs on a hit, because the system
+      # libraries `--with-deps` installs are not in this cache.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
       - run: pnpm exec playwright install --with-deps chromium firefox webkit
       - run: pnpm -r build
+      # A browser that installs and then cannot launch is skipped with a warning rather
+      # than failing, which is right on a contributor's machine and wrong here: this job is
+      # where the claim that all three engines agree is supposed to be earned. Naming them
+      # makes a run that quietly covered one engine fail and say which are missing.
       - run: pnpm -r test
+        env:
+          TAGGANT_REQUIRE_ENGINES: chromium,firefox,webkit
 
   # The path a printed code takes, in containers, on every push. What this covers is the
   # part no unit test can: that the image builds, the stack comes up healthy, a scan
