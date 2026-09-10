@@ -110,11 +110,17 @@ describe("the postcard example", () => {
 
   it("names files that exist", async () => {
     const manifest = JSON.parse(await readFile(join(EXAMPLE, "manifest.json"), "utf8"));
+    let named = 0;
     for (const target of manifest.targets) {
+      named++;
       await expect(readFile(join(EXAMPLE, target.source))).resolves.toBeDefined();
       for (const item of target.content) {
+        named++;
         await expect(readFile(join(EXAMPLE, item.src))).resolves.toBeDefined();
       }
     }
+    // A manifest with no targets, or a target with no content, names no files and would
+    // pass this without opening one.
+    expect(named, "the manifest named no files, so none were opened").toBeGreaterThan(1);
   });
 });

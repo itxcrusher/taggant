@@ -44,6 +44,9 @@ describe("compileTarget", () => {
 
   it("carries a descriptor for every feature, because corners alone match nothing", async () => {
     const target = await compileTarget(await noisyArtwork(), { id: "front-panel", scanDistanceMm: 400 });
+    // "every feature" is only a claim if there were features. Compiling to nothing would
+    // otherwise satisfy this.
+    expect(target.features.length, "the artwork compiled to no features").toBeGreaterThan(0);
     for (const feature of target.features) {
       expect(feature.descriptor).toBeInstanceOf(Uint32Array);
       expect(feature.descriptor.length).toBe(8);

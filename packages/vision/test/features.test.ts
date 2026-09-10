@@ -30,6 +30,8 @@ describe("detectCorners", () => {
   it("returns corners sorted by descending strength", () => {
     const image = withSquare(blank(160, 160), 30, 30, 40);
     const corners = detectCorners(image);
+    // One corner is trivially sorted, and none is not sorted at all.
+    expect(corners.length, "too few corners to have an order").toBeGreaterThan(1);
     for (let i = 1; i < corners.length; i++) {
       expect(corners[i - 1]?.strength).toBeGreaterThanOrEqual(corners[i]?.strength ?? 0);
     }
@@ -43,14 +45,19 @@ describe("detectCorners", () => {
   it("keeps corners at least minDistance apart", () => {
     const image = withSquare(blank(200, 200), 20, 20, 90);
     const corners = detectCorners(image, { minDistance: 20 });
+    let pairs = 0;
     for (let i = 0; i < corners.length; i++) {
       for (let j = i + 1; j < corners.length; j++) {
         const a = corners[i];
         const b = corners[j];
         if (!a || !b) continue;
+        pairs++;
         expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThanOrEqual(20);
       }
     }
+    // A spacing rule is vacuously true of one corner, and this is the test that would go
+    // green if detection collapsed to a single point.
+    expect(pairs, "fewer than two corners, so no spacing was checked").toBeGreaterThan(0);
   });
 });
 

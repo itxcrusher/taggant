@@ -107,7 +107,11 @@ describe("what counts as a scan", () => {
     // Recording it anyway reads, in a report, as the reason the redirect went where it did.
     await get("/01/09520123456788?linkType=gs1:recipeInfo", { headers: { "accept-language": "fr" } });
     await get("/01/09520123456702", { headers: { "accept-language": "fr" } });
-    for (const event of scans()) expect("language" in event).toBe(false);
+    const events = scans();
+    // Without this the test passes when scan recording has stopped entirely, which is the
+    // regression it would most want to report.
+    expect(events.length, "no scan was recorded, so nothing was inspected").toBe(2);
+    for (const event of events) expect("language" in event).toBe(false);
   });
 });
 

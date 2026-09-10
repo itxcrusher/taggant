@@ -101,15 +101,23 @@ describe("bundle", () => {
     // bundle imports is missing from it.
     expect(runtime).toContain("index.js");
     expect(runtime).toContain("worker.js");
+    let imports = 0;
     for (const name of ["index.js", "worker.js"]) {
       const source = await readFile(join(outDir, "runtime", name), "utf8");
       for (const match of source.matchAll(/from\s*"(\.[^"]+)"/g)) {
         const relative = match[1] ?? "";
+        imports++;
         expect(runtime, `${name} imports ${relative}, which is not in the bundle`).toContain(
           relative.replace(/^\.\//, ""),
         );
       }
     }
+    // The loop above only says anything if there was something to follow. Relative imports
+    // exist here because the runtime build splits a shared chunk out; turn that off and this
+    // check would go green having read two files and compared nothing.
+    expect(imports, "the runtime build emitted no relative imports, so nothing was followed").toBeGreaterThan(
+      0,
+    );
   });
 
   it("refuses a manifest that does not validate", async () => {

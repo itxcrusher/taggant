@@ -178,18 +178,23 @@ describe("The URI used as the subject of facts presented SHALL be the uncompress
 describe("All links SHALL include the target URL, the link type and a link title", () => {
   it("carries all three on every link, and the language where there is one", async () => {
     const body = await linkset("/01/09520123456788?linkType=linkset");
+    let checked = 0;
     for (const entry of body.linkset) {
       for (const [relation, targets] of Object.entries(entry)) {
         if (relation === "anchor") continue;
         // The relation name is the link type, and it is a full URI as RFC 9264 requires.
         expect(relation).toMatch(/^https?:\/\//);
         for (const target of targets as Array<Record<string, unknown>>) {
+          checked++;
           expect(typeof target.href).toBe("string");
           expect(typeof target.title).toBe("string");
           expect((target.title as string).length).toBeGreaterThan(0);
         }
       }
     }
+    // Three levels of loop and a `continue`: an empty linkset, an entry carrying only an
+    // anchor, or an empty target array would each take this to green having read nothing.
+    expect(checked, "the linkset carried no links, so none were checked").toBeGreaterThan(2);
   });
 
   it("uses the GS1 Web vocabulary namespace for GS1 link types", async () => {
