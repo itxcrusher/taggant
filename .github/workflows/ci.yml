@@ -45,6 +45,14 @@ jobs:
           pnpm -r test 2>&1 | tee test-output.txt
         env:
           TAGGANT_REQUIRE_ENGINES: chromium,firefox,webkit
+      # What each engine actually did, on every run and not only a failing one. The tests
+      # print a line per engine and those lines are the evidence behind what the README
+      # claims; a run elsewhere is otherwise readable only as an exit code, because
+      # fetching job logs needs a token. These become notices on the run.
+      - name: say what each engine did
+        if: always()
+        run: |
+          grep -aE "features, differing|worker (in a thread|ON THE PAGE)|tracking, content at|no media capture API|frame pacing" test-output.txt | sed 's/^/::notice::/' || echo "::notice::no per engine lines were printed"
       # A failed run here is otherwise only readable as an exit code, because fetching job
       # logs needs a token and a browser test that fails on a runner and passes on a laptop
       # is exactly the one worth reading. These lines become annotations on the run.
