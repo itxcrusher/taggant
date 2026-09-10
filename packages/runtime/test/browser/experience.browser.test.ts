@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildTrackingFeatures, toTargetFile } from "@taggant/vision";
-import { type Browser, chromium } from "playwright";
+import { type Browser, chromium, firefox } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 declare global {
@@ -18,9 +18,11 @@ declare global {
     }>;
     taggantReady?: boolean;
     taggantProblems?: string[];
+    fromTargetFile?: (stored: unknown) => unknown;
   }
 }
 import { artwork, inView, writeFeed } from "./feed.js";
+import { requiredEngines } from "./required.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNTIME = join(here, "../../dist/index.js");
@@ -46,9 +48,10 @@ const MANIFEST = {
 const BARE = `<!doctype html><html><head><meta charset="utf-8"><title>bare</title></head>
 <body><div id="scene" style="width:640px;height:480px"></div>
 <script type="module">
-  import { mountExperience } from "/runtime.js";
+  import { mountExperience, fromTargetFile } from "/runtime.js";
   window.taggantProblems = [];
   window.mountExperience = mountExperience;
+  window.fromTargetFile = fromTargetFile;
   window.taggantReady = true;
 </script></body></html>`;
 
@@ -57,6 +60,16 @@ const OVERLAY =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 2"><rect width="2" height="2" fill="#e2402a"/></svg>';
 
 let browser: Browser | undefined;
+/**
+ * A second engine for the camera itself. Chromium is the only one that can be handed a
+ * specific video file, which is why the recognition tests below are Chromium's, but
+ * Firefox will produce a real `getUserMedia` stream from a synthetic device, so the part
+ * that is not about recognising anything (asking for a camera, starting the worker, running
+ * the loop, surviving a feed with nothing in it) can be checked somewhere else too.
+ * Playwright's WebKit has no `navigator.mediaDevices.getUserMedia` at all, which was
+ * measured rather than assumed, so the camera cannot be driven there.
+ */
+let second: Browser | undefined;
 let close: (() => Promise<void>) | undefined;
 let origin = "";
 
@@ -116,8 +129,21 @@ beforeAll(async () => {
     ],
   });
 
+  try {
+    second = await firefox.launch({
+      firefoxUserPrefs: {
+        // Firefox's own synthetic camera, and no prompt in front of it.
+        "media.navigator.streams.fake": true,
+        "media.navigator.permission.disabled": true,
+      },
+    });
+  } catch (error) {
+    console.warn(`experience: firefox could not be launched: ${String(error).slice(0, 200)}`);
+  }
+
   close = async () => {
     await browser?.close();
+    await second?.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   };
 }, 120_000);
@@ -127,6 +153,98 @@ afterAll(async () => {
 });
 
 describe("the runtime in a browser, against a camera", () => {
+  /**
+   * Everything else here is Chromium, because only Chromium can be handed a video file to
+   * play as a camera. That left the camera code itself, and the runtime's own resolution of
+   * its worker, checked in exactly one engine, on a project whose README says a viewer
+   * opens this on a phone.
+   *
+   * Firefox's synthetic camera cannot contain the artwork, so this cannot assert that
+   * anything was recognised. What it does assert is the part that was never checked
+   * anywhere else: a stream is obtained, the worker the runtime resolves for itself starts,
+   * the loop runs, and a feed with nothing recognisable in it leaves the page looking
+   * rather than erroring. A viewer pointing a phone at the wrong thing is that state.
+   */
+  it("obtains a camera, starts its own worker and keeps looking, in a second engine", async () => {
+    if (!second) {
+      // Not installed here. Fine on a contributor's machine, not fine where the claim is
+      // earned, so the machine decides which it is.
+      expect(
+        requiredEngines(),
+        "TAGGANT_REQUIRE_ENGINES asks for firefox and it did not launch, so the camera path was checked in one engine",
+      ).not.toContain("firefox");
+      return;
+    }
+    const context = await second.newContext({ viewport: { width: FRAME.width, height: FRAME.height } });
+    const page = await context.newPage();
+    const failures: string[] = [];
+    page.on("pageerror", (error) => failures.push(String(error)));
+    await page.goto(`${origin}/bare.html`);
+    await page.waitForFunction(() => window.taggantReady === true);
+
+    const mounted = await page.evaluate(async () => {
+      const stored = await (await fetch("/target.json")).json();
+      const target = window.fromTargetFile?.(stored);
+      const result = await window.mountExperience?.({
+        manifest: {
+          schemaVersion: "1.0.0",
+          id: "harness",
+          targets: [
+            {
+              id: "front",
+              source: "artwork.png",
+              physicalWidthMm: 148,
+              content: [{ type: "image", src: "/overlay.svg" }],
+            },
+          ],
+        },
+        targets: [target],
+        container: document.getElementById("scene"),
+        options: { onProblem: (message: string) => window.taggantProblems?.push(message) },
+      });
+      return { state: result?.state, threaded: result?.threaded };
+    });
+
+    // A camera was obtained: the runtime only leaves "requesting" once it has a stream, and
+    // it goes to "denied" or "error" rather than "searching" if it does not.
+    await page.waitForFunction(
+      () => document.querySelector("#scene")?.getAttribute("data-state") === "searching",
+      { timeout: 30_000 },
+    );
+    // The runtime resolves its own worker URL against its module, which is a different path
+    // from starting one by hand, and it falls back to the page's thread without saying so.
+    expect(mounted.threaded, "recognition fell back to the page thread in this engine").toBe(true);
+
+    // And it stays there. A feed it can recognise nothing in must not become an error.
+    await page.waitForTimeout(1_500);
+    const settled = await page.evaluate(() => {
+      const video = document.querySelector("#scene video") as HTMLVideoElement | null;
+      const stream = video?.srcObject as MediaStream | null;
+      return {
+        state: document.querySelector("#scene")?.getAttribute("data-state"),
+        video: video !== null,
+        label: stream?.getVideoTracks()[0]?.label ?? "",
+        problems: window.taggantProblems ?? [],
+      };
+    });
+    console.log(`second engine camera: "${settled.label}"`);
+    // This test asks a browser for a camera on whatever machine it runs on, and the only
+    // thing standing between it and a contributor's real webcam is a preference set above.
+    // If that preference ever stops applying, Firefox falls through to real hardware and
+    // this test would keep passing while filming whoever ran it. So the device is checked:
+    // "Default Video Device" is Firefox's synthetic one, and anything else means a real
+    // camera was opened and the run should fail rather than continue.
+    expect(
+      settled.label,
+      `this run obtained a camera called "${settled.label}" rather than Firefox's synthetic device, which means media.navigator.streams.fake did not apply and a real camera may have been opened`,
+    ).toBe("Default Video Device");
+    expect(settled.state).toBe("searching");
+    expect(settled.video).toBe(true);
+    expect(settled.problems).toEqual([]);
+    expect(failures).toEqual([]);
+    await context.close();
+  }, 120_000);
+
   it("opens the camera, finds the artwork and puts the content on it", async () => {
     if (!browser) throw new Error("no browser");
     const context = await browser.newContext({ permissions: ["camera"] });

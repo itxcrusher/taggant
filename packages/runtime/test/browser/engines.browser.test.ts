@@ -1,10 +1,11 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { type Browser, type BrowserType, chromium, firefox, webkit } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { artwork } from "./feed.js";
+import { artwork, inView } from "./feed.js";
+import { requiredEngines } from "./required.js";
 
 /**
  * The compiler runs in Node and the runtime runs in a browser, and the whole system rests
@@ -33,6 +34,7 @@ import { artwork } from "./feed.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const VISION = join(here, "../../../vision/dist/index.js");
+const RUNTIME_DIST = join(here, "../../dist");
 
 /**
  * The build, loaded the way the page loads it. `@taggant/vision` is aliased to source
@@ -54,10 +56,7 @@ const ENGINES: [string, BrowserType][] = [
 ];
 
 /** Empty unless a machine says otherwise. CI says all three. */
-const REQUIRED = (process.env.TAGGANT_REQUIRE_ENGINES ?? "")
-  .split(",")
-  .map((name) => name.trim())
-  .filter((name) => name.length > 0);
+const REQUIRED = requiredEngines();
 
 /**
  * Launched here rather than in `beforeAll`, because the cases below are generated from
@@ -100,7 +99,25 @@ beforeAll(async () => {
         type: "text/html",
       },
     ],
+    [
+      "/worker-page.html",
+      {
+        body: Buffer.from(
+          '<!doctype html><meta charset="utf-8"><title>worker</title><script>window.ready = true;</script>',
+        ),
+        type: "text/html",
+      },
+    ],
   ]);
+  // The whole runtime build, at the root, because the worker resolves the shared chunk
+  // against its own URL. Serving only worker.js gives a worker that cannot import.
+  const emitted = (await readdir(RUNTIME_DIST)).filter((name) => name.endsWith(".js"));
+  if (!emitted.includes("worker.js")) {
+    throw new Error(`the runtime build at ${RUNTIME_DIST} has no worker.js, so build before running this`);
+  }
+  for (const name of emitted) {
+    files.set(`/${name}`, { body: await readFile(join(RUNTIME_DIST, name)), type: "text/javascript" });
+  }
   const server = createServer((request, response) => {
     const file = files.get((request.url ?? "").split("?")[0] ?? "");
     if (!file) {
@@ -222,6 +239,106 @@ describe("the same artwork in every engine", () => {
       expect(differingStrengths).toBe(0);
       expect(differingPositions).toBe(0);
       expect(differingDescriptors).toBe(0);
+      await page.close();
+    },
+    120_000,
+  );
+
+  /**
+   * Recognition happens in a module worker, and where a browser will not give one the
+   * runtime answers on the page's thread instead. That fallback is deliberate and it is
+   * quiet: the page keeps working and starts freezing for the length of a recognition
+   * call, which is the failure a viewer on a phone would meet and nobody would report.
+   * Safari was the reason to doubt it, module workers having arrived there late.
+   *
+   * So the worker is driven directly, in every engine, with a real target and a frame the
+   * artwork is actually in, and it has to answer with a pose. Posting an empty target list
+   * gets an answer out of it too, which proves only that it loaded.
+   */
+  it.each(started)(
+    "recognises through a module worker in %s",
+    async (_engine, browser) => {
+      const art = artwork(ART.width, ART.height);
+      const frame = inView(art, 640, 480, 80, 60);
+      const target = {
+        id: "front",
+        width: art.width,
+        height: art.height,
+        features: buildTrackingFeatures(art).map((feature) => ({
+          x: feature.x,
+          y: feature.y,
+          scale: feature.scale,
+          angle: feature.angle,
+          strength: feature.strength,
+          descriptor: [...feature.descriptor],
+        })),
+      };
+
+      const page = await browser.newPage();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(String(error)));
+      await page.goto(`${origin}/worker-page.html`);
+      await page.waitForFunction(() => (window as unknown as { ready?: boolean }).ready === true);
+
+      const answer = await page.evaluate(
+        async ({ serialised, width, height, data }) =>
+          await new Promise<{ ok: boolean; detail: string; inliers: number; matrix: number }>((resolve) => {
+            let worker: Worker;
+            try {
+              worker = new Worker("/worker.js", { type: "module" });
+            } catch (error) {
+              resolve({
+                ok: false,
+                detail: `the worker would not start: ${String(error)}`,
+                inliers: 0,
+                matrix: 0,
+              });
+              return;
+            }
+            const giveUp = setTimeout(() => {
+              worker.terminate();
+              resolve({
+                ok: false,
+                detail: "the worker did not answer within ten seconds",
+                inliers: 0,
+                matrix: 0,
+              });
+            }, 10_000);
+            worker.onerror = (event) => {
+              clearTimeout(giveUp);
+              resolve({
+                ok: false,
+                detail: `the worker failed: ${String((event as ErrorEvent).message ?? event.type)}`,
+                inliers: 0,
+                matrix: 0,
+              });
+            };
+            worker.onmessage = (event: MessageEvent<{ type: string; poses?: unknown[] }>) => {
+              clearTimeout(giveUp);
+              worker.terminate();
+              const pose = (event.data.poses ?? [])[0] as
+                | { id: string; homography: number[] | null; inliers: number }
+                | undefined;
+              resolve({
+                ok: event.data.type === "result" && pose?.id === "front",
+                detail: JSON.stringify(event.data).slice(0, 160),
+                inliers: pose?.inliers ?? 0,
+                matrix: pose?.homography?.length ?? 0,
+              });
+            };
+            worker.postMessage({ type: "targets", targets: [serialised] });
+            const bytes = Uint8Array.from(data);
+            worker.postMessage({ type: "frame", id: 7, width, height, data: bytes.buffer }, [bytes.buffer]);
+          }),
+        { serialised: target, width: frame.width, height: frame.height, data: [...frame.data] },
+      );
+
+      expect(pageErrors).toEqual([]);
+      expect(answer.ok, answer.detail).toBe(true);
+      // A pose, not merely a reply. The ten inlier floor is the runtime's own, so anything
+      // that answers at all answers with at least that many or with nothing.
+      expect(answer.matrix, `no homography came back: ${answer.detail}`).toBe(9);
+      expect(answer.inliers).toBeGreaterThanOrEqual(10);
       await page.close();
     },
     120_000,
