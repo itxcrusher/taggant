@@ -40,24 +40,65 @@ const RUNTIME_DIST = join(here, "../../dist");
  * The build, loaded the way the page loads it. `@taggant/vision` is aliased to source
  * across this workspace, which is right everywhere except here.
  */
-const { buildTrackingFeatures } = (await import(pathToFileURL(VISION).href).catch((error) => {
+const { buildTrackingFeatures, toTargetFile } = (await import(pathToFileURL(VISION).href).catch((error) => {
   throw new Error(
     `the vision build at ${VISION} could not be loaded, and this test compares it against itself in a browser, so build before running it: ${String(error)}`,
   );
 })) as typeof import("@taggant/vision");
 
 const ART = { width: 320, height: 240 };
+const CAMERA = { width: 640, height: 480 };
+/** Where the artwork sits in the frame, so a pose can be checked against an answer. */
+const PLACED = { x: 80, y: 60 };
+
+const ARTWORK = artwork(ART.width, ART.height);
+/** Bytes, served as bytes. A frame is 307,200 of them and JSON is the wrong wire for that. */
+const FRAME_BYTES = inView(ARTWORK, CAMERA.width, CAMERA.height, PLACED.x, PLACED.y).data;
+/** The compiled form, so the runtime reads it the way a published bundle does. */
+const TARGET_FILE = toTargetFile({
+  id: "front",
+  width: ART.width,
+  height: ART.height,
+  features: buildTrackingFeatures(ARTWORK),
+});
 
 /**
- * How the runtime finds its worker, in one line, served from beside `worker.js` so that
- * `import.meta.url` resolves from the same place the runtime's own module does. What has to
- * work in a browser is not a path a test knows, it is this resolution.
+ * A page with a sized container, the runtime, and nothing mounted, so a test can mount its
+ * own manifest against a camera of its own.
  */
-const RESOLVE = `export function startWorkerTheWayTheRuntimeDoes() {
-  return new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
-}
-window.startWorkerTheWayTheRuntimeDoes = startWorkerTheWayTheRuntimeDoes;
-`;
+const CAMERA_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>camera</title></head>
+<body><div id="scene" style="width:640px;height:480px"></div>
+<script type="module">
+  import * as runtime from "/index.js";
+  window.runtime = runtime;
+  window.taggantProblems = [];
+  window.ready = true;
+</script></body></html>`;
+
+/** One red square, so there is real content to place without shipping a binary. */
+const OVERLAY =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 2"><rect width="2" height="2" fill="#e2402a"/></svg>';
+
+const CAMERA_MANIFEST = {
+  schemaVersion: "1.0.0",
+  id: "engines",
+  targets: [
+    {
+      id: "front",
+      source: "artwork.png",
+      physicalWidthMm: 148,
+      content: [{ type: "image", src: "/overlay.svg" }],
+    },
+  ],
+};
+
+/**
+ * Engines whose Playwright build has no media capture surface at all. Measured rather than
+ * assumed: `MediaStream` itself is not defined in Playwright's WebKit, so a canvas cannot
+ * stand in for a camera there and neither can anything else. Written as a list rather than
+ * probed and shrugged at, so that an engine gaining the API fails this and gets read.
+ */
+const NO_MEDIA_STREAM = new Set(["webkit"]);
 
 /** Every engine Playwright can start here. A machine without one skips it, visibly. */
 const ENGINES: [string, BrowserType][] = [
@@ -111,23 +152,29 @@ beforeAll(async () => {
       },
     ],
     [
+      // The runtime's own module, so the worker is found the way the runtime finds it.
+      // A test that restates `new URL("./worker.js", import.meta.url)` in its own file
+      // measures its own copy: the runtime could switch to a classic worker, or resolve
+      // against the document rather than its module, and that test would stay green.
       "/worker-page.html",
       {
         body: Buffer.from(
-          '<!doctype html><meta charset="utf-8"><title>worker</title>' +
-            '<script type="module">import "/resolve.js"; window.ready = true;</script>',
+          '<!doctype html><meta charset="utf-8"><title>worker</title><div id="scene"></div>' +
+            '<script type="module">import * as runtime from "/index.js";' +
+            "window.runtime = runtime; window.ready = true;</script>",
         ),
         type: "text/html",
       },
     ],
     [
-      // Served beside worker.js, so `new URL("./worker.js", import.meta.url)` resolves from
-      // here exactly as it does from the runtime's own module. That one line is how the
-      // runtime finds its worker, and it is the part that has to work in a browser rather
-      // than in a bundler.
-      "/resolve.js",
-      { body: Buffer.from(RESOLVE), type: "text/javascript" },
+      // The frame as bytes rather than as a JSON array of 307,200 numbers over the bridge.
+      "/frame.gray",
+      { body: Buffer.from(FRAME_BYTES), type: "application/octet-stream" },
     ],
+    ["/target.json", { body: Buffer.from(JSON.stringify(TARGET_FILE)), type: "application/json" }],
+    ["/camera-page.html", { body: Buffer.from(CAMERA_PAGE), type: "text/html" }],
+    ["/manifest.json", { body: Buffer.from(JSON.stringify(CAMERA_MANIFEST)), type: "application/json" }],
+    ["/overlay.svg", { body: Buffer.from(OVERLAY), type: "image/svg+xml" }],
   ]);
   // The whole runtime build, at the root, because the worker resolves the shared chunk
   // against its own URL. Serving only worker.js gives a worker that cannot import.
@@ -271,101 +318,235 @@ describe("the same artwork in every engine", () => {
    * call, which is the failure a viewer on a phone would meet and nobody would report.
    * Safari was the reason to doubt it, module workers having arrived there late.
    *
-   * So the worker is driven directly, in every engine, with a real target and a frame the
-   * artwork is actually in, and it has to answer with a pose. Posting an empty target list
-   * gets an answer out of it too, which proves only that it loaded.
+   * Driven through the runtime's own `createRecogniser`, which is the only way to check
+   * the things that actually go wrong here: how it resolves the worker URL, how it
+   * serialises a target across the wire, how it correlates a reply with the frame it
+   * answers, and whether it fell back. Every one of those was invisible to the version of
+   * this test that started a worker by a path of its own and read the first message back.
+   *
+   * The pose is checked against the answer, because the frame was built by placing the
+   * artwork at a known point. A worker that ignored the frame entirely and returned nine
+   * numbers passed the previous version of this test, in all three engines, and printed
+   * the same inlier count that was quoted as evidence it worked.
    */
   it.each(started)(
-    "recognises through a module worker, resolved the way the runtime resolves it, in %s",
-    async (_engine, browser) => {
-      const art = artwork(ART.width, ART.height);
-      const frame = inView(art, 640, 480, 80, 60);
-      const target = {
-        id: "front",
-        width: art.width,
-        height: art.height,
-        features: buildTrackingFeatures(art).map((feature) => ({
-          x: feature.x,
-          y: feature.y,
-          scale: feature.scale,
-          angle: feature.angle,
-          strength: feature.strength,
-          descriptor: [...feature.descriptor],
-        })),
-      };
-
+    "recognises through the runtime's own worker in %s",
+    async (engine, browser) => {
       const page = await browser.newPage();
       const pageErrors: string[] = [];
       page.on("pageerror", (error) => pageErrors.push(String(error)));
-      await page.goto(`${origin}/worker-page.html`);
-      await page.waitForFunction(() => (window as unknown as { ready?: boolean }).ready === true);
+      try {
+        await page.goto(`${origin}/worker-page.html`);
+        await page.waitForFunction(() => (window as unknown as { ready?: boolean }).ready === true);
 
-      const answer = await page.evaluate(
-        async ({ serialised, width, height, data }) =>
-          await new Promise<{ ok: boolean; detail: string; inliers: number; matrix: number }>((resolve) => {
-            let worker: Worker;
-            try {
-              // Resolved against a module's own URL, which is how the runtime finds it, not
-              // by a path this test happens to know.
-              worker = (
-                window as unknown as { startWorkerTheWayTheRuntimeDoes: () => Worker }
-              ).startWorkerTheWayTheRuntimeDoes();
-            } catch (error) {
-              resolve({
-                ok: false,
-                detail: `the worker would not start: ${String(error)}`,
-                inliers: 0,
-                matrix: 0,
-              });
-              return;
+        const answer = await page.evaluate(
+          async ({ frame, art }) => {
+            const runtime = (window as unknown as { runtime: typeof import("@taggant/runtime") }).runtime;
+            const stored = await (await fetch("/target.json")).json();
+            const target = runtime.fromTargetFile(stored);
+            const bytes = new Uint8Array(await (await fetch("/frame.gray")).arrayBuffer());
+
+            const recogniser = runtime.createRecogniser([target]);
+            // The frame is the camera's size; the target's corners below are the artwork's.
+            // Describing one with the other's numbers makes recognition fail, which it did.
+            const poses = await recogniser.submit({ width: frame.width, height: frame.height, data: bytes });
+            // Read after the frame has been answered, not at construction. A worker that
+            // cannot be fetched constructs without complaint and reports itself threaded
+            // until the error arrives, so asking at the start is asking at the one moment
+            // the answer cannot be false.
+            const threaded = recogniser.threaded;
+            recogniser.stop();
+
+            const pose = poses?.[0];
+            const homography = pose?.homography ?? null;
+            const map = (x: number, y: number): [number, number] => {
+              if (!homography || homography.length !== 9) return [Number.NaN, Number.NaN];
+              const at = (i: number) => homography[i] ?? 0;
+              const w = at(6) * x + at(7) * y + at(8);
+              return [(at(0) * x + at(1) * y + at(2)) / w, (at(3) * x + at(4) * y + at(5)) / w];
+            };
+            return {
+              count: poses?.length ?? -1,
+              id: pose?.id ?? "",
+              inliers: pose?.inliers ?? 0,
+              threaded,
+              bytes: bytes.length,
+              topLeft: map(0, 0),
+              bottomRight: map(art.width, art.height),
+            };
+          },
+          { frame: CAMERA, art: ART },
+        );
+
+        const round = ([x, y]: [number, number]) => `${x.toFixed(1)},${y.toFixed(1)}`;
+        console.log(
+          `${engine}: worker ${answer.threaded ? "in a thread" : "ON THE PAGE THREAD"}, ${answer.inliers} inliers, artwork corners at ${round(answer.topLeft)} and ${round(answer.bottomRight)}`,
+        );
+
+        expect(pageErrors).toEqual([]);
+        expect(answer.bytes).toBe(CAMERA.width * CAMERA.height);
+        expect(answer.count, "the runtime returned no pose for the only target it was given").toBe(1);
+        expect(answer.id).toBe("front");
+        // The fallback is silent by design, so it has to be asked about rather than waited
+        // for. This is the assertion that the worker did the work.
+        expect(answer.threaded, "recognition fell back to the page's thread in this engine").toBe(true);
+
+        // Against the answer. The artwork was placed at a known point at its own scale, so
+        // its corners have to come back there. Nine numbers that are not a pose land
+        // somewhere else entirely, which is what this catches.
+        expect(answer.topLeft[0]).toBeCloseTo(PLACED.x, 0);
+        expect(answer.topLeft[1]).toBeCloseTo(PLACED.y, 0);
+        expect(answer.bottomRight[0]).toBeCloseTo(PLACED.x + ART.width, 0);
+        expect(answer.bottomRight[1]).toBeCloseTo(PLACED.y + ART.height, 0);
+        expect(answer.inliers).toBeGreaterThanOrEqual(10);
+      } finally {
+        await page.close();
+      }
+    },
+    120_000,
+  );
+
+  /**
+   * The camera, in every engine that has one, without a camera.
+   *
+   * This path used to be checked in Chromium alone, because Chromium is the only engine
+   * that can be handed a video file to play as a camera. The first attempt to widen it used
+   * Firefox's fake device preference, and that was a mistake worth recording: the only
+   * thing between the test and a contributor's real webcam was a preference that Firefox
+   * accepts silently whether or not it exists, alongside a second preference removing the
+   * permission prompt. It did open the repository owner's webcam once during development.
+   *
+   * So no engine is asked for a camera here. `navigator.mediaDevices` is replaced before any
+   * page script runs, with a `getUserMedia` that returns a canvas the artwork has been drawn
+   * into. Hardware is not reachable in any preference state, and the frame contains the
+   * artwork, so the whole path runs rather than only its beginning: a stream is obtained,
+   * the runtime starts its own worker, the loop recognises, and the content is placed where
+   * the artwork actually is.
+   */
+  it.each(started)(
+    "puts content on the artwork from a camera in %s",
+    async (engine, browser) => {
+      const context = await browser.newContext({ viewport: CAMERA });
+      const page = await context.newPage();
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(String(error)));
+      try {
+        // Before any page script. There is no path from here to a device.
+        await page.addInitScript(() => {
+          const capture = async (): Promise<MediaStream> => {
+            const canvas = document.createElement("canvas");
+            canvas.width = 640;
+            canvas.height = 480;
+            const context2d = canvas.getContext("2d", { willReadFrequently: true });
+            if (!context2d) throw new Error("no 2d context");
+            const bytes = new Uint8Array(await (await fetch("/frame.gray")).arrayBuffer());
+            const picture = context2d.createImageData(canvas.width, canvas.height);
+            for (let i = 0; i < bytes.length; i++) {
+              const grey = bytes[i] ?? 0;
+              picture.data[i * 4] = grey;
+              picture.data[i * 4 + 1] = grey;
+              picture.data[i * 4 + 2] = grey;
+              picture.data[i * 4 + 3] = 255;
             }
-            const giveUp = setTimeout(() => {
-              worker.terminate();
-              resolve({
-                ok: false,
-                detail: "the worker did not answer within ten seconds",
-                inliers: 0,
-                matrix: 0,
-              });
-            }, 10_000);
-            worker.onerror = (event) => {
-              clearTimeout(giveUp);
-              resolve({
-                ok: false,
-                detail: `the worker failed: ${String((event as ErrorEvent).message ?? event.type)}`,
-                inliers: 0,
-                matrix: 0,
-              });
+            context2d.putImageData(picture, 0, 0);
+            // Redrawn every frame, because a still canvas is allowed to emit nothing.
+            const keepAlive = () => {
+              context2d.putImageData(picture, 0, 0);
+              requestAnimationFrame(keepAlive);
             };
-            worker.onmessage = (event: MessageEvent<{ type: string; poses?: unknown[] }>) => {
-              clearTimeout(giveUp);
-              worker.terminate();
-              const pose = (event.data.poses ?? [])[0] as
-                | { id: string; homography: number[] | null; inliers: number }
-                | undefined;
-              resolve({
-                ok: event.data.type === "result" && pose?.id === "front",
-                detail: JSON.stringify(event.data).slice(0, 160),
-                inliers: pose?.inliers ?? 0,
-                matrix: pose?.homography?.length ?? 0,
-              });
-            };
-            worker.postMessage({ type: "targets", targets: [serialised] });
-            const bytes = Uint8Array.from(data);
-            worker.postMessage({ type: "frame", id: 7, width, height, data: bytes.buffer }, [bytes.buffer]);
-          }),
-        { serialised: target, width: frame.width, height: frame.height, data: [...frame.data] },
-      );
+            requestAnimationFrame(keepAlive);
+            return canvas.captureStream(30);
+          };
+          Object.defineProperty(navigator, "mediaDevices", {
+            configurable: true,
+            // Undefined where the engine has no media capture at all, which is what it would
+            // have been anyway, so the runtime meets the real thing rather than a pretend one.
+            value: typeof MediaStream === "undefined" ? undefined : { getUserMedia: capture },
+          });
+        });
 
-      // Printed on every run, because a pass is the only place this is measured.
-      console.log(`${_engine}: worker answered with ${answer.inliers} inliers`);
-      expect(pageErrors).toEqual([]);
-      expect(answer.ok, answer.detail).toBe(true);
-      // A pose, not merely a reply. The ten inlier floor is the runtime's own, so anything
-      // that answers at all answers with at least that many or with nothing.
-      expect(answer.matrix, `no homography came back: ${answer.detail}`).toBe(9);
-      expect(answer.inliers).toBeGreaterThanOrEqual(10);
-      await page.close();
+        await page.goto(`${origin}/camera-page.html`);
+        await page.waitForFunction(() => (window as unknown as { ready?: boolean }).ready === true);
+
+        const capable = await page.evaluate(() => typeof MediaStream !== "undefined");
+        expect(
+          capable,
+          `${engine} disagrees with what this file says about whether it has a media capture API`,
+        ).toBe(!NO_MEDIA_STREAM.has(engine));
+
+        const mounted = await page.evaluate(async () => {
+          const runtime = (window as unknown as { runtime: typeof import("@taggant/runtime") }).runtime;
+          const stored = await (await fetch("/target.json")).json();
+          const manifest = await (await fetch("/manifest.json")).json();
+          try {
+            const experience = await runtime.mountExperience({
+              manifest,
+              targets: [runtime.fromTargetFile(stored)],
+              container: document.getElementById("scene") as HTMLElement,
+              options: {
+                onProblem: (message: string) =>
+                  (window as unknown as { taggantProblems: string[] }).taggantProblems.push(message),
+              },
+            });
+            (window as unknown as { experience: unknown }).experience = experience;
+            return { mounted: true, state: experience.state, failure: "" };
+          } catch (error) {
+            return { mounted: false, state: "", failure: String(error) };
+          }
+        });
+
+        if (!capable) {
+          // An engine with no camera API has to say so rather than leave a page that
+          // promised a camera sitting on Starting. Mounting still resolves, which is
+          // deliberate: the runtime reports the failure as state so a page can show it and
+          // follow a fallback, instead of throwing at whoever mounted it. That is the whole
+          // of what can be checked without a capture API, and it is worth checking.
+          const reported = await page.evaluate(() => ({
+            state: document.querySelector("#scene")?.getAttribute("data-state") ?? "",
+            threaded: (window as unknown as { experience?: { threaded: boolean } }).experience?.threaded,
+          }));
+          console.log(`${engine}: no media capture API, runtime reported ${reported.state}`);
+          expect(mounted.mounted, `mounting threw instead of reporting: ${mounted.failure}`).toBe(true);
+          expect(
+            mounted.state,
+            "an engine with no camera must not be reported as searching or tracking",
+          ).toBe("error");
+          expect(reported.state, "the container has to carry the state so a page can show it").toBe("error");
+          // And it must not claim a thread it never started.
+          expect(reported.threaded).toBe(false);
+          expect(pageErrors).toEqual([]);
+          return;
+        }
+
+        await page.waitForFunction(
+          () => document.querySelector("#scene")?.getAttribute("data-state") === "tracking",
+          { timeout: 60_000 },
+        );
+
+        const overlay = page.locator('[data-taggant-target="front"]');
+        expect(await overlay.count()).toBe(1);
+        const box = await overlay.boundingBox();
+        if (!box) throw new Error("expected the overlay to have a box");
+
+        // Read now rather than at mount. A worker that cannot be fetched constructs without
+        // complaint and reports itself threaded until the error arrives, so the value at
+        // mount is the one moment it cannot be false.
+        const settled = await page.evaluate(() => ({
+          threaded: (window as unknown as { experience: { threaded: boolean } }).experience.threaded,
+          problems: (window as unknown as { taggantProblems: string[] }).taggantProblems,
+        }));
+
+        console.log(
+          `${engine}: tracking, content at ${box.x.toFixed(0)},${box.y.toFixed(0)} against artwork at ${PLACED.x},${PLACED.y}, worker ${settled.threaded ? "in a thread" : "ON THE PAGE THREAD"}`,
+        );
+        expect(Math.abs(box.x - PLACED.x)).toBeLessThan(40);
+        expect(Math.abs(box.y - PLACED.y)).toBeLessThan(40);
+        expect(settled.threaded, "recognition fell back to the page's thread in this engine").toBe(true);
+        expect(settled.problems).toEqual([]);
+        expect(pageErrors).toEqual([]);
+      } finally {
+        await context.close();
+      }
     },
     120_000,
   );
