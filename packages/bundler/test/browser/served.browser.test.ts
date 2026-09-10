@@ -7,6 +7,7 @@ import { compileTarget, toTargetJson } from "@taggant/compiler";
 import { type Browser, type BrowserType, chromium, firefox, webkit } from "playwright";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { type CameraDiagnostics, installCanvasCamera } from "../../../runtime/test/browser/camera-stub.js";
 import { artwork, inView } from "../../../runtime/test/browser/feed.js";
 import { requiredEngines } from "../../../runtime/test/browser/required.js";
 import { bundle } from "../../src/bundle.js";
@@ -199,42 +200,7 @@ describe("a published bundle", () => {
       const context = await browser.newContext({ viewport: { width: FRAME.width, height: FRAME.height } });
       const page = await context.newPage();
       try {
-        await page.addInitScript((encoded: string) => {
-          const capture = async (): Promise<MediaStream> => {
-            const canvas = document.createElement("canvas");
-            canvas.width = 640;
-            canvas.height = 480;
-            const context2d = canvas.getContext("2d", { willReadFrequently: true });
-            if (!context2d) throw new Error("no 2d context");
-            const binary = atob(encoded);
-            const picture = context2d.createImageData(canvas.width, canvas.height);
-            for (let i = 0; i < binary.length; i++) {
-              const grey = binary.charCodeAt(i);
-              picture.data[i * 4] = grey;
-              picture.data[i * 4 + 1] = grey;
-              picture.data[i * 4 + 2] = grey;
-              picture.data[i * 4 + 3] = 255;
-            }
-            context2d.putImageData(picture, 0, 0);
-            const keepAlive = () => {
-              context2d.putImageData(picture, 0, 0);
-              requestAnimationFrame(keepAlive);
-            };
-            requestAnimationFrame(keepAlive);
-            return canvas.captureStream(30);
-          };
-          // Which engine has both halves belongs to somebody else's build and differs by
-          // platform, so it is measured rather than written down. Left undefined where a
-          // canvas cannot be a camera, which is what the engine would have offered anyway.
-          const stubbed =
-            typeof MediaStream !== "undefined" &&
-            typeof document.createElement("canvas").captureStream === "function";
-          (window as unknown as { cameraStubbed: boolean }).cameraStubbed = stubbed;
-          Object.defineProperty(navigator, "mediaDevices", {
-            configurable: true,
-            value: stubbed ? { getUserMedia: capture } : undefined,
-          });
-        }, frame64);
+        await page.addInitScript(installCanvasCamera, frame64);
 
         const failures: string[] = [];
         page.on("pageerror", (error) => failures.push(String(error)));
@@ -285,12 +251,19 @@ describe("a published bundle", () => {
             { timeout: 90_000 },
           )
           .catch(async (error) => {
-            const stuck = await page.evaluate(() => ({
-              state: document.querySelector("#scene")?.getAttribute("data-state") ?? "none",
-              status: document.getElementById("status")?.textContent ?? "",
-            }));
+            const stuck = await page.evaluate(() => {
+              const video = document.querySelector("#scene video") as HTMLVideoElement | null;
+              return {
+                state: document.querySelector("#scene")?.getAttribute("data-state") ?? "none",
+                status: document.getElementById("status")?.textContent ?? "",
+                video: video
+                  ? `${video.videoWidth}x${video.videoHeight} ready ${video.readyState} paused ${video.paused}`
+                  : "no video element",
+                camera: (window as unknown as { cameraDiagnostics?: CameraDiagnostics }).cameraDiagnostics,
+              };
+            });
             throw new Error(
-              `${engine} never reached tracking in the published bundle: stopped at "${stuck.state}", status "${stuck.status}", 404s ${JSON.stringify(missing)}, offsite ${JSON.stringify(offsite)}, page errors ${JSON.stringify(failures)} (${String(error).slice(0, 120)})`,
+              `${engine} never reached tracking in the published bundle: stopped at "${stuck.state}", status "${stuck.status}", video ${stuck.video}, camera ${JSON.stringify(stuck.camera)}, 404s ${JSON.stringify(missing)}, offsite ${JSON.stringify(offsite)}, page errors ${JSON.stringify(failures)} (${String(error).slice(0, 120)})`,
             );
           });
 

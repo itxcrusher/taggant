@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { type Browser, type BrowserType, chromium, firefox, webkit } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { installCanvasCamera } from "./camera-stub.js";
 import { artwork, inView } from "./feed.js";
 import { requiredEngines } from "./required.js";
 
@@ -54,6 +55,8 @@ const PLACED = { x: 80, y: 60 };
 const ARTWORK = artwork(ART.width, ART.height);
 /** Bytes, served as bytes. A frame is 307,200 of them and JSON is the wrong wire for that. */
 const FRAME_BYTES = inView(ARTWORK, CAMERA.width, CAMERA.height, PLACED.x, PLACED.y).data;
+/** The same frame for the canvas camera, which takes it as base64 through an init script. */
+const FRAME_BASE64 = Buffer.from(FRAME_BYTES).toString("base64");
 /** The compiled form, so the runtime reads it the way a published bundle does. */
 const TARGET_FILE = toTargetFile({
   id: "front",
@@ -432,48 +435,7 @@ describe("the same artwork in every engine", () => {
       page.on("pageerror", (error) => pageErrors.push(String(error)));
       try {
         // Before any page script. There is no path from here to a device.
-        await page.addInitScript(() => {
-          const capture = async (): Promise<MediaStream> => {
-            const canvas = document.createElement("canvas");
-            canvas.width = 640;
-            canvas.height = 480;
-            const context2d = canvas.getContext("2d", { willReadFrequently: true });
-            if (!context2d) throw new Error("no 2d context");
-            const bytes = new Uint8Array(await (await fetch("/frame.gray")).arrayBuffer());
-            const picture = context2d.createImageData(canvas.width, canvas.height);
-            for (let i = 0; i < bytes.length; i++) {
-              const grey = bytes[i] ?? 0;
-              picture.data[i * 4] = grey;
-              picture.data[i * 4 + 1] = grey;
-              picture.data[i * 4 + 2] = grey;
-              picture.data[i * 4 + 3] = 255;
-            }
-            context2d.putImageData(picture, 0, 0);
-            // Redrawn every frame, because a still canvas is allowed to emit nothing.
-            const keepAlive = () => {
-              context2d.putImageData(picture, 0, 0);
-              requestAnimationFrame(keepAlive);
-            };
-            requestAnimationFrame(keepAlive);
-            return canvas.captureStream(30);
-          };
-          // Both halves are needed for a canvas to stand in for a camera, and which engine
-          // has them belongs to somebody else's build rather than to this project:
-          // Playwright's WebKit has neither on Windows, and writing that down as a fact
-          // about the engine rather than measuring it turned CI red on a platform where it
-          // differs. So it is measured, and both branches below are strict about what
-          // follows from it.
-          const stubbed =
-            typeof MediaStream !== "undefined" &&
-            typeof document.createElement("canvas").captureStream === "function";
-          (window as unknown as { cameraStubbed: boolean }).cameraStubbed = stubbed;
-          Object.defineProperty(navigator, "mediaDevices", {
-            configurable: true,
-            // Left undefined where a canvas cannot be a camera, which is what the engine
-            // would have offered anyway, so the runtime meets the real thing.
-            value: stubbed ? { getUserMedia: capture } : undefined,
-          });
-        });
+        await page.addInitScript(installCanvasCamera, FRAME_BASE64);
 
         await page.goto(`${origin}/camera-page.html`);
         await page.waitForFunction(() => (window as unknown as { ready?: boolean }).ready === true);
