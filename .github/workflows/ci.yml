@@ -39,9 +39,20 @@ jobs:
       # than failing, which is right on a contributor's machine and wrong here: this job is
       # where the claim that all three engines agree is supposed to be earned. Naming them
       # makes a run that quietly covered one engine fail and say which are missing.
-      - run: pnpm -r test
+      - name: test
+        run: |
+          set -o pipefail
+          pnpm -r test 2>&1 | tee test-output.txt
         env:
           TAGGANT_REQUIRE_ENGINES: chromium,firefox,webkit
+      # A failed run here is otherwise only readable as an exit code, because fetching job
+      # logs needs a token and a browser test that fails on a runner and passes on a laptop
+      # is exactly the one worth reading. These lines become annotations on the run.
+      - name: say what failed
+        if: failure()
+        run: |
+          echo "::error::the test step failed; the lines below are from its output"
+          grep -aE "FAIL|AssertionError|Error:|never reached|could not be launched" test-output.txt | head -40 | sed 's/^/::error::/'
 
   # The path a printed code takes, in containers, on every push. What this covers is the
   # part no unit test can: that the image builds, the stack comes up healthy, a scan

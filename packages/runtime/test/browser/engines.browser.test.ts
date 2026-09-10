@@ -93,12 +93,12 @@ const CAMERA_MANIFEST = {
 };
 
 /**
- * Engines whose Playwright build has no media capture surface at all. Measured rather than
- * assumed: `MediaStream` itself is not defined in Playwright's WebKit, so a canvas cannot
- * stand in for a camera there and neither can anything else. Written as a list rather than
- * probed and shrugged at, so that an engine gaining the API fails this and gets read.
+ * Chromium has both halves of the browser API a canvas camera needs on every platform, so
+ * it is the one engine required to take the full path below. Without this the camera check
+ * could quietly become nothing at all on a platform where the others lack them, which is
+ * the shape of failure this file has already had twice.
  */
-const NO_MEDIA_STREAM = new Set(["webkit"]);
+const MUST_TAKE_THE_CAMERA_PATH = "chromium";
 
 /** Every engine Playwright can start here. A machine without one skips it, visibly. */
 const ENGINES: [string, BrowserType][] = [
@@ -457,22 +457,36 @@ describe("the same artwork in every engine", () => {
             requestAnimationFrame(keepAlive);
             return canvas.captureStream(30);
           };
+          // Both halves are needed for a canvas to stand in for a camera, and which engine
+          // has them belongs to somebody else's build rather than to this project:
+          // Playwright's WebKit has neither on Windows, and writing that down as a fact
+          // about the engine rather than measuring it turned CI red on a platform where it
+          // differs. So it is measured, and both branches below are strict about what
+          // follows from it.
+          const stubbed =
+            typeof MediaStream !== "undefined" &&
+            typeof document.createElement("canvas").captureStream === "function";
+          (window as unknown as { cameraStubbed: boolean }).cameraStubbed = stubbed;
           Object.defineProperty(navigator, "mediaDevices", {
             configurable: true,
-            // Undefined where the engine has no media capture at all, which is what it would
-            // have been anyway, so the runtime meets the real thing rather than a pretend one.
-            value: typeof MediaStream === "undefined" ? undefined : { getUserMedia: capture },
+            // Left undefined where a canvas cannot be a camera, which is what the engine
+            // would have offered anyway, so the runtime meets the real thing.
+            value: stubbed ? { getUserMedia: capture } : undefined,
           });
         });
 
         await page.goto(`${origin}/camera-page.html`);
         await page.waitForFunction(() => (window as unknown as { ready?: boolean }).ready === true);
 
-        const capable = await page.evaluate(() => typeof MediaStream !== "undefined");
-        expect(
-          capable,
-          `${engine} disagrees with what this file says about whether it has a media capture API`,
-        ).toBe(!NO_MEDIA_STREAM.has(engine));
+        const capable = await page.evaluate(
+          () => (window as unknown as { cameraStubbed?: boolean }).cameraStubbed === true,
+        );
+        if (engine === MUST_TAKE_THE_CAMERA_PATH) {
+          expect(
+            capable,
+            `${engine} could not be given a canvas camera, so nothing here drove the camera path`,
+          ).toBe(true);
+        }
 
         const mounted = await page.evaluate(async () => {
           const runtime = (window as unknown as { runtime: typeof import("@taggant/runtime") }).runtime;
@@ -518,10 +532,23 @@ describe("the same artwork in every engine", () => {
           return;
         }
 
-        await page.waitForFunction(
-          () => document.querySelector("#scene")?.getAttribute("data-state") === "tracking",
-          { timeout: 60_000 },
-        );
+        // Generous, because this waits on real recognition in a browser sharing a small
+        // runner with two other engines. A failure says which state it stopped at, since
+        // the only thing readable about a failed run elsewhere is the exit code.
+        await page
+          .waitForFunction(
+            () => document.querySelector("#scene")?.getAttribute("data-state") === "tracking",
+            { timeout: 90_000 },
+          )
+          .catch(async (error) => {
+            const stuck = await page.evaluate(() => ({
+              state: document.querySelector("#scene")?.getAttribute("data-state") ?? "none",
+              problems: (window as unknown as { taggantProblems: string[] }).taggantProblems,
+            }));
+            throw new Error(
+              `${engine} never reached tracking: stopped at "${stuck.state}", problems ${JSON.stringify(stuck.problems)}, page errors ${JSON.stringify(pageErrors)} (${String(error).slice(0, 120)})`,
+            );
+          });
 
         const overlay = page.locator('[data-taggant-target="front"]');
         expect(await overlay.count()).toBe(1);

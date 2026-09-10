@@ -40,3 +40,6 @@ infra/workspace/*
 !infra/workspace/.gitkeep
 infra/bundles/*
 !infra/bundles/.gitkeep
+
+# Written by the CI test step so a failed run can be read without log access.
+test-output.txt
