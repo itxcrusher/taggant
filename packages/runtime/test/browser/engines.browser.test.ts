@@ -538,6 +538,7 @@ describe("the same artwork in every engine", () => {
         await page
           .waitForFunction(
             () => document.querySelector("#scene")?.getAttribute("data-state") === "tracking",
+            undefined,
             { timeout: 90_000 },
           )
           .catch(async (error) => {

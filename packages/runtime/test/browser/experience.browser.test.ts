@@ -149,9 +149,8 @@ describe("the runtime in a browser, against a camera", () => {
     // Recognition runs per frame, so this is waiting for the pipeline, not for a load.
     await page.waitForFunction(
       () => document.querySelector("#stage")?.getAttribute("data-state") === "tracking",
-      {
-        timeout: 60_000,
-      },
+      undefined,
+      { timeout: 60_000 },
     );
 
     const overlay = page.locator('[data-taggant-target="front"]');
@@ -227,6 +226,7 @@ describe("the runtime in a browser, against a camera", () => {
     await page.goto(`${origin}/page.html?w=360&h=640`);
     await page.waitForFunction(
       () => document.querySelector("#stage")?.getAttribute("data-state") === "tracking",
+      undefined,
       { timeout: 60_000 },
     );
 
@@ -351,6 +351,7 @@ describe("the runtime in a browser, against a camera", () => {
     await page.goto(`${origin}/page.html`);
     await page.waitForFunction(
       () => document.querySelector("#stage")?.getAttribute("data-state") === "tracking",
+      undefined,
       { timeout: 60_000 },
     );
 
@@ -392,9 +393,8 @@ describe("the runtime in a browser, against a camera", () => {
     await page.goto(`${origin}/page.html`);
     await page.waitForFunction(
       () => document.querySelector("#stage")?.getAttribute("data-state") === "denied",
-      {
-        timeout: 30_000,
-      },
+      undefined,
+      { timeout: 30_000 },
     );
     expect(await page.locator("#stage").getAttribute("data-state")).toBe("denied");
     await context.close();

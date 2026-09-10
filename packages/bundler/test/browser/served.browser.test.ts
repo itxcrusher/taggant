@@ -1,13 +1,14 @@
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compileTarget, toTargetJson } from "@taggant/compiler";
-import { type Browser, chromium } from "playwright";
+import { type Browser, type BrowserType, chromium, firefox, webkit } from "playwright";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { artwork, inView, writeFeed } from "../../../runtime/test/browser/feed.js";
+import { artwork, inView } from "../../../runtime/test/browser/feed.js";
+import { requiredEngines } from "../../../runtime/test/browser/required.js";
 import { bundle } from "../../src/bundle.js";
 
 declare global {
@@ -42,10 +43,35 @@ const TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
 };
 
-let browser: Browser | undefined;
+/**
+ * Every engine, launched here rather than in a hook, because the cases below are generated
+ * from this list and a `describe` body runs first. No launch flags: the camera these tests
+ * use is a canvas, so nothing here needs a fake device and nothing here can reach one.
+ */
+const ENGINES: [string, BrowserType][] = [
+  ["chromium", chromium],
+  ["firefox", firefox],
+  ["webkit", webkit],
+];
+const started: [string, Browser][] = [];
+for (const [name, type] of ENGINES) {
+  try {
+    started.push([name, await type.launch()]);
+  } catch (error) {
+    console.warn(
+      `served: ${name} could not be launched, so the bundle was not opened in it: ${String(error).slice(0, 300)}`,
+    );
+  }
+}
+
+/** Chromium has what a canvas camera needs everywhere, so it must take the full path. */
+const MUST_OPEN_THE_BUNDLE = "chromium";
+
 let close: (() => Promise<void>) | undefined;
 let origin = "";
 let outDir = "";
+/** The camera frame, as base64, because it crosses into an init script. */
+let frame64 = "";
 
 beforeAll(async () => {
   const root = await mkdtemp(join(tmpdir(), "taggant-served-"));
@@ -85,8 +111,7 @@ beforeAll(async () => {
     runtimeDir: RUNTIME_DIST,
   });
 
-  const scratchFeed = join(root, "camera.y4m");
-  await writeFeed(scratchFeed, inView(art, FRAME.width, FRAME.height, PLACED.x, PLACED.y));
+  frame64 = Buffer.from(inView(art, FRAME.width, FRAME.height, PLACED.x, PLACED.y).data).toString("base64");
 
   // A plain static server over the bundle folder and nothing else. No resolver, no
   // console, no package registry, no path outside this directory. If the bundle needs
@@ -108,23 +133,25 @@ beforeAll(async () => {
   if (typeof address === "string" || address === null) throw new Error("expected a bound port");
   origin = `http://127.0.0.1:${address.port}`;
 
-  browser = await chromium.launch({
-    args: [
-      "--use-fake-ui-for-media-stream",
-      "--use-fake-device-for-media-stream",
-      `--use-file-for-fake-video-capture=${scratchFeed}`,
-    ],
-  });
-
   close = async () => {
-    await browser?.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
   };
 }, 180_000);
 
 afterAll(async () => {
+  // Outside `close`, because that is assigned at the end of a hook which compiles artwork
+  // and builds a bundle first, so anything failing before it left browsers running.
+  for (const [, instance] of started) await instance.close();
   await close?.();
 });
+
+/** The first engine that started, for the cases that are not about engine differences. */
+function anyBrowser(): Browser {
+  const first = started[0]?.[1];
+  if (!first) throw new Error("no browser engine could be launched");
+  return first;
+}
 
 async function walk(dir: string): Promise<string[]> {
   const found: string[] = [];
@@ -137,51 +164,156 @@ async function walk(dir: string): Promise<string[]> {
 }
 
 describe("a published bundle", () => {
-  it("runs from a static folder with everything else switched off", async () => {
-    if (!browser) throw new Error("no browser");
-    // The viewport matches the feed, so a position in the page can be compared with the
-    // position the feed put the artwork at. The runtime scales the pose from the size it
-    // tracked at to the size it is shown at, which is correct and would otherwise make
-    // these two numbers describe different spaces.
-    const context = await browser.newContext({
-      permissions: ["camera"],
-      viewport: { width: FRAME.width, height: FRAME.height },
-    });
-    const page = await context.newPage();
+  it("was opened in the engines this machine says it must", () => {
+    const names = started.map(([name]) => name);
+    const missing = requiredEngines().filter((name) => !names.includes(name));
+    expect(
+      missing,
+      `TAGGANT_REQUIRE_ENGINES asks for ${requiredEngines().join(", ")} and ${missing.join(", ")} did not launch, so the bundle was opened in fewer engines than claimed`,
+    ).toEqual([]);
+    expect(
+      started.length,
+      "no browser engine could be launched, so the bundle was never opened",
+    ).toBeGreaterThan(0);
+  });
 
-    const failures: string[] = [];
-    page.on("pageerror", (error) => failures.push(String(error)));
-    // Anything the page asks for that this folder does not hold is a broken promise.
-    const missing: string[] = [];
-    page.on("response", (response) => {
-      if (response.status() === 404) missing.push(response.url());
-    });
-    // And any request that leaves this origin at all.
-    const offsite: string[] = [];
-    page.on("request", (request) => {
-      if (!request.url().startsWith(origin) && !request.url().startsWith("data:"))
-        offsite.push(request.url());
-    });
+  /**
+   * The bundle is the thing a viewer actually gets: a folder on a static host, opened by
+   * whatever browser their phone has. It was opened in Chromium alone, because Chromium is
+   * the only engine that can be handed a video file to play as a camera, and that left the
+   * one artifact this project ships checked in one engine.
+   *
+   * No engine is asked for a camera. `navigator.mediaDevices` is replaced before any page
+   * script runs with one returning a canvas the artwork has been drawn into, so there is no
+   * path from here to hardware, and the frame contains the artwork so the whole path runs:
+   * the page loads from the folder, its modules resolve, its worker starts, recognition
+   * happens, and the content lands where the frame put the artwork.
+   */
+  it.each(started)(
+    "runs from a static folder with everything else switched off in %s",
+    async (engine, browser) => {
+      // The viewport matches the frame, so a position in the page can be compared with the
+      // position the frame put the artwork at. The runtime scales the pose from the size it
+      // tracked at to the size it is shown at, which is correct and would otherwise make
+      // these two numbers describe different spaces.
+      const context = await browser.newContext({ viewport: { width: FRAME.width, height: FRAME.height } });
+      const page = await context.newPage();
+      try {
+        await page.addInitScript((encoded: string) => {
+          const capture = async (): Promise<MediaStream> => {
+            const canvas = document.createElement("canvas");
+            canvas.width = 640;
+            canvas.height = 480;
+            const context2d = canvas.getContext("2d", { willReadFrequently: true });
+            if (!context2d) throw new Error("no 2d context");
+            const binary = atob(encoded);
+            const picture = context2d.createImageData(canvas.width, canvas.height);
+            for (let i = 0; i < binary.length; i++) {
+              const grey = binary.charCodeAt(i);
+              picture.data[i * 4] = grey;
+              picture.data[i * 4 + 1] = grey;
+              picture.data[i * 4 + 2] = grey;
+              picture.data[i * 4 + 3] = 255;
+            }
+            context2d.putImageData(picture, 0, 0);
+            const keepAlive = () => {
+              context2d.putImageData(picture, 0, 0);
+              requestAnimationFrame(keepAlive);
+            };
+            requestAnimationFrame(keepAlive);
+            return canvas.captureStream(30);
+          };
+          // Which engine has both halves belongs to somebody else's build and differs by
+          // platform, so it is measured rather than written down. Left undefined where a
+          // canvas cannot be a camera, which is what the engine would have offered anyway.
+          const stubbed =
+            typeof MediaStream !== "undefined" &&
+            typeof document.createElement("canvas").captureStream === "function";
+          (window as unknown as { cameraStubbed: boolean }).cameraStubbed = stubbed;
+          Object.defineProperty(navigator, "mediaDevices", {
+            configurable: true,
+            value: stubbed ? { getUserMedia: capture } : undefined,
+          });
+        }, frame64);
 
-    await page.goto(`${origin}/index.html`);
-    await page.waitForFunction(
-      () => document.querySelector("#scene")?.getAttribute("data-state") === "tracking",
-      { timeout: 60_000 },
-    );
+        const failures: string[] = [];
+        page.on("pageerror", (error) => failures.push(String(error)));
+        // Anything the page asks for that this folder does not hold is a broken promise.
+        const missing: string[] = [];
+        page.on("response", (response) => {
+          if (response.status() === 404) missing.push(response.url());
+        });
+        // And any request that leaves this origin at all.
+        const offsite: string[] = [];
+        page.on("request", (request) => {
+          if (!request.url().startsWith(origin) && !request.url().startsWith("data:"))
+            offsite.push(request.url());
+        });
 
-    const overlay = page.locator('[data-taggant-target="front"]');
-    expect(await overlay.count()).toBe(1);
-    expect(await overlay.isHidden()).toBe(false);
-    const box = await overlay.boundingBox();
-    if (!box) throw new Error("expected the overlay to have a box");
-    expect(Math.abs(box.x - PLACED.x)).toBeLessThan(40);
-    expect(Math.abs(box.y - PLACED.y)).toBeLessThan(40);
+        await page.goto(`${origin}/index.html`);
+        const capable = await page.evaluate(
+          () => (window as unknown as { cameraStubbed?: boolean }).cameraStubbed === true,
+        );
+        if (engine === MUST_OPEN_THE_BUNDLE) {
+          expect(capable, `${engine} could not be given a canvas camera, so nothing opened the bundle`).toBe(
+            true,
+          );
+        }
 
-    expect(missing).toEqual([]);
-    expect(offsite).toEqual([]);
-    expect(failures).toEqual([]);
-    await context.close();
-  }, 180_000);
+        if (!capable) {
+          // No camera API here. What the bundle still has to do is say so on the page rather
+          // than leave whoever scanned a printed code reading "Starting" for ever.
+          await page.waitForFunction(
+            () => !(document.getElementById("status")?.textContent ?? "").startsWith("Starting"),
+            undefined,
+            { timeout: 30_000 },
+          );
+          const state = await page.getAttribute("#scene", "data-state");
+          const status = await page.textContent("#status");
+          console.log(`${engine}: no camera API, the bundle says "${status}" and is in state ${state}`);
+          expect(["error", "denied"]).toContain(state);
+          expect(missing).toEqual([]);
+          expect(offsite).toEqual([]);
+          expect(failures).toEqual([]);
+          return;
+        }
+
+        await page
+          .waitForFunction(
+            () => document.querySelector("#scene")?.getAttribute("data-state") === "tracking",
+            undefined,
+            { timeout: 90_000 },
+          )
+          .catch(async (error) => {
+            const stuck = await page.evaluate(() => ({
+              state: document.querySelector("#scene")?.getAttribute("data-state") ?? "none",
+              status: document.getElementById("status")?.textContent ?? "",
+            }));
+            throw new Error(
+              `${engine} never reached tracking in the published bundle: stopped at "${stuck.state}", status "${stuck.status}", 404s ${JSON.stringify(missing)}, offsite ${JSON.stringify(offsite)}, page errors ${JSON.stringify(failures)} (${String(error).slice(0, 120)})`,
+            );
+          });
+
+        const overlay = page.locator('[data-taggant-target="front"]');
+        expect(await overlay.count()).toBe(1);
+        expect(await overlay.isHidden()).toBe(false);
+        const box = await overlay.boundingBox();
+        if (!box) throw new Error("expected the overlay to have a box");
+        console.log(
+          `${engine}: the bundle tracked, content at ${box.x.toFixed(0)},${box.y.toFixed(0)} against artwork at ${PLACED.x},${PLACED.y}, ${missing.length} missing, ${offsite.length} offsite`,
+        );
+        expect(Math.abs(box.x - PLACED.x)).toBeLessThan(40);
+        expect(Math.abs(box.y - PLACED.y)).toBeLessThan(40);
+
+        expect(missing).toEqual([]);
+        expect(offsite).toEqual([]);
+        expect(failures).toEqual([]);
+      } finally {
+        await context.close();
+      }
+    },
+    180_000,
+  );
 
   it("holds no absolute reference to anywhere in the code it ships", async () => {
     const files = await walk(outDir);
@@ -225,10 +357,9 @@ describe("a bundle that cannot start", () => {
   };
 
   it("says so, instead of leaving the viewer on Starting forever", async () => {
-    if (!browser) throw new Error("no browser");
     const restoreTarget = await breakTheTarget();
     const restoreManifest = await setFallback(undefined);
-    const page = await browser.newPage();
+    const page = await anyBrowser().newPage();
     try {
       await page.goto(`${origin}/index.html`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
@@ -246,10 +377,9 @@ describe("a bundle that cannot start", () => {
   }, 60_000);
 
   it("sends the viewer where the manifest says to go", async () => {
-    if (!browser) throw new Error("no browser");
     const restoreTarget = await breakTheTarget();
     const restoreManifest = await setFallback(`${origin}/fallback-reached`);
-    const page = await browser.newPage();
+    const page = await anyBrowser().newPage();
     try {
       await page.goto(`${origin}/index.html`, { waitUntil: "domcontentloaded" });
       await page.waitForURL(/fallback-reached/, { timeout: 20_000 });
