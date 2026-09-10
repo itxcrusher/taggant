@@ -48,6 +48,17 @@ const { buildTrackingFeatures } = (await import(pathToFileURL(VISION).href).catc
 
 const ART = { width: 320, height: 240 };
 
+/**
+ * How the runtime finds its worker, in one line, served from beside `worker.js` so that
+ * `import.meta.url` resolves from the same place the runtime's own module does. What has to
+ * work in a browser is not a path a test knows, it is this resolution.
+ */
+const RESOLVE = `export function startWorkerTheWayTheRuntimeDoes() {
+  return new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
+}
+window.startWorkerTheWayTheRuntimeDoes = startWorkerTheWayTheRuntimeDoes;
+`;
+
 /** Every engine Playwright can start here. A machine without one skips it, visibly. */
 const ENGINES: [string, BrowserType][] = [
   ["chromium", chromium],
@@ -103,10 +114,19 @@ beforeAll(async () => {
       "/worker-page.html",
       {
         body: Buffer.from(
-          '<!doctype html><meta charset="utf-8"><title>worker</title><script>window.ready = true;</script>',
+          '<!doctype html><meta charset="utf-8"><title>worker</title>' +
+            '<script type="module">import "/resolve.js"; window.ready = true;</script>',
         ),
         type: "text/html",
       },
+    ],
+    [
+      // Served beside worker.js, so `new URL("./worker.js", import.meta.url)` resolves from
+      // here exactly as it does from the runtime's own module. That one line is how the
+      // runtime finds its worker, and it is the part that has to work in a browser rather
+      // than in a bundler.
+      "/resolve.js",
+      { body: Buffer.from(RESOLVE), type: "text/javascript" },
     ],
   ]);
   // The whole runtime build, at the root, because the worker resolves the shared chunk
@@ -256,7 +276,7 @@ describe("the same artwork in every engine", () => {
    * gets an answer out of it too, which proves only that it loaded.
    */
   it.each(started)(
-    "recognises through a module worker in %s",
+    "recognises through a module worker, resolved the way the runtime resolves it, in %s",
     async (_engine, browser) => {
       const art = artwork(ART.width, ART.height);
       const frame = inView(art, 640, 480, 80, 60);
@@ -285,7 +305,11 @@ describe("the same artwork in every engine", () => {
           await new Promise<{ ok: boolean; detail: string; inliers: number; matrix: number }>((resolve) => {
             let worker: Worker;
             try {
-              worker = new Worker("/worker.js", { type: "module" });
+              // Resolved against a module's own URL, which is how the runtime finds it, not
+              // by a path this test happens to know.
+              worker = (
+                window as unknown as { startWorkerTheWayTheRuntimeDoes: () => Worker }
+              ).startWorkerTheWayTheRuntimeDoes();
             } catch (error) {
               resolve({
                 ok: false,
@@ -333,6 +357,8 @@ describe("the same artwork in every engine", () => {
         { serialised: target, width: frame.width, height: frame.height, data: [...frame.data] },
       );
 
+      // Printed on every run, because a pass is the only place this is measured.
+      console.log(`${_engine}: worker answered with ${answer.inliers} inliers`);
       expect(pageErrors).toEqual([]);
       expect(answer.ok, answer.detail).toBe(true);
       // A pose, not merely a reply. The ten inlier floor is the runtime's own, so anything
