@@ -14,23 +14,23 @@
  * Pass it to `page.addInitScript(installCanvasCamera, base64OfAGrayscaleFrame)`. It is one
  * function, in one file, because two copies of it in two test files is how they drift.
  *
- * **Whether a canvas can be a camera is decided by trying it, not by looking for the two
- * APIs.** Both exist in WebKit on Linux and the stream they produce never becomes playable
- * there, which is a thing a test cannot learn from `typeof`. So the stream is fed to a
- * video element here first, and only a stream that yields a picture is handed over; one
- * that does not is refused the way a missing device is refused, which is the truth about
- * that engine and is what the runtime should be made to handle anyway.
+ * **Whether a canvas can be a camera is not decided here.** Both APIs exist in WebKit on
+ * Linux and the stream they produce may never become playable there, which is not a thing
+ * `typeof` can say. This used to feed the stream to a video element of its own first and
+ * hand over only one that yielded a picture, and that was worse: a trial with its own video
+ * element, off to one side of the page, is stricter than the runtime's, which is in the
+ * page and on screen, so it reported an engine as incapable where the runtime might not
+ * have been. The stream is handed over as it is, the page settles on tracking or on an
+ * error, and the test reads which. The runtime bounds its own wait, so a stream that never
+ * plays is an error state rather than a page that hangs, which is what makes this safe.
  */
 export function installCanvasCamera(encoded: string): void {
   const diagnostics = {
-    /** Whether a canvas camera was proved to work in this engine, by doing it. */
-    usable: false,
     called: 0,
     decoded: 0,
     captured: false,
     tracks: "",
     settings: "",
-    trial: "",
     redraws: 0,
     failure: "",
   };
@@ -85,64 +85,8 @@ export function installCanvasCamera(encoded: string): void {
     };
   };
 
-  /** Does a stream from this canvas actually become a picture a video element can show? */
-  const trial = async (): Promise<boolean> => {
-    let made: { stream: MediaStream; stop: () => void } | undefined;
-    try {
-      made = await paint();
-      const video = document.createElement("video");
-      video.muted = true;
-      video.setAttribute("playsinline", "");
-      // Attached, off to one side, because the runtime's video is in the page and a trial
-      // that is stricter than the thing it stands for reports engines as incapable when
-      // they are not. `display: none` would be that stricter thing, so it is placement.
-      video.style.position = "fixed";
-      video.style.left = "-9999px";
-      video.style.top = "0";
-      video.style.width = "640px";
-      video.style.height = "480px";
-      video.dataset.cameraTrial = "";
-      document.documentElement.appendChild(video);
-      video.srcObject = made.stream;
-      const playing = video.play().catch((error) => {
-        diagnostics.trial = `play rejected: ${String(error).slice(0, 80)}`;
-      });
-      const gotSize = await Promise.race([
-        (async () => {
-          const until = Date.now() + 4000;
-          while (Date.now() < until) {
-            if (video.videoWidth > 0) return true;
-            await new Promise((resolve) => setTimeout(resolve, 50));
-          }
-          return false;
-        })(),
-        playing.then(() => new Promise<boolean>(() => undefined)),
-      ]);
-      if (!gotSize && !diagnostics.trial) diagnostics.trial = "no picture within 4000 ms";
-      return gotSize === true;
-    } catch (error) {
-      diagnostics.trial = `threw: ${String(error).slice(0, 80)}`;
-      return false;
-    } finally {
-      made?.stop();
-      for (const spare of Array.from(document.querySelectorAll("video[data-camera-trial]"))) {
-        spare.remove();
-      }
-    }
-  };
-
-  let decided: Promise<boolean> | undefined;
   const capture = async (): Promise<MediaStream> => {
     diagnostics.called++;
-    decided ??= trial();
-    diagnostics.usable = await decided;
-    if (!diagnostics.usable) {
-      // Refused the way a device that is not there is refused, so the runtime meets a real
-      // shape of failure rather than a pretend one.
-      throw Object.assign(new Error(`a canvas cannot be a camera in this engine: ${diagnostics.trial}`), {
-        name: "NotFoundError",
-      });
-    }
     try {
       const made = await paint();
       const track = made.stream.getVideoTracks()[0];
@@ -178,13 +122,11 @@ export function installCanvasCamera(encoded: string): void {
 
 /** What the stub recorded, for a failure message that says where it stopped. */
 export interface CameraDiagnostics {
-  usable: boolean;
   called: number;
   decoded: number;
   captured: boolean;
   tracks: string;
   settings: string;
-  trial: string;
   redraws: number;
   failure: string;
 }

@@ -242,7 +242,14 @@ describe("a published bundle", () => {
         const camera = await page.evaluate(
           () => (window as unknown as { cameraDiagnostics?: CameraDiagnostics }).cameraDiagnostics,
         );
-        const capable = camera?.usable === true;
+        // What the page settled on. Whether an engine can use a canvas as a camera is not
+        // something to decide beforehand: both APIs are present in WebKit on Linux and the
+        // stream may never become a picture there, and a trial with a video element of its
+        // own was stricter than the runtime's and called engines incapable that may not be.
+        const settledState = await page.evaluate(
+          () => document.querySelector("#scene")?.getAttribute("data-state") ?? "",
+        );
+        const capable = settledState === "tracking";
         if (engine === MUST_OPEN_THE_BUNDLE) {
           expect(capable, `${engine} could not be given a canvas camera: ${JSON.stringify(camera)}`).toBe(
             true,
@@ -258,7 +265,7 @@ describe("a published bundle", () => {
             status: document.getElementById("status")?.textContent ?? "",
           }));
           console.log(
-            `${engine}: no canvas camera here (${camera?.trial || "no capture API"}), the bundle says "${both.status}" in state ${both.state}`,
+            `${engine}: a canvas was not a camera here, the bundle says "${both.status}" in state ${both.state} after ${camera?.called ?? 0} request(s), stream ${camera?.tracks || "none"} ${camera?.settings || ""}`,
           );
           expect(["error", "denied"]).toContain(both.state);
           expect(both.status).not.toMatch(/^Starting/);
@@ -272,7 +279,7 @@ describe("a published bundle", () => {
           .waitForFunction(
             () => document.querySelector("#scene")?.getAttribute("data-state") === "tracking",
             undefined,
-            // Short, because the page has already settled on one of the three states above.
+            // Already settled on tracking above; this only reads it back.
             { timeout: 5_000 },
           )
           .catch(async (error) => {
