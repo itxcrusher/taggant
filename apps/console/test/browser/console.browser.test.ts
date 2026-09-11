@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { compile } from "../../src/operations.js";
 import { createConsole } from "../../src/server.js";
 import { createWorkspace } from "../../src/workspace.js";
 
@@ -48,11 +49,14 @@ let browser: Browser;
 let server: Server;
 let origin = "";
 let scratch = "";
+/** Made in the hook, so a case that only needs a page to open does not depend on another. */
+const STANDING = "standing-experience";
 
 beforeAll(async () => {
   scratch = await mkdtemp(join(tmpdir(), "console-browser-"));
+  const workspace = createWorkspace(join(scratch, "workspace"));
   server = createConsole({
-    workspace: createWorkspace(join(scratch, "workspace")),
+    workspace,
     publishRoot: join(scratch, "bundles"),
     linkTablePath: join(scratch, "links.json"),
     runtimeDir: RUNTIME_DIST,
@@ -60,6 +64,22 @@ beforeAll(async () => {
   await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   browser = await chromium.launch();
+
+  // An experience for the cases that only need one to look at. They used to open the one
+  // the case above them builds through the interface, so neither passed on its own and
+  // reordering or filtering the file broke both. Built here through the same calls the
+  // interface makes, rather than through the interface, because the case that drives the
+  // interface is still doing that and that is what it is for.
+  await workspace.create(STANDING, "Standing experience");
+  const stored = await workspace.storeFile(STANDING, "artwork", "front.png", await artwork());
+  await workspace.update(STANDING, (manifest) => ({
+    ...manifest,
+    targets: [
+      ...(manifest.targets ?? []),
+      { id: "front-panel", source: stored, physicalWidthMm: 120, content: [] },
+    ],
+  }));
+  await compile(workspace, await workspace.read(STANDING), "front-panel");
 }, 120_000);
 
 afterAll(async () => {
@@ -120,7 +140,7 @@ describe("the console in a browser", () => {
 
   it("does not scroll sideways on a phone", async () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
-    await page.goto(`${origin}/e/botanica-500`, { waitUntil: "networkidle" });
+    await page.goto(`${origin}/e/${STANDING}`, { waitUntil: "networkidle" });
     const overflow = await page.evaluate(
       () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
     );
@@ -132,7 +152,7 @@ describe("the console in a browser", () => {
     // Server rendered, so this is a claim worth pinning: the reveal is a details element
     // rather than something a listener opens.
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, javaScriptEnabled: false });
-    await page.goto(`${origin}/e/botanica-500`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${origin}/e/${STANDING}`, { waitUntil: "domcontentloaded" });
     expect(await page.textContent(".verdict .state")).toContain("Ready for press");
     await page.click("summary:has-text('Under the lamp')");
     expect(await page.locator(".record-body").isVisible()).toBe(true);
