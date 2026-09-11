@@ -87,6 +87,16 @@ export function installCanvasCamera(encoded: string): void {
       const video = document.createElement("video");
       video.muted = true;
       video.setAttribute("playsinline", "");
+      // Attached, off to one side, because the runtime's video is in the page and a trial
+      // that is stricter than the thing it stands for reports engines as incapable when
+      // they are not. `display: none` would be that stricter thing, so it is placement.
+      video.style.position = "fixed";
+      video.style.left = "-9999px";
+      video.style.top = "0";
+      video.style.width = "640px";
+      video.style.height = "480px";
+      video.dataset.cameraTrial = "";
+      document.documentElement.appendChild(video);
       video.srcObject = made.stream;
       const playing = video.play().catch((error) => {
         diagnostics.trial = `play rejected: ${String(error).slice(0, 80)}`;
@@ -109,6 +119,9 @@ export function installCanvasCamera(encoded: string): void {
       return false;
     } finally {
       made?.stop();
+      for (const spare of Array.from(document.querySelectorAll("video[data-camera-trial]"))) {
+        spare.remove();
+      }
     }
   };
 
