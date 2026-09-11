@@ -52,7 +52,12 @@ jobs:
       - name: say what each engine did
         if: always()
         run: |
-          grep -aE "features, differing|worker (in a thread|ON THE PAGE)|tracking, content at|no media capture API|frame pacing" test-output.txt | sed 's/^/::notice::/' || echo "::notice::no per engine lines were printed"
+          lines=$(grep -aE "features, differing|inliers, artwork corners|tracked, content|tracking, content|no canvas camera|no media capture|frame pacing" test-output.txt || true)
+          if [ -z "$lines" ]; then
+            echo "::notice::no per engine lines were printed at all, so the engine checks did not run"
+          else
+            echo "$lines" | sed 's/^/::notice::/'
+          fi
       # A failed run here is otherwise only readable as an exit code, because fetching job
       # logs needs a token and a browser test that fails on a runner and passes on a laptop
       # is exactly the one worth reading. These lines become annotations on the run.

@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { within } from "../src/assets.js";
 import { bundle } from "../src/bundle.js";
 
@@ -25,8 +25,18 @@ const MANIFEST = {
 
 const TARGET = { formatVersion: 2, id: "front", width: 100, height: 100, features: [] };
 
+/** Every directory this file made, so the run can take them away again. */
+const scratchRoots: string[] = [];
+
+afterAll(async () => {
+  // Twenty of these a run, kept for ever, is how the system temp directory reached a
+  // thousand of them and a gigabyte. A test that leaves rubbish behind costs a disk.
+  for (const root of scratchRoots) await rm(root, { recursive: true, force: true }).catch(() => undefined);
+});
+
 async function scratch(): Promise<{ sourceDir: string; outDir: string }> {
   const root = await mkdtemp(join(tmpdir(), "taggant-bundle-"));
+  scratchRoots.push(root);
   const sourceDir = join(root, "source");
   await mkdir(sourceDir, { recursive: true });
   await writeFile(join(sourceDir, "overlay.svg"), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');

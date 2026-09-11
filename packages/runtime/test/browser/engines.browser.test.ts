@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { type Browser, type BrowserType, chromium, firefox, webkit } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { installCanvasCamera } from "./camera-stub.js";
+import { type CameraDiagnostics, installCanvasCamera } from "./camera-stub.js";
 import { artwork, inView } from "./feed.js";
 import { requiredEngines } from "./required.js";
 
@@ -440,16 +440,6 @@ describe("the same artwork in every engine", () => {
         await page.goto(`${origin}/camera-page.html`);
         await page.waitForFunction(() => (window as unknown as { ready?: boolean }).ready === true);
 
-        const capable = await page.evaluate(
-          () => (window as unknown as { cameraStubbed?: boolean }).cameraStubbed === true,
-        );
-        if (engine === MUST_TAKE_THE_CAMERA_PATH) {
-          expect(
-            capable,
-            `${engine} could not be given a canvas camera, so nothing here drove the camera path`,
-          ).toBe(true);
-        }
-
         const mounted = await page.evaluate(async () => {
           const runtime = (window as unknown as { runtime: typeof import("@taggant/runtime") }).runtime;
           const stored = await (await fetch("/target.json")).json();
@@ -471,22 +461,53 @@ describe("the same artwork in every engine", () => {
           }
         });
 
-        if (!capable) {
-          // An engine with no camera API has to say so rather than leave a page that
-          // promised a camera sitting on Starting. Mounting still resolves, which is
+        // Whichever the runtime settles on. Which of the two is correct is not this test's
+        // to assume: it is decided below by what the stub proved about the engine.
+        await page
+          .waitForFunction(
+            () => {
+              const state = document.querySelector("#scene")?.getAttribute("data-state");
+              return state === "tracking" || state === "error" || state === "denied";
+            },
+            undefined,
+            { timeout: 90_000 },
+          )
+          .catch(async (error) => {
+            const stuck = await page.evaluate(() => ({
+              state: document.querySelector("#scene")?.getAttribute("data-state") ?? "none",
+              camera: (window as unknown as { cameraDiagnostics?: CameraDiagnostics }).cameraDiagnostics,
+            }));
+            throw new Error(
+              `${engine} never settled: stopped at "${stuck.state}", camera ${JSON.stringify(stuck.camera)}, page errors ${JSON.stringify(pageErrors)} (${String(error).slice(0, 120)})`,
+            );
+          });
+
+        const camera = await page.evaluate(
+          () => (window as unknown as { cameraDiagnostics?: CameraDiagnostics }).cameraDiagnostics,
+        );
+        // Proved by doing it rather than by looking for the APIs. Both are present in
+        // WebKit on Linux and the stream never becomes a picture there, which is a fact
+        // about the engine that only trying it can establish.
+        const usable = camera?.usable === true;
+        if (engine === MUST_TAKE_THE_CAMERA_PATH) {
+          expect(usable, `${engine} could not be given a canvas camera: ${JSON.stringify(camera)}`).toBe(
+            true,
+          );
+        }
+
+        if (!usable) {
+          // An engine that cannot be given a camera has to say so rather than leave a page
+          // that promised one sitting on Starting. Mounting still resolves, which is
           // deliberate: the runtime reports the failure as state so a page can show it and
-          // follow a fallback, instead of throwing at whoever mounted it. That is the whole
-          // of what can be checked without a capture API, and it is worth checking.
+          // follow a fallback, instead of throwing at whoever mounted it.
           const reported = await page.evaluate(() => ({
             state: document.querySelector("#scene")?.getAttribute("data-state") ?? "",
             threaded: (window as unknown as { experience?: { threaded: boolean } }).experience?.threaded,
           }));
-          console.log(`${engine}: no media capture API, runtime reported ${reported.state}`);
+          console.log(
+            `${engine}: no canvas camera here (${camera?.trial || "no capture API"}), runtime reported ${reported.state}`,
+          );
           expect(mounted.mounted, `mounting threw instead of reporting: ${mounted.failure}`).toBe(true);
-          expect(
-            mounted.state,
-            "an engine with no camera must not be reported as searching or tracking",
-          ).toBe("error");
           expect(reported.state, "the container has to carry the state so a page can show it").toBe("error");
           // And it must not claim a thread it never started.
           expect(reported.threaded).toBe(false);
@@ -494,24 +515,10 @@ describe("the same artwork in every engine", () => {
           return;
         }
 
-        // Generous, because this waits on real recognition in a browser sharing a small
-        // runner with two other engines. A failure says which state it stopped at, since
-        // the only thing readable about a failed run elsewhere is the exit code.
-        await page
-          .waitForFunction(
-            () => document.querySelector("#scene")?.getAttribute("data-state") === "tracking",
-            undefined,
-            { timeout: 90_000 },
-          )
-          .catch(async (error) => {
-            const stuck = await page.evaluate(() => ({
-              state: document.querySelector("#scene")?.getAttribute("data-state") ?? "none",
-              problems: (window as unknown as { taggantProblems: string[] }).taggantProblems,
-            }));
-            throw new Error(
-              `${engine} never reached tracking: stopped at "${stuck.state}", problems ${JSON.stringify(stuck.problems)}, page errors ${JSON.stringify(pageErrors)} (${String(error).slice(0, 120)})`,
-            );
-          });
+        expect(
+          await page.evaluate(() => document.querySelector("#scene")?.getAttribute("data-state")),
+          `${engine} had a working canvas camera and still did not track: ${JSON.stringify(camera)}`,
+        ).toBe("tracking");
 
         const overlay = page.locator('[data-taggant-target="front"]');
         expect(await overlay.count()).toBe(1);
@@ -531,6 +538,9 @@ describe("the same artwork in every engine", () => {
         );
         expect(Math.abs(box.x - PLACED.x)).toBeLessThan(40);
         expect(Math.abs(box.y - PLACED.y)).toBeLessThan(40);
+        // And the frames came from the canvas rather than from anywhere else. Read on the
+        // success path, because a diagnostic only read when a test fails is not evidence.
+        expect(camera?.called ?? 0, "the stub was never asked for a camera").toBeGreaterThan(0);
         expect(settled.threaded, "recognition fell back to the page's thread in this engine").toBe(true);
         expect(settled.problems).toEqual([]);
         expect(pageErrors).toEqual([]);

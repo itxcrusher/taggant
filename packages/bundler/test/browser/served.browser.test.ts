@@ -32,7 +32,13 @@ const RUNTIME_DIST = join(here, "../../../runtime/dist");
  */
 const ART = { width: 480, height: 360 };
 const FRAME = { width: 640, height: 480 };
-const PLACED = { x: 80, y: 60 };
+/**
+ * Deliberately not the middle. At 80,60 the artwork sat exactly centred in the frame, so a
+ * pose that ignored recognition entirely and simply centred the target passed every
+ * assertion here, as did a pose a quarter too large. A position only means something when
+ * being wrong puts it somewhere else.
+ */
+const PLACED = { x: 24, y: 16 };
 
 const OVERLAY =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 2"><rect width="2" height="2" fill="#e2402a"/></svg>';
@@ -71,11 +77,14 @@ const MUST_OPEN_THE_BUNDLE = "chromium";
 let close: (() => Promise<void>) | undefined;
 let origin = "";
 let outDir = "";
+/** Captured before anything can fail, so the cleanup does not depend on getting further. */
+let scratchRoot = "";
 /** The camera frame, as base64, because it crosses into an init script. */
 let frame64 = "";
 
 beforeAll(async () => {
   const root = await mkdtemp(join(tmpdir(), "taggant-served-"));
+  scratchRoot = root;
   const sourceDir = join(root, "source");
   await mkdir(sourceDir, { recursive: true });
   await writeFile(join(sourceDir, "overlay.svg"), OVERLAY);
@@ -136,15 +145,17 @@ beforeAll(async () => {
 
   close = async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await rm(root, { recursive: true, force: true });
   };
 }, 180_000);
 
 afterAll(async () => {
-  // Outside `close`, because that is assigned at the end of a hook which compiles artwork
-  // and builds a bundle first, so anything failing before it left browsers running.
-  for (const [, instance] of started) await instance.close();
-  await close?.();
+  // All of it outside `close`, and none of it able to stop the rest. `close` is assigned at
+  // the end of a hook that compiles artwork and builds a bundle first, so anything failing
+  // before that left the browsers running and the directory behind; and one rejecting
+  // `close()` used to orphan every browser after it.
+  for (const [, instance] of started) await instance.close().catch(() => undefined);
+  await close?.().catch(() => undefined);
+  if (scratchRoot) await rm(scratchRoot, { recursive: true, force: true }).catch(() => undefined);
 });
 
 /** The first engine that started, for the cases that are not about engine differences. */
@@ -217,27 +228,40 @@ describe("a published bundle", () => {
         });
 
         await page.goto(`${origin}/index.html`);
-        const capable = await page.evaluate(
-          () => (window as unknown as { cameraStubbed?: boolean }).cameraStubbed === true,
+        // Whichever the page settles on. Which of the two is correct is decided by what the
+        // stub proved about this engine, by trying it rather than by looking for the APIs:
+        // both are present in WebKit on Linux and the stream never becomes a picture there.
+        await page.waitForFunction(
+          () => {
+            const state = document.querySelector("#scene")?.getAttribute("data-state");
+            return state === "tracking" || state === "error" || state === "denied";
+          },
+          undefined,
+          { timeout: 90_000 },
         );
+        const camera = await page.evaluate(
+          () => (window as unknown as { cameraDiagnostics?: CameraDiagnostics }).cameraDiagnostics,
+        );
+        const capable = camera?.usable === true;
         if (engine === MUST_OPEN_THE_BUNDLE) {
-          expect(capable, `${engine} could not be given a canvas camera, so nothing opened the bundle`).toBe(
+          expect(capable, `${engine} could not be given a canvas camera: ${JSON.stringify(camera)}`).toBe(
             true,
           );
         }
 
         if (!capable) {
-          // No camera API here. What the bundle still has to do is say so on the page rather
-          // than leave whoever scanned a printed code reading "Starting" for ever.
-          await page.waitForFunction(
-            () => !(document.getElementById("status")?.textContent ?? "").startsWith("Starting"),
-            undefined,
-            { timeout: 30_000 },
+          // No canvas camera here. What the bundle still has to do is say so on the page
+          // rather than leave whoever scanned a printed code reading "Starting" for ever.
+          // Read in one call, so the state and the words cannot come from two moments.
+          const both = await page.evaluate(() => ({
+            state: document.querySelector("#scene")?.getAttribute("data-state") ?? "",
+            status: document.getElementById("status")?.textContent ?? "",
+          }));
+          console.log(
+            `${engine}: no canvas camera here (${camera?.trial || "no capture API"}), the bundle says "${both.status}" in state ${both.state}`,
           );
-          const state = await page.getAttribute("#scene", "data-state");
-          const status = await page.textContent("#status");
-          console.log(`${engine}: no camera API, the bundle says "${status}" and is in state ${state}`);
-          expect(["error", "denied"]).toContain(state);
+          expect(["error", "denied"]).toContain(both.state);
+          expect(both.status).not.toMatch(/^Starting/);
           expect(missing).toEqual([]);
           expect(offsite).toEqual([]);
           expect(failures).toEqual([]);
@@ -248,7 +272,8 @@ describe("a published bundle", () => {
           .waitForFunction(
             () => document.querySelector("#scene")?.getAttribute("data-state") === "tracking",
             undefined,
-            { timeout: 90_000 },
+            // Short, because the page has already settled on one of the three states above.
+            { timeout: 5_000 },
           )
           .catch(async (error) => {
             const stuck = await page.evaluate(() => {
@@ -272,12 +297,41 @@ describe("a published bundle", () => {
         expect(await overlay.isHidden()).toBe(false);
         const box = await overlay.boundingBox();
         if (!box) throw new Error("expected the overlay to have a box");
+
+        // What is inside it, and whether the work happened off the page's thread. A bundle
+        // whose worker is present and answers nothing still reaches tracking, on the page's
+        // thread, with a five second wait per frame; and content this build cannot show
+        // leaves an overlay with nothing in it at all. Both passed before these two lines.
+        const shown = await page.evaluate(() => {
+          const holder = document.querySelector('[data-taggant-target="front"]');
+          const image = holder?.querySelector("img");
+          return {
+            children: holder?.childElementCount ?? 0,
+            image: image ? `${image.naturalWidth}x${image.naturalHeight}` : "none",
+            threaded: window.taggantExperience?.threaded,
+          };
+        });
+
         console.log(
-          `${engine}: the bundle tracked, content at ${box.x.toFixed(0)},${box.y.toFixed(0)} against artwork at ${PLACED.x},${PLACED.y}, ${missing.length} missing, ${offsite.length} offsite`,
+          `${engine}: the bundle tracked, content ${box.width.toFixed(0)}x${box.height.toFixed(0)} at ${box.x.toFixed(0)},${box.y.toFixed(0)} against artwork ${ART.width}x${ART.height} at ${PLACED.x},${PLACED.y}, image ${shown.image}, worker ${shown.threaded ? "in a thread" : "ON THE PAGE THREAD"}, ${missing.length} missing, ${offsite.length} offsite`,
         );
         expect(Math.abs(box.x - PLACED.x)).toBeLessThan(40);
         expect(Math.abs(box.y - PLACED.y)).toBeLessThan(40);
+        // The container and the frame are the same size, so the content is shown at the
+        // size it was tracked at. Without this a pose a quarter too large passed.
+        expect(Math.abs(box.width - ART.width)).toBeLessThan(ART.width * 0.15);
+        expect(Math.abs(box.height - ART.height)).toBeLessThan(ART.height * 0.15);
+        expect(shown.children, "the overlay is there and empty, so a viewer sees nothing").toBeGreaterThan(0);
+        expect(shown.image, "the content image did not load").not.toBe("none");
+        expect(shown.image, "the content image loaded as nothing").not.toBe("0x0");
+        expect(
+          shown.threaded,
+          "the bundle recognised on the page's thread, which is the silent fallback",
+        ).toBe(true);
 
+        // And the frames came from the canvas rather than from anywhere else. Read on the
+        // success path, because a diagnostic only read when a test fails is not evidence.
+        expect(camera?.called ?? 0, "the stub was never asked for a camera").toBeGreaterThan(0);
         expect(missing).toEqual([]);
         expect(offsite).toEqual([]);
         expect(failures).toEqual([]);
@@ -333,6 +387,10 @@ describe("a bundle that cannot start", () => {
     const restoreTarget = await breakTheTarget();
     const restoreManifest = await setFallback(undefined);
     const page = await anyBrowser().newPage();
+    // This page opens the real bundle, which asks for a camera. It is safe today only
+    // because a broken target stops the page before it gets there, which is not a
+    // guarantee anybody wrote down. The stub makes it one.
+    await page.addInitScript(installCanvasCamera, frame64);
     try {
       await page.goto(`${origin}/index.html`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
@@ -353,6 +411,10 @@ describe("a bundle that cannot start", () => {
     const restoreTarget = await breakTheTarget();
     const restoreManifest = await setFallback(`${origin}/fallback-reached`);
     const page = await anyBrowser().newPage();
+    // This page opens the real bundle, which asks for a camera. It is safe today only
+    // because a broken target stops the page before it gets there, which is not a
+    // guarantee anybody wrote down. The stub makes it one.
+    await page.addInitScript(installCanvasCamera, frame64);
     try {
       await page.goto(`${origin}/index.html`, { waitUntil: "domcontentloaded" });
       await page.waitForURL(/fallback-reached/, { timeout: 20_000 });
