@@ -1,35 +1,8 @@
-import { writeFile } from "node:fs/promises";
-
 export interface Frame {
   width: number;
   height: number;
   /** One byte per pixel, row major. */
   data: Uint8Array;
-}
-
-/**
- * Write a grayscale frame as a Y4M file Chromium will play as a camera.
- *
- * Launched with the fake capture flags, Chromium reads this file and hands it to
- * getUserMedia as a real device, which is what makes the whole path testable without a
- * phone: permission prompt, video element, canvas read, recognition, transform.
- *
- * Y4M is a header, then one FRAME marker and one planar 4:2:0 image per frame. The colour
- * planes are flat, because the tracker works on brightness and nothing else does.
- */
-export async function writeFeed(path: string, frame: Frame, frames = 60): Promise<void> {
-  const { width, height, data } = frame;
-  if (width % 2 !== 0 || height % 2 !== 0) {
-    throw new RangeError(`4:2:0 needs even dimensions, got ${width} x ${height}`);
-  }
-  const chroma = Buffer.alloc((width / 2) * (height / 2), 128);
-  const luma = Buffer.from(data);
-  const marker = Buffer.from("FRAME\n", "ascii");
-  const header = Buffer.from(`YUV4MPEG2 W${width} H${height} F30:1 Ip A1:1 C420mpeg2\n`, "ascii");
-
-  const parts: Buffer[] = [header];
-  for (let i = 0; i < frames; i++) parts.push(marker, luma, chroma, chroma);
-  await writeFile(path, Buffer.concat(parts));
 }
 
 /**

@@ -21,7 +21,8 @@ declare global {
     fromTargetFile?: (stored: unknown) => unknown;
   }
 }
-import { artwork, inView, writeFeed } from "./feed.js";
+import { installCanvasCamera } from "./camera-stub.js";
+import { artwork, inView } from "./feed.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNTIME = join(here, "../../dist/index.js");
@@ -61,6 +62,8 @@ const OVERLAY =
 let browser: Browser | undefined;
 let close: (() => Promise<void>) | undefined;
 let origin = "";
+/** The camera frame, as base64, because it crosses into an init script. */
+let frame64 = "";
 
 beforeAll(async () => {
   const art = artwork(ART.width, ART.height);
@@ -71,9 +74,11 @@ beforeAll(async () => {
     features: buildTrackingFeatures(art),
   });
 
-  const scratch = await mkdtemp(join(tmpdir(), "taggant-browser-"));
-  const feed = join(scratch, "camera.y4m");
-  await writeFeed(feed, inView(art, FRAME.width, FRAME.height, PLACED.x, PLACED.y));
+  // The camera every test here is given: the artwork, in a frame, on a canvas. No engine is
+  // asked for a real one, and no launch flag stands between this suite and hardware. The
+  // flags this used to rely on are a weaker guarantee than replacing the API outright, and
+  // the same shape of protection opened a real webcam once on the file next door.
+  frame64 = Buffer.from(inView(art, FRAME.width, FRAME.height, PLACED.x, PLACED.y).data).toString("base64");
 
   const files = new Map<string, { body: Buffer; type: string }>([
     ["/page.html", { body: await readFile(join(here, "page.html")), type: "text/html" }],
@@ -110,20 +115,10 @@ beforeAll(async () => {
   // localhost is a secure context, which getUserMedia requires.
   origin = `http://127.0.0.1:${address.port}`;
 
-  browser = await chromium.launch({
-    args: [
-      "--use-fake-ui-for-media-stream",
-      "--use-fake-device-for-media-stream",
-      `--use-file-for-fake-video-capture=${feed}`,
-    ],
-  });
+  browser = await chromium.launch();
 
   close = async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    // The feed is a 27 MB Y4M in a fresh directory every run, and nothing was removing
-    // them: 114 of them, 3 GB, had accumulated in the system temp directory before anyone
-    // looked. A test that leaves rubbish behind on every run is a test that costs a disk.
-    await rm(scratch, { recursive: true, force: true });
   };
 }, 120_000);
 
@@ -138,8 +133,9 @@ afterAll(async () => {
 describe("the runtime in a browser, against a camera", () => {
   it("opens the camera, finds the artwork and puts the content on it", async () => {
     if (!browser) throw new Error("no browser");
-    const context = await browser.newContext({ permissions: ["camera"] });
+    const context = await browser.newContext();
     const page = await context.newPage();
+    await page.addInitScript(installCanvasCamera, frame64);
     const failures: string[] = [];
     page.on("pageerror", (error) => failures.push(String(error)));
 
@@ -219,10 +215,10 @@ describe("the runtime in a browser, against a camera", () => {
     // A phone held upright. The other test uses a stage the same shape as the feed, which
     // is the one container shape where getting the cover fit wrong is invisible.
     const context = await browser.newContext({
-      permissions: ["camera"],
       viewport: { width: 400, height: 700 },
     });
     const page = await context.newPage();
+    await page.addInitScript(installCanvasCamera, frame64);
     await page.goto(`${origin}/page.html?w=360&h=640`);
     await page.waitForFunction(
       () => document.querySelector("#stage")?.getAttribute("data-state") === "tracking",
@@ -294,8 +290,9 @@ describe("the runtime in a browser, against a camera", () => {
 
   it("says when a compiled target is not claimed by any target in the manifest", async () => {
     if (!browser) throw new Error("no browser");
-    const context = await browser.newContext({ permissions: ["camera"] });
+    const context = await browser.newContext();
     const page = await context.newPage();
+    await page.addInitScript(installCanvasCamera, frame64);
     await page.goto(`${origin}/bare.html`);
     await page.waitForFunction(() => window.taggantReady === true);
 
@@ -333,8 +330,9 @@ describe("the runtime in a browser, against a camera", () => {
 
   it("carries on when the worker dies, instead of stopping or pretending it is fine", async () => {
     if (!browser) throw new Error("no browser");
-    const context = await browser.newContext({ permissions: ["camera"] });
+    const context = await browser.newContext();
     const page = await context.newPage();
+    await page.addInitScript(installCanvasCamera, frame64);
     // Capture the worker so the test can end it, which is what a browser does under
     // memory pressure. A terminated worker fires neither a reply nor an error.
     await page.addInitScript(() => {
