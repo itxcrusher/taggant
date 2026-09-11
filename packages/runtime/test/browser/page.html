@@ -35,6 +35,7 @@
       };
 
       window.taggantStates = [];
+      window.taggantProblems = [];
       try {
         window.taggantExperience = await mountExperience({
           manifest,
@@ -43,8 +44,13 @@
           options: {
             resolve: (src) => `/${src}`,
             onStateChange: (state) => window.taggantStates.push(state),
+            onProblem: (problem) => window.taggantProblems.push(problem),
             // So a test about the camera deadline does not have to wait the real one out.
-            ...(params.has("ready") ? { readyTimeoutMs: Number(params.get("ready")) } : {}),
+            // Ignored unless it is a number: NaN reaches setTimeout as zero and would make
+            // every camera here fail instantly, which is not a failure anyone asked for.
+            ...(params.has("ready") && Number.isFinite(Number(params.get("ready")))
+              ? { readyTimeoutMs: Number(params.get("ready")) }
+              : {}),
           },
         });
       } catch (error) {

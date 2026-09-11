@@ -90,6 +90,9 @@ export function installCanvasCamera(encoded: string): void {
     try {
       const made = await paint();
       const track = made.stream.getVideoTracks()[0];
+      // Stop repainting when whoever took the stream stops it, rather than repainting a
+      // canvas nobody is reading for as long as the page is open.
+      track?.addEventListener("ended", made.stop);
       diagnostics.tracks = made.stream
         .getTracks()
         .map((one) => `${one.kind}:${one.readyState}`)
@@ -107,17 +110,28 @@ export function installCanvasCamera(encoded: string): void {
   };
 
   // The two APIs have to be there before any of the above can be tried at all. Whether they
-  // work is decided above, by trying; this only decides whether there is anything to try.
+  // work is not decided here; this only decides whether there is anything to hand over.
   const present =
     typeof MediaStream !== "undefined" &&
     typeof document.createElement("canvas").captureStream === "function";
-  (window as unknown as { cameraStubbed: boolean }).cameraStubbed = present;
-  Object.defineProperty(navigator, "mediaDevices", {
-    configurable: true,
-    // Left undefined where there is nothing to try, which is what the engine would have
-    // offered anyway, so the runtime meets the real thing rather than a pretend one.
-    value: present ? { getUserMedia: capture } : undefined,
-  });
+  // Left undefined where there is nothing to hand over, which is what the engine would have
+  // offered anyway, so the runtime meets the real thing rather than a pretend one.
+  const replacement = present ? { getUserMedia: capture } : undefined;
+
+  // Both the instance and the prototype. Shadowing the instance alone is not the guarantee
+  // this file claims to give: the real `MediaDevices` stays reachable through the accessor
+  // on `Navigator.prototype`, and one `delete navigator.mediaDevices` brings it straight
+  // back. Nothing here does either, but "there is no path to hardware" has to be true
+  // rather than nearly true, since it is what everything else rests on.
+  try {
+    Object.defineProperty(Navigator.prototype, "mediaDevices", {
+      configurable: true,
+      get: () => replacement,
+    });
+  } catch {
+    // Engines without the accessor at all, which is what Playwright's WebKit is on Windows.
+  }
+  Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: replacement });
 }
 
 /** What the stub recorded, for a failure message that says where it stopped. */

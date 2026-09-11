@@ -49,10 +49,16 @@ jobs:
       # print a line per engine and those lines are the evidence behind what the README
       # claims; a run elsewhere is otherwise readable only as an exit code, because
       # fetching job logs needs a token. These become notices on the run.
+      #
+      # Matched on a marker the tests print rather than on the words they use. This grep
+      # listed the phrases instead, and a commit that reworded two of them left it matching
+      # only the lines where an engine succeeded: a run where one engine stopped short
+      # would have published the others and said nothing about it, which is the one case
+      # the step exists for.
       - name: say what each engine did
         if: always()
         run: |
-          lines=$(grep -aE "features, differing|inliers, artwork corners|tracked, content|tracking, content|no canvas camera|no media capture|frame pacing" test-output.txt || true)
+          lines=$(grep -a "engine-line" test-output.txt || true)
           if [ -z "$lines" ]; then
             echo "::notice::no per engine lines were printed at all, so the engine checks did not run"
           else

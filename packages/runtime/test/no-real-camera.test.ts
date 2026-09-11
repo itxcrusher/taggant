@@ -22,14 +22,25 @@ import { describe, expect, it } from "vitest";
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(here, "../../..");
 
-/** Every test file in the workspace, wherever it lives. */
-async function testFiles(from: string): Promise<string[]> {
+/**
+ * Everything in the workspace that could launch or configure a browser, not only the files
+ * whose names end in `.test.ts`.
+ *
+ * It used to be those alone, which left out every helper, every vitest config and the
+ * workflow itself. Launch configuration is exactly the thing that migrates into a helper:
+ * two already exist here, so a `chromium.launch({ args })` moved into one would have been
+ * invisible to this.
+ */
+async function candidates(from: string): Promise<string[]> {
   const found: string[] = [];
   for (const entry of await readdir(from, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) continue;
+    if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".git") continue;
     const full = join(from, entry.name);
-    if (entry.isDirectory()) found.push(...(await testFiles(full)));
-    else if (entry.name.endsWith(".test.ts") || entry.name.endsWith(".test.mjs")) found.push(full);
+    if (entry.isDirectory()) {
+      found.push(...(await candidates(full)));
+    } else if (/\.(ts|mts|mjs|js|yml|yaml)$/.test(entry.name)) {
+      found.push(full);
+    }
   }
   return found;
 }
@@ -46,18 +57,34 @@ const WAYS_ROUND_IT: Array<{ pattern: RegExp; why: string }> = [
     why: "a Firefox preference, which Firefox accepts whether or not it exists and Playwright drops on one launch path",
   },
   {
-    pattern: /permissions:\s*\[\s*["']camera["']/,
-    why: "granting the camera permission, which only matters if something is going to ask for a real one",
+    pattern: /--auto-accept-camera-and-microphone-capture|--auto-accept-this-tab-capture/,
+    why: "a Chromium flag that accepts a capture request rather than replacing the API",
   },
   {
-    pattern: /grantPermissions\(\s*\[\s*["']camera["']/,
+    pattern: /permissions\.default\.camera/,
+    why: "a Firefox preference that grants the camera rather than replacing the API",
+  },
+  {
+    // Anywhere in a permissions list or a grant, not only first: naming it second was the
+    // way round this that took the least thought to find.
+    pattern: /(?:permissions|grantPermissions).{0,120}["'`]camera["'`]/,
     why: "granting the camera permission, which only matters if something is going to ask for a real one",
   },
 ];
 
+/**
+ * What this cannot do, said out loud rather than left to be discovered.
+ *
+ * It is a list of known ways round the rule, so it finds those and nothing else. It cannot
+ * see a flag held in a variable, and more importantly it cannot see the **absence** of the
+ * stub, which is the failure that actually happened once: two pages opened the real bundle
+ * with nothing replaced, and were safe only because a broken target stopped them before
+ * the camera. Nothing here would have caught that. It is a tripwire, not a proof.
+ */
+
 describe("no test asks a browser for a real camera", () => {
   it("finds test files to check, so this is not passing over an empty list", async () => {
-    const files = await testFiles(ROOT);
+    const files = await candidates(ROOT);
     // The sweep walks the whole workspace, so a wrong root would make every check below
     // vacuous while reporting success.
     expect(files.length, `no test files were found under ${ROOT}`).toBeGreaterThan(15);
@@ -69,7 +96,7 @@ describe("no test asks a browser for a real camera", () => {
 
   it("uses no launch flag, preference or permission that leaves real hardware reachable", async () => {
     const offending: string[] = [];
-    for (const file of await testFiles(ROOT)) {
+    for (const file of await candidates(ROOT)) {
       // Not this file, which holds every pattern as a literal and would otherwise be the
       // only thing it ever reports. It did, on the first run, which is one way to find out
       // that the sweep reaches things.

@@ -96,12 +96,16 @@ const CAMERA_MANIFEST = {
 };
 
 /**
- * Chromium has both halves of the browser API a canvas camera needs on every platform, so
- * it is the one engine required to take the full path below. Without this the camera check
- * could quietly become nothing at all on a platform where the others lack them, which is
- * the shape of failure this file has already had twice.
+ * Which engines have to reach content on the artwork, rather than merely report that they
+ * could not open a camera.
+ *
+ * Chromium always, because it has what a canvas camera needs on every platform, so the
+ * check cannot quietly become nothing where the others lack it. And every engine the
+ * machine says it requires, which on CI is all three: the README claims all three take the
+ * whole path there, and before this nothing in the repository could make that claim false.
+ * A machine naming no engines is a contributor's, and only Chromium is held to it.
  */
-const MUST_TAKE_THE_CAMERA_PATH = "chromium";
+const MUST_TAKE_THE_CAMERA_PATH = new Set(["chromium", ...requiredEngines()]);
 
 /** Every engine Playwright can start here. A machine without one skips it, visibly. */
 const ENGINES: [string, BrowserType][] = [
@@ -293,7 +297,7 @@ describe("the same artwork in every engine", () => {
       // build and each engine is actually measured, and a number nobody can read is not
       // evidence of anything.
       console.log(
-        `${engine}: ${inNode.length} features, differing positions ${differingPositions}, angles ${differingAngles}, strengths ${differingStrengths}, descriptors ${differingDescriptors}`,
+        `engine-line ${engine}: ${inNode.length} features, differing positions ${differingPositions}, angles ${differingAngles}, strengths ${differingStrengths}, descriptors ${differingDescriptors}`,
       );
       if (firstReport) console.log(firstReport);
 
@@ -383,7 +387,7 @@ describe("the same artwork in every engine", () => {
 
         const round = ([x, y]: [number, number]) => `${x.toFixed(1)},${y.toFixed(1)}`;
         console.log(
-          `${engine}: worker ${answer.threaded ? "in a thread" : "ON THE PAGE THREAD"}, ${answer.inliers} inliers, artwork corners at ${round(answer.topLeft)} and ${round(answer.bottomRight)}`,
+          `engine-line ${engine}: worker ${answer.threaded ? "in a thread" : "ON THE PAGE THREAD"}, ${answer.inliers} inliers, artwork corners at ${round(answer.topLeft)} and ${round(answer.bottomRight)}`,
         );
 
         expect(pageErrors).toEqual([]);
@@ -494,10 +498,11 @@ describe("the same artwork in every engine", () => {
           () => document.querySelector("#scene")?.getAttribute("data-state") ?? "",
         );
         const usable = settledState === "tracking";
-        if (engine === MUST_TAKE_THE_CAMERA_PATH) {
-          expect(usable, `${engine} could not be given a canvas camera: ${JSON.stringify(camera)}`).toBe(
-            true,
-          );
+        if (MUST_TAKE_THE_CAMERA_PATH.has(engine)) {
+          expect(
+            usable,
+            `${engine} is required to go from a camera to content on the artwork here and stopped at "${settledState}": ${JSON.stringify(camera)}`,
+          ).toBe(true);
         }
 
         if (!usable) {
@@ -510,7 +515,7 @@ describe("the same artwork in every engine", () => {
             threaded: (window as unknown as { experience?: { threaded: boolean } }).experience?.threaded,
           }));
           console.log(
-            `${engine}: a canvas was not a camera here, runtime reported ${reported.state} after ${camera?.called ?? 0} request(s), stream ${camera?.tracks || "none"} ${camera?.settings || ""}`,
+            `engine-line ${engine}: a canvas was not a camera here, runtime reported ${reported.state} after ${camera?.called ?? 0} request(s), stream ${camera?.tracks || "none"} ${camera?.settings || ""}`,
           );
           expect(mounted.mounted, `mounting threw instead of reporting: ${mounted.failure}`).toBe(true);
           expect(reported.state, "the container has to carry the state so a page can show it").toBe("error");
@@ -534,7 +539,7 @@ describe("the same artwork in every engine", () => {
         }));
 
         console.log(
-          `${engine}: tracking, content at ${box.x.toFixed(0)},${box.y.toFixed(0)} against artwork at ${PLACED.x},${PLACED.y}, worker ${settled.threaded ? "in a thread" : "ON THE PAGE THREAD"}`,
+          `engine-line ${engine}: tracking, content at ${box.x.toFixed(0)},${box.y.toFixed(0)} against artwork at ${PLACED.x},${PLACED.y}, worker ${settled.threaded ? "in a thread" : "ON THE PAGE THREAD"}`,
         );
         expect(Math.abs(box.x - PLACED.x)).toBeLessThan(40);
         expect(Math.abs(box.y - PLACED.y)).toBeLessThan(40);

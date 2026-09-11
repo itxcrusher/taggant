@@ -1,6 +1,5 @@
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildTrackingFeatures, toTargetFile } from "@taggant/vision";
@@ -200,7 +199,7 @@ describe("the runtime in a browser, against a camera", () => {
       };
     });
     console.log(
-      `frame pacing: median ${pacing.median.toFixed(1)} ms over ${pacing.frames} frames, ${pacing.long} over 100 ms`,
+      `engine-line frame pacing: median ${pacing.median.toFixed(1)} ms over ${pacing.frames} frames, ${pacing.long} over 100 ms`,
     );
     // On the main thread the median would sit at the recognition cost, which is measured
     // in hundreds of milliseconds, not near the display's own frame time.
@@ -284,7 +283,9 @@ describe("the runtime in a browser, against a camera", () => {
     });
 
     expect(result.ran).toBe(false);
-    expect(result.problems?.[0]).toMatch(/refused to follow a fallback/i);
+    // Among them rather than first: a camera that will not open now reports why it would
+    // not, and that arrives before this does.
+    expect((result.problems ?? []).join(" ")).toMatch(/refused to follow a fallback/i);
     await context.close();
   }, 60_000);
 
@@ -408,6 +409,13 @@ describe("the runtime in a browser, against a camera", () => {
       { timeout: 30_000 },
     );
     expect(await page.locator("#stage").getAttribute("data-state")).toBe("error");
+    // Which of the two waits gave up, not merely that one did. Both end in the same state,
+    // so a fix that bounded only the wait for a picture would pass this test on the state
+    // alone while leaving playback unbounded, which is the defect it exists for.
+    const said = await page.evaluate(() => window.taggantProblems ?? []);
+    expect(said.join(" "), "the runtime did not say which wait it gave up on").toMatch(
+      /would not start playing/i,
+    );
     await context.close();
   }, 60_000);
 

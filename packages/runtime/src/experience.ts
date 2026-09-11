@@ -124,6 +124,18 @@ export async function mountExperience(options: {
     await camera.start();
   } catch (error) {
     setState(error instanceof CameraError && error.reason === "denied" ? "denied" : "error");
+    // Why, not just that. A camera fails in ways that call for different things from the
+    // viewer: refused is theirs to undo, missing is not, one held by another application
+    // wants that application closed, and one that opens and sends nothing is a different
+    // problem again. The state carries two of those and the page shows the state, so
+    // without this the reason a page could act on is thrown away at the only point that
+    // knows it.
+    settings.onProblem?.(error instanceof Error ? error.message : String(error));
+    // Give the camera back. Without this the device stays held: the indicator light stays
+    // on under a page saying the camera could not be opened, and if playback starts after
+    // the deadline the video element is still in the container, so a live picture appears
+    // behind the error text. Giving up on a camera includes letting go of it.
+    camera.stop();
     // The fallback exists for exactly this: the viewer scanned something and the camera
     // is not going to open, so send them where the manifest says to send them.
     //

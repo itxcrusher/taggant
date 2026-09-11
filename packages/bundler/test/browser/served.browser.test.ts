@@ -71,8 +71,13 @@ for (const [name, type] of ENGINES) {
   }
 }
 
-/** Chromium has what a canvas camera needs everywhere, so it must take the full path. */
-const MUST_OPEN_THE_BUNDLE = "chromium";
+/**
+ * Which engines have to get from a camera to content on the artwork in the bundle, rather
+ * than merely report that they could not open one. Chromium always, since it has what a
+ * canvas camera needs on every platform; and every engine this machine says it requires,
+ * which on CI is all three, because that is what the README claims happens there.
+ */
+const MUST_OPEN_THE_BUNDLE = new Set(["chromium", ...requiredEngines()]);
 
 let close: (() => Promise<void>) | undefined;
 let origin = "";
@@ -250,10 +255,11 @@ describe("a published bundle", () => {
           () => document.querySelector("#scene")?.getAttribute("data-state") ?? "",
         );
         const capable = settledState === "tracking";
-        if (engine === MUST_OPEN_THE_BUNDLE) {
-          expect(capable, `${engine} could not be given a canvas camera: ${JSON.stringify(camera)}`).toBe(
-            true,
-          );
+        if (MUST_OPEN_THE_BUNDLE.has(engine)) {
+          expect(
+            capable,
+            `${engine} is required to open the bundle and reach content on the artwork, and stopped at "${settledState}": ${JSON.stringify(camera)}`,
+          ).toBe(true);
         }
 
         if (!capable) {
@@ -265,9 +271,18 @@ describe("a published bundle", () => {
             status: document.getElementById("status")?.textContent ?? "",
           }));
           console.log(
-            `${engine}: a canvas was not a camera here, the bundle says "${both.status}" in state ${both.state} after ${camera?.called ?? 0} request(s), stream ${camera?.tracks || "none"} ${camera?.settings || ""}`,
+            `engine-line ${engine}: a canvas was not a camera here, the bundle says "${both.status}" in state ${both.state} after ${camera?.called ?? 0} request(s), stream ${camera?.tracks || "none"} ${camera?.settings || ""}`,
           );
-          expect(["error", "denied"]).toContain(both.state);
+          // The stub was in place: either this engine offered nothing to replace, or the
+          // replacement was asked for a camera. Without it, an init script that never ran
+          // and a real camera refused by the browser look the same from here, and "denied"
+          // is exactly what that produces, which is why it is not accepted.
+          const offered = await page.evaluate(() => navigator.mediaDevices !== undefined);
+          expect(
+            offered ? (camera?.called ?? 0) > 0 : true,
+            "this engine has a camera API and the stub was never asked for one, so something else answered",
+          ).toBe(true);
+          expect(both.state).toBe("error");
           expect(both.status).not.toMatch(/^Starting/);
           expect(missing).toEqual([]);
           expect(offsite).toEqual([]);
@@ -320,7 +335,7 @@ describe("a published bundle", () => {
         });
 
         console.log(
-          `${engine}: the bundle tracked, content ${box.width.toFixed(0)}x${box.height.toFixed(0)} at ${box.x.toFixed(0)},${box.y.toFixed(0)} against artwork ${ART.width}x${ART.height} at ${PLACED.x},${PLACED.y}, image ${shown.image}, worker ${shown.threaded ? "in a thread" : "ON THE PAGE THREAD"}, ${missing.length} missing, ${offsite.length} offsite`,
+          `engine-line ${engine}: the bundle tracked, content ${box.width.toFixed(0)}x${box.height.toFixed(0)} at ${box.x.toFixed(0)},${box.y.toFixed(0)} against artwork ${ART.width}x${ART.height} at ${PLACED.x},${PLACED.y}, image ${shown.image}, worker ${shown.threaded ? "in a thread" : "ON THE PAGE THREAD"}, ${missing.length} missing, ${offsite.length} offsite`,
         );
         expect(Math.abs(box.x - PLACED.x)).toBeLessThan(40);
         expect(Math.abs(box.y - PLACED.y)).toBeLessThan(40);
@@ -351,6 +366,9 @@ describe("a published bundle", () => {
 
   it("holds no absolute reference to anywhere in the code it ships", async () => {
     const files = await walk(outDir);
+    // Over the bundle it just built, so an empty list means the bundle is empty rather
+    // than clean.
+    expect(files.length, "the published folder held no files, so nothing was examined").toBeGreaterThan(4);
     const offending: string[] = [];
     for (const file of files) {
       if (![".html", ".js"].includes(extname(file))) continue;

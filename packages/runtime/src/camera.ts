@@ -1,7 +1,15 @@
 import type { GrayscaleImage } from "@taggant/vision";
 
 export interface CameraOptions {
-  /** How long to wait for a picture after the camera opens, before giving up on it. */
+  /**
+   * How long each of the two waits after the camera opens may take, before giving up.
+   *
+   * Two, not one, and the budget applies to each rather than being shared between them:
+   * playback has to start, and then a picture has to arrive. So the worst case before an
+   * error state is twice this number. Erring towards patience is deliberate, because the
+   * alternative refuses a slow device that would have worked, but the name says "ready"
+   * and covers more than that, which is worth knowing before setting it.
+   */
   readyTimeoutMs?: number;
   /**
    * Width the frames are tracked at.
@@ -50,6 +58,10 @@ export class Camera {
       throw new CameraError("unavailable", "this browser cannot open a camera from a page");
     }
     try {
+      // Deliberately unbounded, unlike the two waits below it. This is where a permission
+      // prompt sits, and a viewer who has not answered yet is not a failure to give up on:
+      // a deadline here would refuse a camera the moment someone read the prompt slowly.
+      // The page says it is asking, which is what is happening.
       this.stream = await media.getUserMedia({
         video: { facingMode: this.options.facingMode ?? "environment" },
         audio: false,
@@ -115,6 +127,18 @@ export class Camera {
           timer = setTimeout(() => reject(new CameraError("unavailable", complaint)), limit);
         }),
       ]);
+    } catch (error) {
+      if (error instanceof CameraError) throw error;
+      // A rejection from the work itself arrives as whatever the browser threw, and the
+      // caller sorts camera failures by `reason`. Without this a refusal to autoplay came
+      // out as a plain DOMException and was filed as a broken camera rather than a refused
+      // one, which is the distinction the viewer acts on.
+      const name = error instanceof Error ? error.name : "";
+      const why = error instanceof Error ? error.message : String(error);
+      throw new CameraError(
+        name === "NotAllowedError" || name === "SecurityError" ? "denied" : "unavailable",
+        why,
+      );
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
