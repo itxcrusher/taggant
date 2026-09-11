@@ -37,7 +37,7 @@ export function installCanvasCamera(encoded: string): void {
   (window as unknown as { cameraDiagnostics: typeof diagnostics }).cameraDiagnostics = diagnostics;
 
   /** Everything a still canvas needs to keep being a moving picture, in one place. */
-  const paint = (): { stream: MediaStream; stop: () => void } => {
+  const paint = async (): Promise<{ stream: MediaStream; stop: () => void }> => {
     const canvas = document.createElement("canvas");
     canvas.width = 640;
     canvas.height = 480;
@@ -68,6 +68,12 @@ export function installCanvasCamera(encoded: string): void {
     };
     requestAnimationFrame(again);
 
+    // One frame before the stream is taken from the canvas. The arrangement that worked in
+    // WebKit on Linux had a `fetch` between drawing and capturing and this one had nothing,
+    // so the canvas may simply not have been composited yet when it was asked for a stream.
+    // Harmless where it was not the problem.
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
     const stream = canvas.captureStream(30);
     diagnostics.captured = true;
     return {
@@ -83,7 +89,7 @@ export function installCanvasCamera(encoded: string): void {
   const trial = async (): Promise<boolean> => {
     let made: { stream: MediaStream; stop: () => void } | undefined;
     try {
-      made = paint();
+      made = await paint();
       const video = document.createElement("video");
       video.muted = true;
       video.setAttribute("playsinline", "");
@@ -138,7 +144,7 @@ export function installCanvasCamera(encoded: string): void {
       });
     }
     try {
-      const made = paint();
+      const made = await paint();
       const track = made.stream.getVideoTracks()[0];
       diagnostics.tracks = made.stream
         .getTracks()
