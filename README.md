@@ -268,11 +268,11 @@ Descriptors are compared across engines, because the compiler runs in Node and t
 
 ## The project page
 
-`site/` is a single page describing what this is, for people who have not cloned it. It is one file with no build step: open `site/index.html`, or serve the folder.
+`site/` is a single page describing what this is, for people who have not cloned it. It is one file with no build step: open `site/index.html`, or serve the folder, or read it at <https://itxcrusher.github.io/taggant/>.
 
 The numbers it shows under the lamp are this repository's own: they are what `packages/compiler` reports for `examples/postcard/artwork.png` at a 350 mm reading distance, and they are meant to be checked against it rather than admired.
 
-Publishing it is a manual job on purpose. Turn on GitHub Pages with Actions as the source, then run the `pages` workflow from the Actions tab. It is not wired to `push`, because a repository with Pages turned off would fail that job on every commit and a red build that means nothing is worse than none. A manually run workflow is only offered on the default branch, so it appears there once this has landed on `main`.
+It is published at **<https://itxcrusher.github.io/taggant/>**, and publishing it is a manual job on purpose: run the `pages` workflow from the Actions tab. It is not wired to `push`, because a page that is one file with no build step does not need rebuilding on every commit, and a job that can fail for reasons nothing in the repository controls is a red build that means nothing.
 
 ## Working on it
 
