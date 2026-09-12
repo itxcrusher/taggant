@@ -13,7 +13,7 @@ node packages/compiler/dist/cli.js examples/postcard/artwork.png --id front --sc
 npx --yes serve .
 ```
 
-Open the address it prints, go to `examples/postcard/`, and allow the camera. A camera is only offered to a page on `localhost` or over HTTPS, so opening the file directly will not work.
+Open the address it prints, go to `examples/postcard/`, and allow the camera. Opening the file directly does not work, and it fails before the camera is ever asked for: a browser will not load a module from a `file://` origin, so the page cannot reach the code it needs. Serving it is also what makes a camera available at all, since one is only offered on `localhost` or over HTTPS.
 
 Then point it at the artwork. Print `artwork.png` at 148 mm wide, or just show it on another screen: the tracker does not know the difference.
 
@@ -53,4 +53,4 @@ The size line reads 640 by 454 where the file is 592 by 420, because every piece
 
 The page says so and stays where it is. That is what this manifest does, because it has no `fallback`.
 
-A manifest may name one, and then the runtime sends the viewer there instead: somebody scanned a printed thing and the camera is not going to open, so a page about the thing they scanned beats an apology. It is the right behaviour for something in the field and the wrong behaviour here, where being moved to another site is a confusing answer to reading an example. This manifest used to carry one pointing at `example.com`, which meant refusing the camera navigated away from the example and landed on a placeholder page with no explanation.
+A manifest may name one, and then the runtime sends the viewer there instead: somebody scanned a printed thing and the camera is not going to open, so a page about the thing they scanned beats an apology. That is the right behaviour in the field and the wrong behaviour in an example, where being moved to another site is a confusing answer to reading one, so this manifest has no `fallback` and the page explains itself instead.

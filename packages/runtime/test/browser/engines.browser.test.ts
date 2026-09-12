@@ -228,6 +228,14 @@ describe("the same artwork in every engine", () => {
       missing,
       `TAGGANT_REQUIRE_ENGINES asks for ${REQUIRED.join(", ")} and these did not launch, so this run compared fewer engines than it claims`,
     ).toEqual([]);
+    // Chromium is what every camera claim in these files leans on, and the pin holding it to
+    // the whole path lives inside a case generated from the engines that started. With
+    // Chromium absent there is no such case, so the pin is not merely unmet, it does not
+    // run: a machine with only one of the others goes green having held nothing to it.
+    expect(
+      names,
+      "chromium did not start, and it is the engine the camera checks here are anchored to",
+    ).toContain("chromium");
     // A machine with nothing installed would otherwise report this file as passing while
     // comparing the build against itself in Node.
     expect(started.length, "no browser engine could be launched, so nothing was compared").toBeGreaterThan(0);

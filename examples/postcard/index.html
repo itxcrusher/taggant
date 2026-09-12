@@ -22,6 +22,7 @@
     <script type="module">
       const status = document.getElementById("status");
       const scene = document.getElementById("scene");
+      let showing = null;
 
       // Said on the page, not only in a console nobody has open.
       //
@@ -31,11 +32,23 @@
       // module that fails while it is being evaluated is a page error rather than a
       // rejection, so neither a try nor an unhandledrejection handler inside it would fire:
       // it has to be caught from outside, which is what this listener is.
+      // Set when something more specific has already been said, so a general handler does
+      // not replace it with a vaguer version of the same news.
+      let explained = false;
       const failed = (why) => {
+        if (explained) return;
+        explained = true;
         scene.dataset.state = "error";
-        const said = String(why).replace(/^Uncaught (Error|TypeError): /, "").replace(/\.$/, "");
-        status.textContent =
-          said + ". Serve the repository root rather than opening this file, and run the README's commands first.";
+        const said = String(why).replace(/\.$/, "");
+        // Generic on purpose. An earlier version appended advice about serving the folder
+        // and running the commands, which is right for a file that is not there and wrong
+        // for a target file this build cannot read: it sent a reader to redo steps they had
+        // already done correctly.
+        // Not appended when the specific message already points somewhere, or a reader gets
+        // two sentences about the README in a row.
+        status.textContent = said.includes("README")
+          ? said + "."
+          : said + ". The README's Run it section has the steps.";
       };
       // Both, because which one fires depends on how the failure arrived. An import that
       // cannot be fetched rejects, and this module is evaluated with a top level await, so
@@ -56,24 +69,29 @@
         tracking: "Found it.",
       };
 
-      // `front.target.json` is the compile step's output and is not checked in, so the
-      // commonest way to arrive at this line is to have skipped it.
-      const read = async (path) => {
+      // Each file gets the reason it is actually missing. One shared message said the
+      // compile step writes it, which is true of the target and not of the manifest: the
+      // manifest is checked in and the compile step never touches it, so a reader whose
+      // server was pointed at the wrong folder was told to run a step that would not help.
+      const read = async (path, why) => {
         const response = await fetch(path);
-        if (!response.ok) {
-          throw new Error(`${path} is not there (${response.status}). The README's compile step writes it.`);
-        }
+        if (!response.ok) throw new Error(`${path} is not there (${response.status}). ${why}`);
         return response.json();
       };
       const [manifestJson, targetJson] = await Promise.all([
-        read("./manifest.json"),
-        read("./front.target.json"),
+        read("./manifest.json", "It sits beside this page, so the server is probably serving the wrong folder."),
+        read("./front.target.json", "The README's compile step writes it."),
       ]);
 
       // Both are read through the checks written for them rather than trusted. A manifest
       // is a format other people write, and the runtime will follow its fallback.
       const manifest = validateManifest(manifestJson);
       if (!manifest.ok) {
+        // Said here and then marked as said, because throwing afterwards reached the handler
+        // above, which replaced this with the word "invalid manifest" and lost the path and
+        // the reason: the two things an author needs.
+        explained = true;
+        scene.dataset.state = "error";
         status.textContent = `This manifest is not valid: ${manifest.errors[0].path} ${manifest.errors[0].message}`;
         throw new Error("invalid manifest");
       }
@@ -85,17 +103,24 @@
         options: {
           resolve: (src) => `./${src}`,
           onStateChange: (state) => {
-            status.textContent = say[state] ?? state;
+            // A problem outlives the state that follows it, or the sentence written for a
+            // viewer replaces it in the same task: an author whose manifest names a target
+            // nothing was built for was told to point the camera at it instead. Finding the
+            // artwork clears it, since that is worth saying.
+            if (state === "tracking") showing = null;
+            status.textContent = showing ?? (say[state] ?? state);
           },
-          onProblem: (message) => {
-            // The runtime says why it gave up on a camera, and the sentences above are what
-            // this page has chosen to tell a person. So a camera reason goes to the console
-            // and everything else, which is about the manifest, is shown.
-            const scene = document.getElementById("scene");
-            if (scene.dataset.state === "error" || scene.dataset.state === "denied") {
+          onProblem: (message, kind) => {
+            // By what sort of problem it is, not by the state at the time: most of the
+            // runtime's reports arrive before the state they belong to is set. A camera
+            // reason goes to the console because the sentences above are what this page has
+            // chosen to tell a person; anything about the manifest is shown, because the
+            // person reading it is usually the one who wrote it.
+            if (kind === "camera") {
               console.warn(message);
               return;
             }
+            showing = message;
             status.textContent = message;
           },
         },

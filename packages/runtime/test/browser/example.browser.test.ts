@@ -50,6 +50,8 @@ let frame64 = "";
 let artSize = { width: 0, height: 0 };
 /** Set by a test to serve a 404 for the files a reader may not have made yet. */
 let withhold: (path: string) => boolean = () => false;
+/** Set by a test to serve something else in place of a file the example ships. */
+let swap: Record<string, string> = {};
 
 beforeAll(async () => {
   // The README's third command, verbatim apart from the paths being absolute.
@@ -90,6 +92,13 @@ beforeAll(async () => {
     if (path.endsWith("/")) path += "index.html";
     if (withhold(path)) {
       response.writeHead(404).end();
+      return;
+    }
+    const instead = swap[path];
+    if (instead !== undefined) {
+      response
+        .writeHead(200, { "content-type": TYPES[extname(path)] ?? "application/octet-stream" })
+        .end(instead);
       return;
     }
     try {
@@ -155,6 +164,57 @@ describe("the example, opened the way its README says to open it", () => {
       expect(Math.abs(box.y - PLACED.y)).toBeLessThan(12);
       expect(Math.abs(box.width - artSize.width)).toBeLessThan(artSize.width * 0.1);
       expect(said).toBe("Found it.");
+
+      // What is actually on the artwork, and that the frames came from the canvas.
+      //
+      // Everything above passes with an overlay that is served, valid, and renders nothing:
+      // a reader gets the camera picture, the words "Found it." and a blank rectangle. The
+      // sibling test for a published bundle checks all of this and this one did not, which
+      // is the same gap twice in one repository.
+      const shown = await page.evaluate(() => {
+        const holder = document.querySelector('[data-taggant-target="front"]');
+        const image = holder?.querySelector("img");
+        return {
+          children: holder?.childElementCount ?? 0,
+          image: image ? `${image.naturalWidth}x${image.naturalHeight}` : "none",
+          hidden: (holder as HTMLElement | null)?.hidden ?? true,
+          asked:
+            (window as unknown as { cameraDiagnostics?: { called: number } }).cameraDiagnostics?.called ?? 0,
+        };
+      });
+      expect(shown.children, "the overlay is there and empty, so a reader sees nothing").toBeGreaterThan(0);
+      expect(shown.image, "the content image did not load").not.toBe("none");
+      expect(shown.hidden).toBe(false);
+
+      // Whether anything is actually painted, read off the content's own pixels.
+      //
+      // None of the checks above notices an overlay that renders nothing. An empty but valid
+      // SVG is served, loads, and reports a natural size of 300 by 150, so a page showing
+      // the camera picture, the words "Found it." and a blank rectangle passes every one of
+      // them: that was driven, and it did. Drawing the content and counting what is not
+      // transparent is the check that means "a reader sees something".
+      const painted = await page.evaluate(() => {
+        const image = document.querySelector('[data-taggant-target="front"] img') as HTMLImageElement | null;
+        if (!image) return -1;
+        const canvas = document.createElement("canvas");
+        canvas.width = 64;
+        canvas.height = 64;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (!context) return -1;
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        let opaque = 0;
+        for (let i = 3; i < pixels.length; i += 4) if ((pixels[i] ?? 0) > 200) opaque++;
+        return opaque / (canvas.width * canvas.height);
+      });
+      console.log(`engine-line example: content covers ${(painted * 100).toFixed(1)}% of its own box`);
+      expect(painted, "the content rendered nothing, so a reader sees a blank rectangle").toBeGreaterThan(
+        0.9,
+      );
+      expect(Math.abs(box.height - artSize.height)).toBeLessThan(artSize.height * 0.1);
+      // The stub answered, so the picture came from the canvas and not from anywhere else.
+      // This is the only assertion that would notice the init script failing to install.
+      expect(shown.asked, "the stub was never asked for a camera").toBeGreaterThan(0);
       expect(missing, "the example asked for something the repository does not serve").toEqual([]);
       expect(failures).toEqual([]);
     } finally {
@@ -182,9 +242,11 @@ describe("the example, opened the way its README says to open it", () => {
     "says what is missing when %s",
     async (_what, hide, expected) => {
       if (!browser) throw new Error("no browser");
-      withhold = hide;
       const page = await browser.newPage({ viewport: FRAME });
+      // Set inside the try, so a page that fails to open does not leave it set for every
+      // case after this one, which would then fail on the wrong thing.
       try {
+        withhold = hide;
         await page.addInitScript(() => {
           Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined });
         });
@@ -206,6 +268,46 @@ describe("the example, opened the way its README says to open it", () => {
     },
     60_000,
   );
+
+  /**
+   * The likeliest authoring mistake there is, and the page has to say it.
+   *
+   * The runtime's own source calls a mismatch between a manifest's target ids and the
+   * compiled ones one of the likeliest mistakes in authoring this, and says silence about
+   * it is the worst outcome. It was silent: the report arrives, and the state that follows
+   * it in the same task replaced it with a sentence telling the author to point a camera at
+   * artwork that can never be found. Nothing reached the console either.
+   */
+  it("tells the author when the manifest names a target nothing was built for", async () => {
+    if (!browser) throw new Error("no browser");
+    const manifest = JSON.parse(await readFile(join(EXAMPLE, "manifest.json"), "utf8"));
+    manifest.targets[0].id = "back";
+    const page = await browser.newPage({ viewport: FRAME });
+    try {
+      swap = { "/examples/postcard/manifest.json": JSON.stringify(manifest) };
+      await page.addInitScript(installCanvasCamera, {
+        encoded: frame64,
+        width: FRAME.width,
+        height: FRAME.height,
+      });
+      await page.goto(`${origin}/examples/postcard/`);
+      await page.waitForFunction(
+        () => (document.getElementById("status")?.textContent ?? "").includes("no target in the manifest"),
+        undefined,
+        { timeout: 30_000 },
+      );
+      const said = (await page.textContent("#status")) ?? "";
+      expect(said).toContain("front");
+      // And it stays said. A state follows it immediately and used to overwrite it.
+      await page.waitForTimeout(1_500);
+      expect(await page.textContent("#status"), "the state sentence overwrote the problem").toContain(
+        "no target in the manifest",
+      );
+    } finally {
+      swap = {};
+      await page.close();
+    }
+  }, 60_000);
 
   it("says so and stays where it is when there is no camera", async () => {
     if (!browser) throw new Error("no browser");

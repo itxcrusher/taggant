@@ -84,6 +84,8 @@ let origin = "";
 let outDir = "";
 /** Captured before anything can fail, so the cleanup does not depend on getting further. */
 let scratchRoot = "";
+/** Set by a test to serve a 404, standing in for a file lost while copying the folder. */
+let withhold: (path: string) => boolean = () => false;
 /** The camera frame, as base64, because it crosses into an init script. */
 let frame64 = "";
 
@@ -133,6 +135,10 @@ beforeAll(async () => {
   // anything that is not in it, this is where that shows up.
   const server = createServer(async (request, response) => {
     const path = decodeURIComponent((request.url ?? "/").split("?")[0] ?? "/");
+    if (withhold(path)) {
+      response.writeHead(404).end();
+      return;
+    }
     const parts = path.split("/").filter((part) => part && part !== "." && part !== "..");
     try {
       const body = await readFile(join(outDir, ...parts));
@@ -188,6 +194,14 @@ describe("a published bundle", () => {
       missing,
       `TAGGANT_REQUIRE_ENGINES asks for ${requiredEngines().join(", ")} and ${missing.join(", ")} did not launch, so the bundle was opened in fewer engines than claimed`,
     ).toEqual([]);
+    // Chromium is what every camera claim in these files leans on, and the pin holding it to
+    // the whole path lives inside a case generated from the engines that started. With
+    // Chromium absent there is no such case, so the pin is not merely unmet, it does not
+    // run: a machine with only one of the others goes green having held nothing to it.
+    expect(
+      names,
+      "chromium did not start, and it is the engine the camera checks here are anchored to",
+    ).toContain("chromium");
     expect(
       started.length,
       "no browser engine could be launched, so the bundle was never opened",
@@ -411,6 +425,67 @@ describe("a bundle that cannot start", () => {
     await writeFile(manifestPath, JSON.stringify(manifest));
     return () => writeFile(manifestPath, good);
   };
+
+  /**
+   * A file that did not survive the copy onto a host.
+   *
+   * This is a different failure from a target the build cannot read, and it used to be a
+   * worse one: the runtime was a static import, so a module that could not be fetched took
+   * the page's own error handling with it before either listener was registered. The page
+   * sat on "Starting." for as long as anyone was willing to look at it and the fallback,
+   * which exists for precisely "the experience cannot be shown", was never reached. The
+   * comment above this page's startup claimed to cover it and did not, which is the
+   * difference between a comment and a test.
+   */
+  it.each([
+    ["the runtime entry", (path: string) => path.endsWith("/runtime/index.js")],
+    ["a shared chunk", (path: string) => path.includes("/runtime/chunk-")],
+  ])(
+    "says so when %s did not survive the copy",
+    async (_what, hide) => {
+      const restoreManifest = await setFallback(undefined);
+      withhold = hide;
+      const page = await anyBrowser().newPage();
+      await page.addInitScript(installCanvasCamera, {
+        encoded: frame64,
+        width: FRAME.width,
+        height: FRAME.height,
+      });
+      try {
+        await page.goto(`${origin}/index.html`, { waitUntil: "domcontentloaded" });
+        await page.waitForFunction(
+          () => !(document.getElementById("status")?.textContent ?? "").startsWith("Starting"),
+          undefined,
+          { timeout: 30_000 },
+        );
+        const said = (await page.textContent("#status")) ?? "";
+        expect(said, "the page did not say the bundle was incomplete").toContain("could not be loaded");
+        expect(await page.getAttribute("#scene", "data-state")).toBe("error");
+      } finally {
+        withhold = () => false;
+        await page.close().catch(() => undefined);
+        await restoreManifest();
+      }
+    },
+    60_000,
+  );
+
+  it("sends the viewer to the fallback when the runtime did not survive the copy", async () => {
+    const restoreManifest = await setFallback(`${origin}/fallback-reached`);
+    withhold = (path) => path.endsWith("/runtime/index.js");
+    const page = await anyBrowser().newPage();
+    try {
+      await page.goto(`${origin}/index.html`, { waitUntil: "domcontentloaded" });
+      // The manifest is read before the runtime for this reason alone: reading the runtime
+      // first meant the one failure the fallback exists for could not reach it.
+      await page.waitForURL(/fallback-reached/, { timeout: 30_000 });
+      expect(page.url()).toContain("/fallback-reached");
+    } finally {
+      withhold = () => false;
+      await page.close().catch(() => undefined);
+      await restoreManifest();
+    }
+  }, 60_000);
 
   it("says so, instead of leaving the viewer on Starting forever", async () => {
     const restoreTarget = await breakTheTarget();

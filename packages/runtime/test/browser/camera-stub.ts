@@ -39,7 +39,11 @@ export function installCanvasCamera(feed: { encoded: string; width: number; heig
   (window as unknown as { cameraDiagnostics: typeof diagnostics }).cameraDiagnostics = diagnostics;
 
   /** Everything a still canvas needs to keep being a moving picture, in one place. */
-  const paint = async (): Promise<{ stream: MediaStream; stop: () => void }> => {
+  const paint = async (): Promise<{
+    stream: MediaStream;
+    watch: (track: MediaStreamTrack | undefined) => void;
+    stop: () => void;
+  }> => {
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
@@ -63,12 +67,17 @@ export function installCanvasCamera(feed: { encoded: string; width: number; heig
       picture.data[i * 4 + 2] = grey;
       picture.data[i * 4 + 3] = 255;
     }
-    // Painted once into a canvas of its own, then copied. Putting the image data back every
-    // animation frame writes three hundred thousand pixels on the page's own thread sixty
-    // times a second, which is enough work to matter: it delayed the first answer out of the
-    // recognition worker past the five seconds after which the runtime decides the worker is
-    // broken and falls back to the page thread for good. The test that asserts it did not
-    // fall back went from passing to failing on that alone. A copy is a copy.
+    // Painted once into a canvas of its own, then copied each frame.
+    //
+    // This replaced putting the whole image back every animation frame, which was done after
+    // a test asserting the worker had not been fallen back to failed in a full run and
+    // passed alone. The explanation offered at the time was that the per frame cost delayed
+    // the worker's first answer past the five seconds after which the runtime gives up on
+    // it. **That did not survive measurement**: putting the data back costs about a
+    // millisecond a frame, tens of milliseconds across a whole run, and an independent pass
+    // could not reproduce the failure in either arrangement. So the cause of that one run is
+    // not known. A copy is cheaper than a write and the arrangement is kept for that reason
+    // alone, not as a fix for something understood.
     const source = document.createElement("canvas");
     source.width = width;
     source.height = height;
@@ -81,8 +90,9 @@ export function installCanvasCamera(feed: { encoded: string; width: number; heig
     // is the arrangement measured working in all three engines; a timer and a `requestFrame`
     // were tried as belt and braces and WebKit stopped producing a picture.
     let live = true;
+    let watched: MediaStreamTrack | undefined;
     const again = () => {
-      if (!live) return;
+      if (!live || watched?.readyState === "ended") return;
       diagnostics.redraws++;
       context.drawImage(source, 0, 0);
       requestAnimationFrame(again);
@@ -99,6 +109,10 @@ export function installCanvasCamera(feed: { encoded: string; width: number; heig
     diagnostics.captured = true;
     return {
       stream,
+      /** Watch the track the caller was given, so the loop stops when they stop it. */
+      watch: (track: MediaStreamTrack | undefined) => {
+        watched = track;
+      },
       stop: () => {
         live = false;
         for (const track of stream.getTracks()) track.stop();
@@ -111,9 +125,11 @@ export function installCanvasCamera(feed: { encoded: string; width: number; heig
     try {
       const made = await paint();
       const track = made.stream.getVideoTracks()[0];
-      // Stop repainting when whoever took the stream stops it, rather than repainting a
-      // canvas nobody is reading for as long as the page is open.
-      track?.addEventListener("ended", made.stop);
+      // Stop repainting once nobody is reading it. `ended` does not fire for a track somebody
+      // stopped, only for a source that went away, so listening for it meant every camera
+      // page in the suite kept copying a frame sixty times a second until it closed,
+      // error pages included. The state is polled by the loop itself instead.
+      made.watch(track);
       diagnostics.tracks = made.stream
         .getTracks()
         .map((one) => `${one.kind}:${one.readyState}`)

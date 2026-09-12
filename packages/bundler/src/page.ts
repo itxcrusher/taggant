@@ -40,8 +40,6 @@ export function entryPage(options: { title: string; targets: string[] }): string
     <div id="scene"></div>
     <p id="status">Starting.</p>
     <script type="module">
-      import { mountExperience, fromTargetFile } from "./runtime/index.js";
-
       const status = document.getElementById("status");
       const say = {
         idle: "Starting.",
@@ -65,9 +63,14 @@ export function entryPage(options: { title: string; targets: string[] }): string
       // The manifest is read first and on its own, because its fallback is the only thing
       // that can help if anything after it fails.
       let fallback = null;
+      let showing = null;
       const start = async () => {
         const manifest = await load("./manifest.json");
         if (typeof manifest.fallback === "string") fallback = manifest.fallback;
+        // After the manifest, so that a runtime missing from a copied folder can still send
+        // the viewer where the manifest says to send them. Importing it first meant the one
+        // failure the fallback exists for was the one failure that could not reach it.
+        const { mountExperience, fromTargetFile } = await import("./runtime/index.js");
         const targetFiles = await Promise.all(
           names.map((name) => load("./targets/" + name + ".json")),
         );
@@ -76,30 +79,47 @@ export function entryPage(options: { title: string; targets: string[] }): string
           targets: targetFiles.map(fromTargetFile),
           container: document.getElementById("scene"),
           options: {
-            onStateChange: (state) => { status.textContent = say[state] ?? state; },
-            onProblem: (message) => {
-              // What a viewer is told about a camera is decided here, not by the runtime.
-              // The runtime reports why it gave up, which is worth having and is not worth
-              // putting over the sentence written above for a person holding a phone: it
-              // reads like "would not start playing within 10000 ms". Everything else that
-              // arrives here is about the manifest and has no sentence of its own, so it
-              // shows.
-              var scene = document.getElementById("scene");
-              if (scene.dataset.state === "error" || scene.dataset.state === "denied") {
+            onStateChange: (state) => {
+              // A problem outlives the state change that follows it. Every report the runtime
+              // makes about the manifest or about recognition is immediately followed by a
+              // state, and a state sentence written for a viewer would replace it in the same
+              // task: the author was told that nothing is built for one of their targets and
+              // then told to point a camera at it. Found artwork is the one thing that
+              // supersedes it, because that is news worth having.
+              if (state === "tracking") showing = null;
+              status.textContent = showing ?? (say[state] ?? state);
+            },
+            onProblem: (message, kind) => {
+              // Decided by what sort of problem it is, not by the state at the time. The
+              // state was the wrong thing to look at: three of the runtime's five reports
+              // happen before the state they belong to is set, so looking at it suppressed
+              // manifest problems that should have shown and showed camera reasons that were
+              // overwritten a moment later.
+              //
+              // A camera reason goes to the console, because this page has its own sentence
+              // for that, written for whoever is holding the phone, and "would not start
+              // playing within 10000 ms" is not it. Everything else is shown: the person
+              // reading a manifest problem is usually the person who published it.
+              if (kind === "camera") {
                 console.warn(message);
                 return;
               }
+              showing = message;
               status.textContent = message;
             },
           },
         });
       };
 
-      // Everything above runs inside this, rather than at the top of the module, because a
-      // module that throws while it is being evaluated is a page error and not a rejection:
-      // an unhandledrejection handler never sees it, and the viewer is left reading
-      // "Starting." forever with the reason in a console they do not have. A file lost in a
-      // copy and a target this build cannot read both arrive that way.
+      // Everything above runs inside this, rather than at the top of the module, and that
+      // includes importing the runtime. A module that fails while it is being evaluated is
+      // not something this page can catch: the listeners below are never reached, so the
+      // viewer reads "Starting." for as long as they are willing to wait, with the reason
+      // in a console they do not have, and the fallback is never followed. A static import
+      // of the runtime module fails exactly that way, and a file lost while copying the
+      // folder onto a host is the likeliest way for it to happen, so the import is inside
+      // here too. A target this build cannot read was already caught; a missing runtime was
+      // not, which was the difference between a comment and a check.
       //
       // The fallback is followed here for the same reason the runtime follows it when the
       // camera will not open. Somebody scanned a printed code; the manifest says where they
@@ -120,6 +140,9 @@ export function entryPage(options: { title: string; targets: string[] }): string
         if (fallback && safe(fallback)) location.replace(fallback);
       };
       window.addEventListener("unhandledrejection", (event) => failed(event.reason));
+      // And the other shape a failure arrives in, for anything that throws rather than
+      // rejects. Registered before the startup below runs, which is the whole point.
+      window.addEventListener("error", (event) => failed(event.error ?? event.message));
       start().catch(failed);
     </script>
   </body>
