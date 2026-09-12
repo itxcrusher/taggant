@@ -48,6 +48,8 @@ let close: (() => Promise<void>) | undefined;
 let origin = "";
 let frame64 = "";
 let artSize = { width: 0, height: 0 };
+/** Set by a test to serve a 404 for the files a reader may not have made yet. */
+let withhold: (path: string) => boolean = () => false;
 
 beforeAll(async () => {
   // The README's third command, verbatim apart from the paths being absolute.
@@ -86,6 +88,10 @@ beforeAll(async () => {
   const server = createServer(async (request, response) => {
     let path = decodeURIComponent((request.url ?? "/").split("?")[0] ?? "/");
     if (path.endsWith("/")) path += "index.html";
+    if (withhold(path)) {
+      response.writeHead(404).end();
+      return;
+    }
     try {
       const body = await readFile(join(ROOT, normalize(path).replace(/^(\.\.[/\\])+/, "")));
       response
@@ -155,6 +161,51 @@ describe("the example, opened the way its README says to open it", () => {
       await page.close();
     }
   }, 180_000);
+
+  /**
+   * The two ways a reader gets here without having finished the instructions. Both used to
+   * leave the page saying "Starting." for as long as they were willing to look at it, with
+   * the reason in a console they may not have open. The published entry page was fixed for
+   * exactly this and the example, which is what the README points at, was not.
+   *
+   * A module that fails while it is being evaluated cannot be caught from inside itself, so
+   * this is worth having a test for rather than an assumption: the listeners are outside.
+   */
+  it.each([
+    ["the packages are not built", (path: string) => path.includes("/dist/"), /dist\/index\.js/],
+    [
+      "the target is not compiled",
+      (path: string) => path.endsWith("front.target.json"),
+      /compile step writes it/,
+    ],
+  ])(
+    "says what is missing when %s",
+    async (_what, hide, expected) => {
+      if (!browser) throw new Error("no browser");
+      withhold = hide;
+      const page = await browser.newPage({ viewport: FRAME });
+      try {
+        await page.addInitScript(() => {
+          Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined });
+        });
+        await page.goto(`${origin}/examples/postcard/`);
+        await page.waitForFunction(
+          () => !(document.getElementById("status")?.textContent ?? "").startsWith("Starting"),
+          undefined,
+          { timeout: 30_000 },
+        );
+        const said = (await page.textContent("#status")) ?? "";
+        expect(said, "the page did not name what was missing").toMatch(expected);
+        // And it points at the way out rather than only at the symptom.
+        expect(said).toMatch(/README/);
+        expect(await page.getAttribute("#scene", "data-state")).toBe("error");
+      } finally {
+        withhold = () => false;
+        await page.close();
+      }
+    },
+    60_000,
+  );
 
   it("says so and stays where it is when there is no camera", async () => {
     if (!browser) throw new Error("no browser");
