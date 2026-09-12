@@ -45,6 +45,9 @@ jobs:
           pnpm -r test 2>&1 | tee test-output.txt
         env:
           TAGGANT_REQUIRE_ENGINES: chromium,firefox,webkit
+          # The per engine lines below are read out of this file and attached to the run,
+          # and colour codes in them are noise wherever they are read.
+          NO_COLOR: "1"
       # What each engine actually did, on every run and not only a failing one. The tests
       # print a line per engine and those lines are the evidence behind what the README
       # claims; a run elsewhere is otherwise readable only as an exit code, because
