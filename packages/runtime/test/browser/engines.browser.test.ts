@@ -6,7 +6,7 @@ import { type Browser, type BrowserType, chromium, firefox, webkit } from "playw
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CameraDiagnostics, installCanvasCamera } from "./camera-stub.js";
 import { artwork, inView } from "./feed.js";
-import { requiredEngines } from "./required.js";
+import { requiredCameraEngines, requiredEngines } from "./required.js";
 
 /**
  * The compiler runs in Node and the runtime runs in a browser, and the whole system rests
@@ -105,7 +105,7 @@ const CAMERA_MANIFEST = {
  * whole path there, and before this nothing in the repository could make that claim false.
  * A machine naming no engines is a contributor's, and only Chromium is held to it.
  */
-const MUST_TAKE_THE_CAMERA_PATH = new Set(["chromium", ...requiredEngines()]);
+const MUST_TAKE_THE_CAMERA_PATH = new Set(["chromium", ...requiredCameraEngines()]);
 
 /** Every engine Playwright can start here. A machine without one skips it, visibly. */
 const ENGINES: [string, BrowserType][] = [
@@ -439,7 +439,11 @@ describe("the same artwork in every engine", () => {
       page.on("pageerror", (error) => pageErrors.push(String(error)));
       try {
         // Before any page script. There is no path from here to a device.
-        await page.addInitScript(installCanvasCamera, FRAME_BASE64);
+        await page.addInitScript(installCanvasCamera, {
+          encoded: FRAME_BASE64,
+          width: CAMERA.width,
+          height: CAMERA.height,
+        });
 
         await page.goto(`${origin}/camera-page.html`);
         await page.waitForFunction(() => (window as unknown as { ready?: boolean }).ready === true);

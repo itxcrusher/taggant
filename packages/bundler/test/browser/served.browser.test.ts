@@ -9,7 +9,7 @@ import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type CameraDiagnostics, installCanvasCamera } from "../../../runtime/test/browser/camera-stub.js";
 import { artwork, inView } from "../../../runtime/test/browser/feed.js";
-import { requiredEngines } from "../../../runtime/test/browser/required.js";
+import { requiredCameraEngines, requiredEngines } from "../../../runtime/test/browser/required.js";
 import { bundle } from "../../src/bundle.js";
 
 declare global {
@@ -77,7 +77,7 @@ for (const [name, type] of ENGINES) {
  * canvas camera needs on every platform; and every engine this machine says it requires,
  * which on CI is all three, because that is what the README claims happens there.
  */
-const MUST_OPEN_THE_BUNDLE = new Set(["chromium", ...requiredEngines()]);
+const MUST_OPEN_THE_BUNDLE = new Set(["chromium", ...requiredCameraEngines()]);
 
 let close: (() => Promise<void>) | undefined;
 let origin = "";
@@ -216,7 +216,11 @@ describe("a published bundle", () => {
       const context = await browser.newContext({ viewport: { width: FRAME.width, height: FRAME.height } });
       const page = await context.newPage();
       try {
-        await page.addInitScript(installCanvasCamera, frame64);
+        await page.addInitScript(installCanvasCamera, {
+          encoded: frame64,
+          width: FRAME.width,
+          height: FRAME.height,
+        });
 
         const failures: string[] = [];
         page.on("pageerror", (error) => failures.push(String(error)));
@@ -415,7 +419,11 @@ describe("a bundle that cannot start", () => {
     // This page opens the real bundle, which asks for a camera. It is safe today only
     // because a broken target stops the page before it gets there, which is not a
     // guarantee anybody wrote down. The stub makes it one.
-    await page.addInitScript(installCanvasCamera, frame64);
+    await page.addInitScript(installCanvasCamera, {
+      encoded: frame64,
+      width: FRAME.width,
+      height: FRAME.height,
+    });
     try {
       await page.goto(`${origin}/index.html`, { waitUntil: "domcontentloaded" });
       await page.waitForFunction(
@@ -439,7 +447,11 @@ describe("a bundle that cannot start", () => {
     // This page opens the real bundle, which asks for a camera. It is safe today only
     // because a broken target stops the page before it gets there, which is not a
     // guarantee anybody wrote down. The stub makes it one.
-    await page.addInitScript(installCanvasCamera, frame64);
+    await page.addInitScript(installCanvasCamera, {
+      encoded: frame64,
+      width: FRAME.width,
+      height: FRAME.height,
+    });
     try {
       await page.goto(`${origin}/index.html`, { waitUntil: "domcontentloaded" });
       await page.waitForURL(/fallback-reached/, { timeout: 20_000 });

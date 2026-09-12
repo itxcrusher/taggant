@@ -11,8 +11,9 @@
  * Because the canvas holds the artwork, the whole path runs rather than only its start: a
  * stream is obtained, the worker starts, recognition happens and content is placed.
  *
- * Pass it to `page.addInitScript(installCanvasCamera, base64OfAGrayscaleFrame)`. It is one
- * function, in one file, because two copies of it in two test files is how they drift.
+ * Pass it to `page.addInitScript(installCanvasCamera, { encoded, width, height })`, where
+ * `encoded` is a base64 grayscale frame of exactly those dimensions. It is one function, in
+ * one file, because two copies of it in two test files is how they drift.
  *
  * **Whether a canvas can be a camera is not decided here.** Both APIs exist in WebKit on
  * Linux and the stream they produce may never become playable there, which is not a thing
@@ -24,7 +25,8 @@
  * error, and the test reads which. The runtime bounds its own wait, so a stream that never
  * plays is an error state rather than a page that hangs, which is what makes this safe.
  */
-export function installCanvasCamera(encoded: string): void {
+export function installCanvasCamera(feed: { encoded: string; width: number; height: number }): void {
+  const { encoded, width, height } = feed;
   const diagnostics = {
     called: 0,
     decoded: 0,
@@ -39,13 +41,20 @@ export function installCanvasCamera(encoded: string): void {
   /** Everything a still canvas needs to keep being a moving picture, in one place. */
   const paint = async (): Promise<{ stream: MediaStream; stop: () => void }> => {
     const canvas = document.createElement("canvas");
-    canvas.width = 640;
-    canvas.height = 480;
+    canvas.width = width;
+    canvas.height = height;
     const context = canvas.getContext("2d", { willReadFrequently: true });
     if (!context) throw new Error("no 2d context");
 
     const binary = atob(encoded);
     diagnostics.decoded = binary.length;
+    // Said rather than drawn wrong. The size used to be fixed at 640 by 480 here, so a
+    // caller with a larger frame got the first 307,200 of its bytes laid out as a smaller
+    // picture: a scrambled image, recognised by nothing, and no error anywhere. The test
+    // that hit it failed ninety seconds later as a timeout with nothing to read.
+    if (binary.length !== width * height) {
+      throw new Error(`the feed is ${binary.length} bytes and ${width} by ${height} needs ${width * height}`);
+    }
     const picture = context.createImageData(canvas.width, canvas.height);
     for (let i = 0; i < binary.length; i++) {
       const grey = binary.charCodeAt(i);
@@ -54,16 +63,28 @@ export function installCanvasCamera(encoded: string): void {
       picture.data[i * 4 + 2] = grey;
       picture.data[i * 4 + 3] = 255;
     }
-    context.putImageData(picture, 0, 0);
+    // Painted once into a canvas of its own, then copied. Putting the image data back every
+    // animation frame writes three hundred thousand pixels on the page's own thread sixty
+    // times a second, which is enough work to matter: it delayed the first answer out of the
+    // recognition worker past the five seconds after which the runtime decides the worker is
+    // broken and falls back to the page thread for good. The test that asserts it did not
+    // fall back went from passing to failing on that alone. A copy is a copy.
+    const source = document.createElement("canvas");
+    source.width = width;
+    source.height = height;
+    const into = source.getContext("2d");
+    if (!into) throw new Error("no 2d context for the source");
+    into.putImageData(picture, 0, 0);
+    context.drawImage(source, 0, 0);
 
-    // Redrawn every animation frame. This is the arrangement that was measured working in
-    // all three engines; a timer and a `requestFrame` were tried as belt and braces and
-    // WebKit stopped producing a picture, so the braces came off again.
+    // Redrawn every animation frame, because a still canvas is allowed to emit nothing. This
+    // is the arrangement measured working in all three engines; a timer and a `requestFrame`
+    // were tried as belt and braces and WebKit stopped producing a picture.
     let live = true;
     const again = () => {
       if (!live) return;
       diagnostics.redraws++;
-      context.putImageData(picture, 0, 0);
+      context.drawImage(source, 0, 0);
       requestAnimationFrame(again);
     };
     requestAnimationFrame(again);

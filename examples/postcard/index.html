@@ -57,6 +57,14 @@
             status.textContent = say[state] ?? state;
           },
           onProblem: (message) => {
+            // The runtime says why it gave up on a camera, and the sentences above are what
+            // this page has chosen to tell a person. So a camera reason goes to the console
+            // and everything else, which is about the manifest, is shown.
+            const scene = document.getElementById("scene");
+            if (scene.dataset.state === "error" || scene.dataset.state === "denied") {
+              console.warn(message);
+              return;
+            }
             status.textContent = message;
           },
         },

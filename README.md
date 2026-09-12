@@ -100,7 +100,7 @@ This exists because descriptor quality and recognition are not the same thing, a
 
 ## Showing something on a print
 
-`examples/postcard` is the whole path in one directory: a hand written manifest, the artwork it names, and a page that opens the camera and puts content on that artwork when it finds it. Its README has the three commands.
+`examples/postcard` is the whole path in one directory: a hand written manifest, the artwork it names, and a page that opens the camera and puts content on that artwork when it finds it. Its README has the three commands, and a test runs them and opens the page, because an example nobody drives is a claim rather than an example: driving it turned up a fallback pointing at a placeholder domain, which sent a reader off the page the moment they refused the camera.
 
 ```js
 await mountExperience({
@@ -248,7 +248,7 @@ These hold for every release and are the reason the project exists in this shape
 
 ## What has and has not been verified
 
-The seven workspace projects are exercised by 339 tests, which is the number CI runs; a machine that cannot start all three browser engines runs fewer, and says which it skipped. The whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all.
+The seven workspace projects are exercised by 341 tests, which is the number CI runs; a machine that cannot start all three browser engines runs fewer, and says which it skipped. The whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all.
 
 The runtime is driven in a real browser rather than asserted: the artwork is drawn into a canvas sitting in a larger frame, that canvas is handed to the page as its camera, and the test waits for the page to reach its tracking state, then checks that the content landed where the frame actually put the artwork. A published bundle is driven the same way and in every engine, from a static folder with nothing else running, on artwork put through the real compiler first, which is the only place the two halves of the system meet. That is the artifact a viewer actually gets, so it is the one worth opening in more than one browser: the test watches every request the page makes, fails on anything that 404s or leaves the origin, and requires the content to land where the frame put the artwork, at the size it was tracked at, with something actually in it, and with the recognition off the page's thread. Feeding it a frame the artwork is not in fails it, which is how that was established to be a check on recognition rather than on the page loading; that was run by hand, and no standing test keeps it true.
 

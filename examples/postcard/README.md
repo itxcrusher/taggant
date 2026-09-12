@@ -48,3 +48,9 @@ The size line reads 640 by 454 where the file is 592 by 420, because every piece
 | `front.target.json` | produced by the compile step above, not checked in |
 
 `physicalWidthMm` in the manifest is the real width of the printed piece. It is what turns a pose in pixels into a pose in millimetres, so it is worth measuring rather than guessing.
+
+## If the camera will not open
+
+The page says so and stays where it is. That is what this manifest does, because it has no `fallback`.
+
+A manifest may name one, and then the runtime sends the viewer there instead: somebody scanned a printed thing and the camera is not going to open, so a page about the thing they scanned beats an apology. It is the right behaviour for something in the field and the wrong behaviour here, where being moved to another site is a confusing answer to reading an example. This manifest used to carry one pointing at `example.com`, which meant refusing the camera navigated away from the example and landed on a placeholder page with no explanation.

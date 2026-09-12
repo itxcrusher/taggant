@@ -77,7 +77,20 @@ export function entryPage(options: { title: string; targets: string[] }): string
           container: document.getElementById("scene"),
           options: {
             onStateChange: (state) => { status.textContent = say[state] ?? state; },
-            onProblem: (message) => { status.textContent = message; },
+            onProblem: (message) => {
+              // What a viewer is told about a camera is decided here, not by the runtime.
+              // The runtime reports why it gave up, which is worth having and is not worth
+              // putting over the sentence written above for a person holding a phone: it
+              // reads like "would not start playing within 10000 ms". Everything else that
+              // arrives here is about the manifest and has no sentence of its own, so it
+              // shows.
+              var scene = document.getElementById("scene");
+              if (scene.dataset.state === "error" || scene.dataset.state === "denied") {
+                console.warn(message);
+                return;
+              }
+              status.textContent = message;
+            },
           },
         });
       };

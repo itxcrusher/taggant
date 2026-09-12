@@ -16,6 +16,5 @@
         }
       ]
     }
-  ],
-  "fallback": "https://example.com/postcard"
+  ]
 }

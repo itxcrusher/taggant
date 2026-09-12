@@ -134,7 +134,11 @@ describe("the runtime in a browser, against a camera", () => {
     if (!browser) throw new Error("no browser");
     const context = await browser.newContext();
     const page = await context.newPage();
-    await page.addInitScript(installCanvasCamera, frame64);
+    await page.addInitScript(installCanvasCamera, {
+      encoded: frame64,
+      width: FRAME.width,
+      height: FRAME.height,
+    });
     const failures: string[] = [];
     page.on("pageerror", (error) => failures.push(String(error)));
 
@@ -217,7 +221,11 @@ describe("the runtime in a browser, against a camera", () => {
       viewport: { width: 400, height: 700 },
     });
     const page = await context.newPage();
-    await page.addInitScript(installCanvasCamera, frame64);
+    await page.addInitScript(installCanvasCamera, {
+      encoded: frame64,
+      width: FRAME.width,
+      height: FRAME.height,
+    });
     await page.goto(`${origin}/page.html?w=360&h=640`);
     await page.waitForFunction(
       () => document.querySelector("#stage")?.getAttribute("data-state") === "tracking",
@@ -293,7 +301,11 @@ describe("the runtime in a browser, against a camera", () => {
     if (!browser) throw new Error("no browser");
     const context = await browser.newContext();
     const page = await context.newPage();
-    await page.addInitScript(installCanvasCamera, frame64);
+    await page.addInitScript(installCanvasCamera, {
+      encoded: frame64,
+      width: FRAME.width,
+      height: FRAME.height,
+    });
     await page.goto(`${origin}/bare.html`);
     await page.waitForFunction(() => window.taggantReady === true);
 
@@ -333,7 +345,11 @@ describe("the runtime in a browser, against a camera", () => {
     if (!browser) throw new Error("no browser");
     const context = await browser.newContext();
     const page = await context.newPage();
-    await page.addInitScript(installCanvasCamera, frame64);
+    await page.addInitScript(installCanvasCamera, {
+      encoded: frame64,
+      width: FRAME.width,
+      height: FRAME.height,
+    });
     // Capture the worker so the test can end it, which is what a browser does under
     // memory pressure. A terminated worker fires neither a reply nor an error.
     await page.addInitScript(() => {

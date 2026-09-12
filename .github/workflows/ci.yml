@@ -39,12 +39,23 @@ jobs:
       # than failing, which is right on a contributor's machine and wrong here: this job is
       # where the claim that all three engines agree is supposed to be earned. Naming them
       # makes a run that quietly covered one engine fail and say which are missing.
+      #
+      # `pnpm test` rather than `pnpm -r test`, because the root script runs the packages one
+      # at a time. Concurrently, three of them start browsers and the two that measure
+      # anything are measuring a machine with six on it: the runtime package took 47 seconds
+      # by itself and 174 inside a concurrent run, and a camera test failed that way once and
+      # passed on its own. A gate worth reading has to be the same gate twice.
       - name: test
         run: |
           set -o pipefail
-          pnpm -r test 2>&1 | tee test-output.txt
+          pnpm test 2>&1 | tee test-output.txt
         env:
           TAGGANT_REQUIRE_ENGINES: chromium,firefox,webkit
+          # And every one of them has to get from a camera to content on the artwork here,
+          # which is what the README says happens on this runner. Separate from the list
+          # above because that one is true everywhere and this one is true on Linux: the
+          # same WebKit has no capture API at all on Windows.
+          TAGGANT_REQUIRE_CAMERA: chromium,firefox,webkit
           # The per engine lines below are read out of this file and attached to the run,
           # and colour codes in them are noise wherever they are read.
           NO_COLOR: "1"
