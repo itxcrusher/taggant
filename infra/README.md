@@ -42,7 +42,7 @@ With the console, that is the whole of it: open `http://127.0.0.1:4000`, give th
 
 ```
 node packages/compiler/dist/cli.js examples/postcard/artwork.png \
-  --id front --scan-distance 350 --out front.target.json
+  --id front --scan-distance 190 --out front.target.json
 
 node packages/bundler/dist/cli.js examples/postcard/manifest.json \
   --target front=front.target.json --out infra/bundles/postcard

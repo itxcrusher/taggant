@@ -116,36 +116,60 @@ describe("the postcard example", () => {
     expect(Number(marks)).toBe(report.featureCount);
   });
 
-  it("is compiled by every workflow at a distance it can actually be read from", async () => {
-    // The distance the example is compiled at lives in the workflows as well as in the
-    // documents, and nothing bound them. Both workflows compiled it at 350 mm, where this
-    // postcard needs 270 and its manifest declares 148, so the bundler refused and the
-    // stack job went red on a push whose whole local gate was green. That is the gate
-    // working: the job had been publishing a bundle that cannot be recognised, and the
-    // suite could not see it because the suite does not run the workflows.
+  it("is compiled at a distance it can be read from everywhere that compiles it", async () => {
+    // The distance the example is compiled at lives in the workflows, in the infra recipe
+    // and in the container smoke script, and nothing bound any of them to the width the
+    // manifest declares. Both workflows compiled it at 350 mm, where this postcard needs
+    // 270 and the manifest says 148, so the bundler refused and the stack job went red on
+    // a push whose whole local gate was green. Fixing the workflows left the smoke script
+    // at 350 with a 120 mm panel, and the next push went red in the same way. The suite
+    // could not see either, because the suite does not run the workflows or the stack.
+    //
+    // So the files are read here. What is checked is the one thing that makes the pair
+    // legal: the piece has to be at least as wide as the artwork needs at that distance,
+    // which is exactly the comparison the bundler refuses on.
+    const root = join(EXAMPLE, "../..");
     const manifest = JSON.parse(await readFile(join(EXAMPLE, "manifest.json"), "utf8"));
-    const declared = manifest.targets[0].physicalWidthMm;
     const artwork = await readFile(join(EXAMPLE, "artwork.png"));
 
-    const workflows = join(EXAMPLE, "../../.github/workflows");
+    const needsAt = async (distance: number) => {
+      const report = (await compileTarget(artwork, { id: "front", scanDistanceMm: distance })).report;
+      expect(report.pass, `the example does not pass at ${distance} mm`).toBe(true);
+      return report.minimumWidthMm ?? Number.POSITIVE_INFINITY;
+    };
+
     let checked = 0;
-    for (const file of ["ci.yml", "pages.yml"]) {
-      const text = await readFile(join(workflows, file), "utf8");
+    // Everything that runs the command line against this artwork and then bundles it. The
+    // piece is whatever the example manifest declares.
+    for (const file of [".github/workflows/ci.yml", ".github/workflows/pages.yml", "infra/README.md"]) {
+      const text = await readFile(join(root, file), "utf8");
       for (const match of text.matchAll(/--scan-distance\s+(\d+)/g)) {
         checked++;
         const distance = Number(match[1]);
-        const report = (await compileTarget(artwork, { id: "front", scanDistanceMm: distance })).report;
-        expect(report.pass, `${file} compiles the example at ${distance} mm, where it does not pass`).toBe(
-          true,
-        );
+        const needs = await needsAt(distance);
         expect(
-          report.minimumWidthMm ?? Number.POSITIVE_INFINITY,
-          `${file} compiles the example at ${distance} mm, where it needs ${report.minimumWidthMm} mm and the manifest declares ${declared}. The bundler refuses that, so the job fails after everything local is green.`,
-        ).toBeLessThanOrEqual(declared);
+          needs,
+          `${file} compiles the example at ${distance} mm, where it needs ${needs} mm and the manifest declares ${manifest.targets[0].physicalWidthMm}. The bundler refuses that.`,
+        ).toBeLessThanOrEqual(manifest.targets[0].physicalWidthMm);
       }
     }
+
+    // And the container smoke script, which uploads the same artwork under a width of its
+    // own and then publishes it through the console.
+    const smoke = await readFile(join(root, "infra/authoring-smoke.mjs"), "utf8");
+    const declared = Number(smoke.match(/"physicalWidthMm",\s*"(\d+)"/)?.[1]);
+    const distance = Number(smoke.match(/scanDistanceMm:\s*"(\d+)"/)?.[1]);
+    expect(declared, "the smoke script no longer declares a printed width").toBeGreaterThan(0);
+    expect(distance, "the smoke script no longer names a scan distance").toBeGreaterThan(0);
+    checked++;
+    const needs = await needsAt(distance);
+    expect(
+      needs,
+      `infra/authoring-smoke.mjs uploads a ${declared} mm piece and compiles at ${distance} mm, where it needs ${needs} mm. The publish it does three checks later fails.`,
+    ).toBeLessThanOrEqual(declared);
+
     // A regex that matched nothing would pass every assertion above without running one.
-    expect(checked, "no workflow was found compiling the example").toBeGreaterThan(1);
+    expect(checked, "nothing was found compiling the example").toBeGreaterThan(3);
   });
 
   it("names files that exist", async () => {
