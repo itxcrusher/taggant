@@ -39,7 +39,7 @@ jobs:
       - name: assemble the site
         run: |
           set -o pipefail
-          node packages/compiler/dist/cli.js examples/postcard/artwork.png             --id front --scan-distance 350 --out site/measure/front.target.json
+          node packages/compiler/dist/cli.js examples/postcard/artwork.png             --id front --scan-distance 190 --out site/measure/front.target.json
           mkdir -p site/measure/runtime
           cp packages/vision/dist/index.js site/measure/runtime/vision.js
           cp examples/postcard/artwork.png site/artwork.png

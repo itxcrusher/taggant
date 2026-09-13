@@ -111,7 +111,7 @@ jobs:
 
       # Publish a real bundle into the stack, the way the infra README says to.
       - run: |
-          node packages/compiler/dist/cli.js examples/postcard/artwork.png             --id front --scan-distance 350 --out front.target.json
+          node packages/compiler/dist/cli.js examples/postcard/artwork.png             --id front --scan-distance 190 --out front.target.json
           node packages/bundler/dist/cli.js examples/postcard/manifest.json             --target front=front.target.json --out infra/bundles/postcard
 
       # `--wait` rather than `up -d` on its own: the latter returns once containers are

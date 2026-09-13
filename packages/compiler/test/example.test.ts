@@ -116,6 +116,38 @@ describe("the postcard example", () => {
     expect(Number(marks)).toBe(report.featureCount);
   });
 
+  it("is compiled by every workflow at a distance it can actually be read from", async () => {
+    // The distance the example is compiled at lives in the workflows as well as in the
+    // documents, and nothing bound them. Both workflows compiled it at 350 mm, where this
+    // postcard needs 270 and its manifest declares 148, so the bundler refused and the
+    // stack job went red on a push whose whole local gate was green. That is the gate
+    // working: the job had been publishing a bundle that cannot be recognised, and the
+    // suite could not see it because the suite does not run the workflows.
+    const manifest = JSON.parse(await readFile(join(EXAMPLE, "manifest.json"), "utf8"));
+    const declared = manifest.targets[0].physicalWidthMm;
+    const artwork = await readFile(join(EXAMPLE, "artwork.png"));
+
+    const workflows = join(EXAMPLE, "../../.github/workflows");
+    let checked = 0;
+    for (const file of ["ci.yml", "pages.yml"]) {
+      const text = await readFile(join(workflows, file), "utf8");
+      for (const match of text.matchAll(/--scan-distance\s+(\d+)/g)) {
+        checked++;
+        const distance = Number(match[1]);
+        const report = (await compileTarget(artwork, { id: "front", scanDistanceMm: distance })).report;
+        expect(report.pass, `${file} compiles the example at ${distance} mm, where it does not pass`).toBe(
+          true,
+        );
+        expect(
+          report.minimumWidthMm ?? Number.POSITIVE_INFINITY,
+          `${file} compiles the example at ${distance} mm, where it needs ${report.minimumWidthMm} mm and the manifest declares ${declared}. The bundler refuses that, so the job fails after everything local is green.`,
+        ).toBeLessThanOrEqual(declared);
+      }
+    }
+    // A regex that matched nothing would pass every assertion above without running one.
+    expect(checked, "no workflow was found compiling the example").toBeGreaterThan(1);
+  });
+
   it("names files that exist", async () => {
     const manifest = JSON.parse(await readFile(join(EXAMPLE, "manifest.json"), "utf8"));
     let named = 0;
