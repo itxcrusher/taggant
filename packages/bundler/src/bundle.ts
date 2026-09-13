@@ -91,11 +91,25 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // manifest states the width it will actually be printed at. Nothing else in the system
   // sees both numbers.
   for (const target of manifest.targets) {
-    const compiled = options.targets[target.id] as { report?: { minimumWidthMm?: number | null } };
-    const needs = compiled?.report?.minimumWidthMm;
+    const compiled = options.targets[target.id] as {
+      report?: { minimumWidthMm?: number | null; scanDistanceMm?: number };
+    };
+    const report = compiled?.report;
+    // A target with no report at all was never claimed to have been checked, and this gate
+    // has nothing to say about it. A target that carries a report but no distance is a
+    // different thing: it was written by the build whose width was computed against the
+    // sensor's pixels rather than the recogniser's, so the width in it is about four times
+    // too small and this comparison would pass a piece that cannot be read. A gate that is
+    // four times too lenient is worse than an absent one, because it reads as a gate.
+    if (report !== undefined && typeof report.scanDistanceMm !== "number") {
+      throw new Error(
+        `${target.id} was compiled by an older build, whose minimum print width was too small to trust. Compile it again before publishing.`,
+      );
+    }
+    const needs = report?.minimumWidthMm;
     if (typeof needs === "number" && target.physicalWidthMm < needs) {
       throw new Error(
-        `${target.id} is declared ${target.physicalWidthMm} mm wide, and its artwork needs at least ${needs} mm to be read at the distance it was compiled for`,
+        `${target.id} is declared ${target.physicalWidthMm} mm wide, and its artwork needs at least ${needs} mm to be read at ${report?.scanDistanceMm} mm, the distance it was compiled for`,
       );
     }
   }

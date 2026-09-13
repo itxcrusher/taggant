@@ -138,6 +138,47 @@ describe("a target on disk the runtime cannot read", () => {
   }, 60_000);
 });
 
+describe("a target on disk from a build whose print widths were wrong", () => {
+  it("is rebuilt on publish, because the bundler would otherwise wave the piece through", async () => {
+    // The one above is a target the runtime cannot read. This one it reads perfectly: only
+    // the print advice inside it is wrong, by about four times, and the bundler compares
+    // the declared print width against exactly that number before letting anything be
+    // published. Left alone the gate passes a piece that will not be recognised, which is
+    // the failure the gate exists to catch.
+    const { compile, publish } = await import("../src/operations.js");
+    const { readFile: read, writeFile: write } = await import("node:fs/promises");
+    const artwork = fileURLToPath(new URL("../../../examples/postcard/artwork.png", import.meta.url));
+    const overlay = fileURLToPath(new URL("../../../examples/postcard/overlay.svg", import.meta.url));
+    const runtimeDir = fileURLToPath(new URL("../../../packages/runtime/dist", import.meta.url));
+
+    const created = await workspace.create("old-widths", "Old widths");
+    const source = await workspace.storeFile(created.id, "artwork", "artwork.png", await read(artwork));
+    const media = await workspace.storeFile(created.id, "media", "overlay.svg", await read(overlay));
+    await workspace.save(created.id, {
+      ...created.manifest,
+      // Wide enough to clear the width the old model printed, nowhere near the real one.
+      targets: [{ id: "front", source, physicalWidthMm: 200, content: [{ type: "image", src: media }] }],
+    });
+
+    const outcome = await compile(workspace, await workspace.read(created.id), "front", 190);
+    const path = join(workspace.directoryFor(created.id), outcome.path);
+    const stored = JSON.parse(await read(path, "utf8"));
+    const { scanDistanceMm: _dropped, ...oldReport } = stored.report;
+    await write(path, JSON.stringify({ ...stored, report: { ...oldReport, minimumWidthMm: 147 } }));
+
+    const out = join(root, "old-widths-out");
+    const published = await publish(workspace, await workspace.read(created.id), out, { runtimeDir });
+    expect(published.compiled, "the stale target was published rather than rebuilt").toHaveLength(1);
+    const shipped = JSON.parse(await read(join(out, "targets", "front.json"), "utf8"));
+    // A rebuild has no distance to recover, because the distance is exactly the field the
+    // old shape was missing, so it uses the default. The point is that the shipped report
+    // now says which distance it means instead of leaving the bundler to compare against
+    // a number computed for nobody knows what.
+    expect(shipped.report.scanDistanceMm).toBe(150);
+    expect(shipped.report.minimumWidthMm).toBeGreaterThan(0);
+  }, 60_000);
+});
+
 describe("H5: registering a code", () => {
   it("leaves every other link on that code alone", async () => {
     // The shape this repository ships as its worked example: an English page, a French
@@ -325,22 +366,19 @@ describe("M4 and M7: what a body may weigh", () => {
 describe("L1: the score", () => {
   it("is escaped like everything else that reaches a page", async () => {
     const { verdict } = await import("../src/views.js");
-    const rendered = verdict(
-      {
-        score: "</span><img src=x onerror=alert(1)><span>" as unknown as number,
-        pass: true,
-        featureCount: 1,
-        areasWithFeatures: 1,
-        repetition: null,
-        areas: 16,
-        analysisWidth: 640,
-        smallestUsableScale: 0.5,
-        minimumWidthMm: 70,
-        scanDistanceMm: 150,
-        reasons: [],
-      },
-      350,
-    );
+    const rendered = verdict({
+      score: "</span><img src=x onerror=alert(1)><span>" as unknown as number,
+      pass: true,
+      featureCount: 1,
+      areasWithFeatures: 1,
+      repetition: null,
+      areas: 16,
+      analysisWidth: 640,
+      smallestUsableScale: 0.5,
+      minimumWidthMm: 70,
+      scanDistanceMm: 150,
+      reasons: [],
+    });
     expect(rendered).not.toContain("<img src=x");
     expect(rendered).toContain("&lt;img");
   });

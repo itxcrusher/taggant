@@ -136,12 +136,18 @@ function reportRecord(report: Report): string {
 </details>`;
 }
 
-/** The print readiness verdict: the sentence, then the measurement behind it. */
-export function verdict(report: Report, scanDistanceMm: number): string {
+/**
+ * The print readiness verdict: the sentence, then the measurement behind it.
+ *
+ * The distance comes from the report and not from an argument. It was an argument, and the
+ * only caller had nothing to pass, so it passed a default of its own: the page named a
+ * distance the width in front of it had never been computed for.
+ */
+export function verdict(report: Report): string {
   const width =
     report.minimumWidthMm === null
       ? "no width, because no width would fix it"
-      : `${report.minimumWidthMm} mm wide to be read from ${scanDistanceMm} mm away, being ${Math.round(
+      : `${report.minimumWidthMm} mm wide to be read from ${report.scanDistanceMm} mm away, being ${Math.round(
           report.smallestUsableScale * report.analysisWidth,
         )} px across the artwork`;
   return `<div class="verdict ${report.pass ? "pass" : "fail"}">
@@ -164,6 +170,8 @@ export interface TargetView {
   contentCount: number;
   report?: Report | undefined;
   scanDistanceMm?: number | undefined;
+  /** Set when a compiled target exists but was written by a build whose widths were wrong. */
+  staleReport?: boolean | undefined;
   /** Set when the compiled target asks for more width than the manifest says it is printed at. */
   tooSmall?: string | undefined;
 }
@@ -189,8 +197,10 @@ export function experiencePage(view: ExperienceView): string {
   <p class="quiet mono source-line">${esc(target.source)} &middot; ${target.contentCount} content item${target.contentCount === 1 ? "" : "s"}</p>
   ${
     target.report
-      ? verdict(target.report, target.report.scanDistanceMm)
-      : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
+      ? verdict(target.report)
+      : target.staleReport
+        ? `<p class="quiet small">Compiled by an older build, whose minimum print width was too small to trust. Compile it again to see what this artwork needs.</p>`
+        : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
   }
   ${target.tooSmall ? `<div class="notice bad gap-md"><p>${esc(target.tooSmall)}</p></div>` : ""}
   <form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/compile" class="gap-md">
@@ -199,7 +209,7 @@ export function experiencePage(view: ExperienceView): string {
         <label for="d-${esc(target.id)}">Read from, mm</label>
         <input id="d-${esc(target.id)}" name="scanDistanceMm" type="number" min="50" max="5000" step="10" value="${esc(target.scanDistanceMm ?? target.report?.scanDistanceMm ?? DEFAULT_SCAN_DISTANCE_MM)}">
       </div>
-      <button type="submit">${target.report ? "Compile again" : "Compile"}</button>
+      <button type="submit">${target.report || target.staleReport ? "Compile again" : "Compile"}</button>
     </div>
   </form>
 

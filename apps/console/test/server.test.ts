@@ -296,6 +296,49 @@ describe("what it says", () => {
     expect(page).not.toContain("everything-published-successfully");
   });
 
+  it("does not print a width from a build whose widths were wrong", async () => {
+    // The workspace an operator already has. A target compiled last week is still perfectly
+    // good at recognising artwork, and its minimum print width is about four times too
+    // small, because it was computed by dividing by the sensor pixels instead of the ones
+    // the recogniser gets. The page presents that width as the instruction a printer
+    // follows, and it printed "read from undefined mm away" beside it, which is how this
+    // was found.
+    await post("/experiences", new URLSearchParams({ id: "last-week", title: "Last week" }));
+    const target = new FormData();
+    target.append("targetId", "front");
+    target.append("physicalWidthMm", "148");
+    target.append("artwork", new Blob([await artwork()], { type: "image/png" }), "front.png");
+    await post("/e/last-week/targets", target);
+
+    // Written straight onto disk in the old shape, because no build here can produce it any
+    // more, and an operator who compiled before the fix has exactly this sitting in theirs.
+    await workspace.writeTarget("last-week", "front", {
+      formatVersion: 2,
+      id: "front",
+      width: 640,
+      height: 452,
+      features: [],
+      report: {
+        score: 100,
+        pass: true,
+        featureCount: 300,
+        areasWithFeatures: 16,
+        areas: 16,
+        repetition: 0.36,
+        analysisWidth: 640,
+        smallestUsableScale: 0.5,
+        minimumWidthMm: 147,
+        reasons: [],
+      },
+    });
+
+    const page = await pageAt("/e/last-week");
+    expect(page).not.toContain("undefined mm away");
+    expect(page).not.toContain("147 mm");
+    expect(page).toContain("Compiled by an older build");
+    expect(page).toContain("Compile again");
+  });
+
   it("warns when the printed width is smaller than the compile says it needs", async () => {
     await post("/experiences", new URLSearchParams({ id: "too-small", title: "Too small" }));
     const target = new FormData();

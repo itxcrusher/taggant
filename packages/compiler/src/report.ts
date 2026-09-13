@@ -90,6 +90,28 @@ export const FRAME_WIDTH_MM_AT_1M = 2 * 1000 * Math.tan((30 * Math.PI) / 180);
  */
 export const RECOGNISED_PIXELS_ACROSS_FRAME = 480;
 
+/**
+ * Is a report read back off disk one this build produced?
+ *
+ * A stored report is not merely old data, it is data from the model that was wrong. Every
+ * width written before this field existed was computed by dividing by the sensor's pixels
+ * rather than the recogniser's, so it is about four times too small, and both things that
+ * read a stored report acted on that: the console printed the width as advice, and the
+ * bundler used it as the gate that refuses to publish a piece printed too small. A
+ * four-times-lenient gate is worse than no gate, because it reads as one.
+ *
+ * The distance is the marker because it is the field the corrected model added, and
+ * because a width without the distance it was computed for is not a number anyone can act
+ * on anyway.
+ */
+export function carriesItsDistance(report: unknown): report is Report {
+  return (
+    typeof report === "object" &&
+    report !== null &&
+    typeof (report as { scanDistanceMm?: unknown }).scanDistanceMm === "number"
+  );
+}
+
 const MIN_FEATURES = 60;
 const MIN_AREAS = 8;
 const GRID = 4;
@@ -175,7 +197,13 @@ export function buildReport(input: ReportInput): Report {
   // The mark would have to be wider than the whole picture to put enough pixels across
   // itself, and no print size or working distance can arrange that. Printing a width here
   // would name a size that does not work, which is worse than saying it cannot be done.
-  if (pixelsNeeded > RECOGNISED_PIXELS_ACROSS_FRAME) {
+  //
+  // Only said about artwork that is otherwise fine. Something that failed on features or on
+  // repetition never gets a usable size below full, so it trips this too, and then the
+  // report tells someone whose artwork is too faint to track that their problem is that the
+  // print is too small. It is not, and printing it larger will not fix it. The first reason
+  // is the one to act on, so it is the only one given.
+  if (pass && pixelsNeeded > RECOGNISED_PIXELS_ACROSS_FRAME) {
     pass = false;
     reasons.push(
       "detail survives only near full size, so the print would have to fill more than the whole picture to be read",

@@ -153,12 +153,12 @@ describe("bundle", () => {
         manifest: tooSmall,
         // The compiler says this artwork needs 70 mm; the manifest says it will be printed
         // at 20. Nothing else in the system sees both numbers.
-        targets: { front: { ...TARGET, report: { minimumWidthMm: 70 } } },
+        targets: { front: { ...TARGET, report: { minimumWidthMm: 70, scanDistanceMm: 150 } } },
         sourceDir,
         outDir,
         runtimeDir: RUNTIME_DIST,
       }),
-    ).rejects.toThrow(/declared 20 mm wide, and its artwork needs at least 70 mm/);
+    ).rejects.toThrow(/declared 20 mm wide, and its artwork needs at least 70 mm to be read at 150 mm/);
   });
 
   it("publishes when the piece is wide enough", async () => {
@@ -166,7 +166,7 @@ describe("bundle", () => {
     await expect(
       bundle({
         manifest: MANIFEST,
-        targets: { front: { ...TARGET, report: { minimumWidthMm: 70 } } },
+        targets: { front: { ...TARGET, report: { minimumWidthMm: 70, scanDistanceMm: 150 } } },
         sourceDir,
         outDir,
         runtimeDir: RUNTIME_DIST,

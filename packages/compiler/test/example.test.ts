@@ -101,6 +101,14 @@ describe("the postcard example", () => {
     ]) {
       expect(page, `the project page does not say: ${claim}`).toContain(claim);
     }
+    // The sentence about the page, in the README, is a claim too, and the check above does
+    // not reach it: it compares the page against the compiler, so the two agreed with each
+    // other while the README went on naming a reading distance neither of them used.
+    const readme = await readFile(join(EXAMPLE, "../../README.md"), "utf8");
+    expect(readme, "the README names a different reading distance than the page it describes").toContain(
+      `for \`examples/postcard/artwork.png\` at a ${report.scanDistanceMm} mm reading distance`,
+    );
+
     // The page draws one mark per feature. Drawn and stated have to agree, because a
     // reader counts the claim and sees the drawing.
     const marks = page.match(/for \((?:let|var) j = 0; j < (\d+); j\+\+\)/)?.[1];

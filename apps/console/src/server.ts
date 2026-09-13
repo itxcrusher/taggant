@@ -12,6 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
+import { carriesItsDistance } from "@taggant/compiler";
 import { DEFAULT_SCAN_DISTANCE_MM, bundleDirFor, compile, publish, registerCode } from "./operations.js";
 import { STYLESHEET } from "./style.js";
 import { type Notice, type TargetView, errorPage, experiencePage, indexPage, page } from "./views.js";
@@ -255,7 +256,12 @@ export function createConsole(options: ConsoleOptions): Server {
           report?: TargetView["report"];
           scanDistanceMm?: number;
         };
-        if (compiled.report) {
+        // Shown only when this build produced it. An older one holds a width about four
+        // times too small, and the page presents that width as the instruction a printer
+        // follows, so displaying it is worse than displaying nothing.
+        if (compiled.report && !carriesItsDistance(compiled.report)) {
+          view.staleReport = true;
+        } else if (compiled.report) {
           view.report = compiled.report;
           const needed = compiled.report.minimumWidthMm;
           if (compiled.report.pass && needed !== null && target.physicalWidthMm < needed) {
@@ -420,10 +426,19 @@ export function createConsole(options: ConsoleOptions): Server {
       const result = await publish(workspace, experience, outDir, {
         ...(options.runtimeDir === undefined ? {} : { runtimeDir: options.runtimeDir }),
       });
+      // A publish can rebuild a target on the way past: one the runtime cannot read, or one
+      // from a build whose print widths were wrong. That rebuild has no distance to work
+      // from, so it uses the default, and the bundle then describes a reading distance the
+      // operator did not choose. Saying so costs a sentence; not saying so was the whole
+      // shape of the width defect, where a number went out under a distance nobody named.
+      const rebuilt = result.compiled.map((one) => one.targetId);
       redirect(response, `/e/${encodeURIComponent(id)}`, {
         tone: "good",
         message: `Published ${result.files.length} files.`,
-        detail: outDir,
+        detail:
+          rebuilt.length > 0
+            ? `${outDir} (${rebuilt.join(", ")} had to be compiled again, at the default ${DEFAULT_SCAN_DISTANCE_MM} mm reading distance)`
+            : outDir,
       });
       return;
     }

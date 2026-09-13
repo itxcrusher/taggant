@@ -159,6 +159,20 @@ describe("the numbers a printer acts on", () => {
     expect(describeWidth(onlyAtFullSize, 400)).toBe("not printable until the artwork passes");
   });
 
+  it("does not tell someone whose artwork cannot track that the print is too small", () => {
+    // Artwork that fails on features has no usable size below its own, so it trips the size
+    // ceiling as well, and the report then carried both complaints. The second one is wrong
+    // advice: printing faint artwork larger does not give it features. Only the reason
+    // someone can act on should be there, and the first one is it.
+    const tooFaint = buildReport({
+      image: { width: 640, height: 640 },
+      levels: [{ scale: 1, corners: lattice(200, 640) }],
+      scanDistanceMm: 400,
+    });
+    expect(tooFaint.pass).toBe(false);
+    expect(tooFaint.reasons).toEqual(["too few features to track reliably"]);
+  });
+
   it("scales the width with the scan distance, because a camera further away sees less", () => {
     const image = { width: 640, height: 640 };
     const levels = [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) }));

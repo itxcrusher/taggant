@@ -10,7 +10,7 @@ import { randomBytes } from "node:crypto";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { bundle, realWithin } from "@taggant/bundler";
-import { type Report, compileTarget, toTargetJson } from "@taggant/compiler";
+import { type Report, carriesItsDistance, compileTarget, toTargetJson } from "@taggant/compiler";
 import {
   type LinkTable,
   type StoredLink,
@@ -114,6 +114,13 @@ export async function publish(
       try {
         stored = await workspace.readTarget(experience.id, target.id);
         fromTargetFile(stored);
+        // Usable to recognise with and still not one to publish. A target written before
+        // the report carried its own scan distance carries a minimum print width from the
+        // model that divided by the sensor's pixels instead of the recogniser's, and the
+        // bundler compares the declared print width against exactly that number. Left
+        // alone it publishes with a gate that is four times too lenient.
+        const report = (stored as { report?: unknown }).report;
+        if (report !== undefined && !carriesItsDistance(report)) stored = undefined;
       } catch {
         stored = undefined;
       }
