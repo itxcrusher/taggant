@@ -23,10 +23,15 @@
       button:disabled { opacity: 0.45; }
       #found { color: var(--bad); }
       #found[data-found="yes"] { color: var(--good); }
-      table { border-collapse: collapse; width: 100%; margin-top: 12px; font-size: 13px; }
+      /* The table is six columns wide and its cells do not wrap, so on a phone it dragged
+         the whole page sideways by 308 px. It scrolls inside its own box instead. */
+      .scroller { overflow-x: auto; margin-top: 12px; }
+      table { border-collapse: collapse; width: 100%; font-size: 13px; }
       th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
       th { color: var(--dim); font-weight: 400; }
       .note { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 12px; }
+      .hint { color: var(--dim); }
+      input { font: inherit; color: var(--ink); background: #14141a; border: 1px solid var(--line); padding: 6px 8px; width: 6em; }
     </style>
   </head>
   <body>
@@ -40,6 +45,11 @@
     <div id="view"><video id="feed" playsinline muted></video><canvas id="mark"></canvas></div>
 
     <p id="status">Starting.</p>
+    <p>
+      Printed width:
+      <input id="printed" type="number" min="20" max="1000" step="1" value="148" /> mm
+      <span class="hint">measure the print, do not trust the printer</span>
+    </p>
     <p>Camera: <span id="camera">unknown</span></p>
     <p>Artwork: <span id="found" data-found="no">not found</span></p>
 
@@ -49,28 +59,46 @@
       <button id="copy" disabled>Copy the table</button>
     </div>
 
-    <table id="results">
+    <div class="scroller"><table id="results">
       <thead>
-        <tr><th>distance</th><th>camera</th><th>px across</th><th>px/mm</th><th>px/mm at 1 m</th><th>inliers</th></tr>
+        <tr><th>distance</th><th>printed</th><th>camera</th><th>px across</th><th>px/mm</th><th>px/mm at 1 m</th><th>inliers</th></tr>
       </thead>
       <tbody></tbody>
-    </table>
+    </table></div>
 
     <p class="note">
-      Nothing is uploaded. The rows stay in this page until you copy them.
+      Hold the phone square on to the print. Tilting it foreshortens the artwork, and the
+      reading is then of a narrower print than the one in front of you.
     </p>
+    <p class="note">Nothing is uploaded. The rows stay in this page until you copy them.</p>
 
     <script type="module">
       const status = document.getElementById("status");
-      const say = (text) => { status.textContent = text; };
+      // Set once something specific has been said, so the general handlers below do not
+      // replace it with a vaguer version of the same news. Saying a thing and then throwing
+      // is how the specific message gets lost, which happened here and in the example page
+      // before it.
+      let explained = false;
+      const say = (text, specific = false) => {
+        if (explained && !specific) return;
+        if (specific) explained = true;
+        status.textContent = text;
+      };
       window.addEventListener("error", (event) => say("Failed: " + (event.error?.message ?? event.message)));
       window.addEventListener("unhandledrejection", (event) => say("Failed: " + (event.reason?.message ?? event.reason)));
 
       const { locate, fromTargetFile, applyHomography } = await import("./runtime/vision.js");
       const target = fromTargetFile(await (await fetch("./front.target.json")).json());
 
-      // The printed width the artwork is meant to be. The whole measurement rests on it.
-      const PRINTED_MM = 148;
+      // The printed width, which the whole measurement rests on and which is the easiest
+      // thing in this to get wrong: a printer set to fit the page silently makes every
+      // number here false, and nothing in a camera picture can tell. So it is asked for
+      // rather than assumed, and the answer wanted is a ruler's, not the print dialog's.
+      const printedInput = document.getElementById("printed");
+      const printedMm = () => {
+        const value = Number(printedInput.value);
+        return Number.isFinite(value) && value > 0 ? value : 148;
+      };
       // Recognition runs at this width whatever the camera gives, because a target is
       // described down from its own raster and an observation far larger than that has
       // nowhere on the pyramid to meet it. The result is scaled back up to the camera's
@@ -97,6 +125,10 @@
       const working = work.getContext("2d", { willReadFrequently: true });
 
       say("Asking for the camera.");
+      if (!navigator.mediaDevices?.getUserMedia) {
+        say("This browser will not open a camera from a page, so there is nothing to measure.", true);
+        throw new Error("no camera api");
+      }
       let stream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } } });
@@ -104,7 +136,10 @@
         say(
           error?.name === "NotAllowedError"
             ? "The camera was refused. Allow it for this page and reload."
-            : "The camera could not be opened: " + (error?.message ?? error),
+            : error?.name === "NotFoundError"
+              ? "No camera was found on this device."
+              : "The camera could not be opened: " + (error?.message ?? error),
+          true,
         );
         throw error;
       }
@@ -112,10 +147,13 @@
       await video.play();
       const track = stream.getVideoTracks()[0];
       const settings = track?.getSettings?.() ?? {};
+      // The frame's own dimensions, because those are what the arithmetic below divides by.
+      // A track's reported settings can differ from them, and a line that disagrees with the
+      // number beside it is worse than no line.
       const cameraLine =
-        (settings.width ?? video.videoWidth) +
+        video.videoWidth +
         " x " +
-        (settings.height ?? video.videoHeight) +
+        video.videoHeight +
         " at " +
         Math.round(settings.frameRate ?? 0) +
         " fps, " +
@@ -153,7 +191,7 @@
         const acrossProcessed = Math.hypot(bx - ax, by - ay);
         // Back to the camera's own pixels: this is the figure a print is read at.
         const acrossNative = acrossProcessed * (nativeWidth / width);
-        const perMm = acrossNative / PRINTED_MM;
+        const perMm = acrossNative / printedMm();
         return {
           acrossNative,
           perMm,
@@ -224,6 +262,10 @@
         if (!latest) return;
         const row = {
           distance: distanceMm + " mm",
+          // Recorded per row, because it can be changed between rows and every figure to
+          // the right of it is divided by it. A table that does not say which width it used
+          // cannot be read afterwards.
+          printed: printedMm() + " mm",
           camera: cameraLine,
           across: Math.round(latest.acrossNative),
           perMm: latest.perMm.toFixed(2),
@@ -232,7 +274,15 @@
         };
         rows.push(row);
         const tr = document.createElement("tr");
-        for (const value of [row.distance, row.camera, row.across, row.perMm, row.atOneMetre, row.inliers]) {
+        for (const value of [
+          row.distance,
+          row.printed,
+          row.camera,
+          row.across,
+          row.perMm,
+          row.atOneMetre,
+          row.inliers,
+        ]) {
           const td = document.createElement("td");
           td.textContent = String(value);
           tr.append(td);
@@ -243,8 +293,10 @@
 
       document.getElementById("copy").addEventListener("click", async () => {
         const text = [
-          "distance\tcamera\tpx across\tpx/mm\tpx/mm at 1 m\tinliers",
-          ...rows.map((r) => [r.distance, r.camera, r.across, r.perMm, r.atOneMetre, r.inliers].join("\t")),
+          "distance\tprinted\tcamera\tpx across\tpx/mm\tpx/mm at 1 m\tinliers",
+          ...rows.map((r) =>
+            [r.distance, r.printed, r.camera, r.across, r.perMm, r.atOneMetre, r.inliers].join("\t"),
+          ),
         ].join("\n");
         try {
           await navigator.clipboard.writeText(text);
