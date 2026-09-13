@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>taggant, measure a camera</title>
+    <style>
+      :root { color-scheme: dark; --ink: #eff0fc; --dim: #9a9ab0; --line: #2a2a34; --good: #7fe0a8; --bad: #ff8f7a; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; background: #0a0a0c; color: var(--ink); }
+      body { font: 15px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 16px; }
+      h1 { font-size: 15px; letter-spacing: 0.18em; text-transform: uppercase; margin: 0 0 4px; }
+      p { margin: 0 0 12px; color: var(--dim); max-width: 62ch; }
+      #view { position: relative; width: 100%; aspect-ratio: 4 / 3; background: #000; border: 1px solid var(--line); overflow: hidden; }
+      #view video { width: 100%; height: 100%; object-fit: cover; }
+      /* Width and height as well as inset, because a canvas is a replaced element: with
+         width auto it keeps its intrinsic 300 by 150 and sits in the corner, so the outline
+         was drawn into a small box beside the picture rather than over it. */
+      #mark { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+      .row { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+      button { font: inherit; color: var(--ink); background: #14141a; border: 1px solid var(--line); padding: 10px 14px; border-radius: 2px; }
+      button[aria-pressed="true"] { border-color: var(--ink); background: #1e1e28; }
+      button:disabled { opacity: 0.45; }
+      #found { color: var(--bad); }
+      #found[data-found="yes"] { color: var(--good); }
+      table { border-collapse: collapse; width: 100%; margin-top: 12px; font-size: 13px; }
+      th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+      th { color: var(--dim); font-weight: 400; }
+      .note { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>Measure a camera</h1>
+    <p>
+      Print <a href="../artwork.png">the postcard artwork</a> at <strong>148 mm</strong> across and point this
+      at it. This reports what your camera actually delivers and how many pixels it puts across a printed
+      millimetre, which is the one number the print readiness report currently assumes rather than measures.
+    </p>
+
+    <div id="view"><video id="feed" playsinline muted></video><canvas id="mark"></canvas></div>
+
+    <p id="status">Starting.</p>
+    <p>Camera: <span id="camera">unknown</span></p>
+    <p>Artwork: <span id="found" data-found="no">not found</span></p>
+
+    <div class="row" id="distances"></div>
+    <div class="row">
+      <button id="record" disabled>Record this distance</button>
+      <button id="copy" disabled>Copy the table</button>
+    </div>
+
+    <table id="results">
+      <thead>
+        <tr><th>distance</th><th>camera</th><th>px across</th><th>px/mm</th><th>px/mm at 1 m</th><th>inliers</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <p class="note">
+      Nothing is uploaded. The rows stay in this page until you copy them.
+    </p>
+
+    <script type="module">
+      const status = document.getElementById("status");
+      const say = (text) => { status.textContent = text; };
+      window.addEventListener("error", (event) => say("Failed: " + (event.error?.message ?? event.message)));
+      window.addEventListener("unhandledrejection", (event) => say("Failed: " + (event.reason?.message ?? event.reason)));
+
+      const { locate, fromTargetFile, applyHomography } = await import("./runtime/vision.js");
+      const target = fromTargetFile(await (await fetch("./front.target.json")).json());
+
+      // The printed width the artwork is meant to be. The whole measurement rests on it.
+      const PRINTED_MM = 148;
+      // Recognition runs at this width whatever the camera gives, because a target is
+      // described down from its own raster and an observation far larger than that has
+      // nowhere on the pyramid to meet it. The result is scaled back up to the camera's
+      // own pixels afterwards, which is the figure that means something.
+      const PROCESS_WIDTH = 640;
+
+      let distanceMm = 350;
+      const distances = document.getElementById("distances");
+      for (const mm of [200, 250, 350, 500, 750, 1000]) {
+        const button = document.createElement("button");
+        button.textContent = mm + " mm";
+        button.setAttribute("aria-pressed", String(mm === distanceMm));
+        button.addEventListener("click", () => {
+          distanceMm = mm;
+          for (const other of distances.children) other.setAttribute("aria-pressed", String(other === button));
+        });
+        distances.append(button);
+      }
+
+      const video = document.getElementById("feed");
+      const mark = document.getElementById("mark");
+      const marking = mark.getContext("2d");
+      const work = document.createElement("canvas");
+      const working = work.getContext("2d", { willReadFrequently: true });
+
+      say("Asking for the camera.");
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } } });
+      } catch (error) {
+        say(
+          error?.name === "NotAllowedError"
+            ? "The camera was refused. Allow it for this page and reload."
+            : "The camera could not be opened: " + (error?.message ?? error),
+        );
+        throw error;
+      }
+      video.srcObject = stream;
+      await video.play();
+      const track = stream.getVideoTracks()[0];
+      const settings = track?.getSettings?.() ?? {};
+      const cameraLine =
+        (settings.width ?? video.videoWidth) +
+        " x " +
+        (settings.height ?? video.videoHeight) +
+        " at " +
+        Math.round(settings.frameRate ?? 0) +
+        " fps, " +
+        (settings.facingMode ?? "unknown") +
+        " facing";
+      document.getElementById("camera").textContent = cameraLine;
+      say("Point it at the print.");
+
+      const foundLine = document.getElementById("found");
+      const recordButton = document.getElementById("record");
+      let latest = null;
+
+      const measure = () => {
+        const nativeWidth = video.videoWidth;
+        const nativeHeight = video.videoHeight;
+        if (nativeWidth < 1) return null;
+        const width = Math.min(PROCESS_WIDTH, nativeWidth);
+        const height = Math.round((nativeHeight / nativeWidth) * width);
+        if (work.width !== width || work.height !== height) {
+          work.width = width;
+          work.height = height;
+        }
+        working.drawImage(video, 0, 0, width, height);
+        const pixels = working.getImageData(0, 0, width, height).data;
+        const grey = new Uint8Array(width * height);
+        for (let i = 0, p = 0; i < grey.length; i++, p += 4) {
+          // The same weighting the compiler uses, so both sides see one picture.
+          grey[i] = (pixels[p] * 299 + pixels[p + 1] * 587 + pixels[p + 2] * 114) / 1000;
+        }
+        const result = locate({ width, height, data: grey }, target);
+        if (!result.found || !result.homography) return null;
+
+        const [ax, ay] = applyHomography(result.homography, 0, 0);
+        const [bx, by] = applyHomography(result.homography, target.width, 0);
+        const acrossProcessed = Math.hypot(bx - ax, by - ay);
+        // Back to the camera's own pixels: this is the figure a print is read at.
+        const acrossNative = acrossProcessed * (nativeWidth / width);
+        const perMm = acrossNative / PRINTED_MM;
+        return {
+          acrossNative,
+          perMm,
+          atOneMetre: perMm * (distanceMm / 1000),
+          inliers: result.inliers,
+          corners: [
+            applyHomography(result.homography, 0, 0),
+            applyHomography(result.homography, target.width, 0),
+            applyHomography(result.homography, target.width, target.height),
+            applyHomography(result.homography, 0, target.height),
+          ],
+          scale: { width, height },
+        };
+      };
+
+      const draw = (reading) => {
+        if (mark.width !== mark.clientWidth || mark.height !== mark.clientHeight) {
+          mark.width = mark.clientWidth;
+          mark.height = mark.clientHeight;
+        }
+        marking.clearRect(0, 0, mark.width, mark.height);
+        if (!reading) return;
+        // The video is shown with object-fit: cover, so the same crop has to be applied to
+        // the outline or it sits somewhere the artwork is not.
+        const shownScale = Math.max(mark.width / reading.scale.width, mark.height / reading.scale.height);
+        const offsetX = (mark.width - reading.scale.width * shownScale) / 2;
+        const offsetY = (mark.height - reading.scale.height * shownScale) / 2;
+        marking.strokeStyle = "#7fe0a8";
+        marking.lineWidth = 2;
+        marking.beginPath();
+        reading.corners.forEach(([x, y], index) => {
+          const px = x * shownScale + offsetX;
+          const py = y * shownScale + offsetY;
+          if (index === 0) marking.moveTo(px, py);
+          else marking.lineTo(px, py);
+        });
+        marking.closePath();
+        marking.stroke();
+      };
+
+      const tick = () => {
+        let reading = null;
+        try {
+          reading = measure();
+        } catch (error) {
+          say("Recognition stopped: " + (error?.message ?? error));
+          return;
+        }
+        latest = reading;
+        foundLine.dataset.found = reading ? "yes" : "no";
+        foundLine.textContent = reading
+          ? Math.round(reading.acrossNative) +
+            " px across, " +
+            reading.perMm.toFixed(2) +
+            " px/mm, " +
+            reading.inliers +
+            " inliers"
+          : "not found";
+        recordButton.disabled = !reading;
+        draw(reading);
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+
+      const rows = [];
+      const body = document.querySelector("#results tbody");
+      recordButton.addEventListener("click", () => {
+        if (!latest) return;
+        const row = {
+          distance: distanceMm + " mm",
+          camera: cameraLine,
+          across: Math.round(latest.acrossNative),
+          perMm: latest.perMm.toFixed(2),
+          atOneMetre: latest.atOneMetre.toFixed(2),
+          inliers: latest.inliers,
+        };
+        rows.push(row);
+        const tr = document.createElement("tr");
+        for (const value of [row.distance, row.camera, row.across, row.perMm, row.atOneMetre, row.inliers]) {
+          const td = document.createElement("td");
+          td.textContent = String(value);
+          tr.append(td);
+        }
+        body.append(tr);
+        document.getElementById("copy").disabled = false;
+      });
+
+      document.getElementById("copy").addEventListener("click", async () => {
+        const text = [
+          "distance\tcamera\tpx across\tpx/mm\tpx/mm at 1 m\tinliers",
+          ...rows.map((r) => [r.distance, r.camera, r.across, r.perMm, r.atOneMetre, r.inliers].join("\t")),
+        ].join("\n");
+        try {
+          await navigator.clipboard.writeText(text);
+          say("Copied " + rows.length + " rows.");
+        } catch {
+          say(text);
+        }
+      });
+    </script>
+  </body>
+</html>

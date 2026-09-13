@@ -96,13 +96,14 @@
     .grid{grid-template-columns:1fr}
   }
   @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
-</style>
+  .rail .lbl a { color: inherit; text-decoration: none; border-bottom: 1px solid currentColor; }
+    </style>
 </head>
 <body>
 <div class="bench">
   <div class="rail">
     <span class="mark">taggant</span>
-    <span class="lbl">open source &nbsp;/&nbsp; MIT &nbsp;/&nbsp; github.com/itxcrusher/taggant</span>
+    <span class="lbl">open source &nbsp;/&nbsp; MIT &nbsp;/&nbsp; <a href="measure/">measure your camera</a> &nbsp;/&nbsp; github.com/itxcrusher/taggant</span>
   </div>
 
   <div class="stage" id="stage">

@@ -22,7 +22,9 @@
       "**/*.gen.ts",
       "infra/bundles",
       "infra/workspace",
-      "examples/**/*.target.json"
+      "examples/**/*.target.json",
+      "site/measure/runtime",
+      "site/measure/front.target.json"
     ]
   }
 }

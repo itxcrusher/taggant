@@ -43,3 +43,8 @@ infra/bundles/*
 
 # Written by the CI test step so a failed run can be read without log access.
 test-output.txt
+
+# Assembled by the pages workflow, not checked in.
+site/measure/runtime/
+site/measure/front.target.json
+site/artwork.png
