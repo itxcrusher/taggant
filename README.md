@@ -13,13 +13,14 @@ Early development. Every part of the path is usable and being built in the open.
 A press run cannot be undone, so the question worth answering first is whether this artwork will track at the size and distance it will actually be used at. Both runs below are at the same scan distance, and both outputs are copied from the terminal.
 
 ```
-$ node packages/compiler/dist/cli.js blots.png --scan-distance 400
+$ node packages/compiler/dist/cli.js examples/postcard/artwork.png --scan-distance 190
 
-  blots.png
-  size                  640 x 480 px
-  tracking quality      86 / 100
-  features              135, reaching 16 of 16 areas
-  minimum print width   160 mm to be read from 400 mm away, being 640 px across the artwork
+  artwork.png
+  size                  640 x 454 px
+  tracking quality      100 / 100
+  features              248, reaching 16 of 16 areas
+  minimum print width   147 mm to be read from 190 mm away, being 320 px across the artwork
+  repeated detail       29% of features have a look-alike, which is normal
   verdict               ready for press
 
 $ echo $?
@@ -45,13 +46,15 @@ $ echo $?
 
 Two things in there are worth reading carefully.
 
-**Minimum print width says what it is derived from.** It is a resolution requirement, not a judgement of the design: the print has to be large enough that the camera, at that distance, still delivers the pixels across the mark that the smallest size in the compiled target needs. Artwork that holds up all the way down that range asks for less; the postcard in `examples/postcard` needs 320 px across and so 70 mm at 350 mm, while the artwork above holds up only at full size, needs 640 px, and asks for 160 mm. Artwork that does not pass gets no width at all, because no width would fix it.
+**Minimum print width says what it is derived from.** It is a resolution requirement, not a judgement of the design: the print has to fill enough of the picture, at that distance, to put the pixels across the mark that the smallest size in the compiled target needs. Artwork that holds up all the way down that range asks for less; the postcard in `examples/postcard` needs 320 px across and so 147 mm at 190 mm. Artwork that does not pass gets no width at all, because no width would fix it, and neither does artwork whose detail survives only near full size: the print would have to be wider than the whole picture, so the report says that instead of naming a size.
 
 The line is written out in full rather than as a bare figure in millimetres, because a bare figure under a filename reads as a measurement of the design and gets carried into a press setup as one.
 
 **Score and verdict cannot disagree.** 60 is the pass mark exactly. Below it, the score says how far short the artwork falls; above it, how much headroom it has.
 
-The number the report cannot yet measure is the camera. Minimum print width assumes a resolving power of 1.6 pixels per millimetre at one metre, which is roughly a 1080p sensor over a 60 degree field. That is optimistic for a browser camera stream, where 720p is common. It is marked as an assumption in the source and is due to be replaced by a measurement across real devices.
+The number the report cannot yet measure is the field of view. Minimum print width assumes 60 degrees across, which is ordinary for a phone's rear camera; a narrower lens makes every minimum smaller and a wider one makes them larger. It is marked as an assumption in the source, and <https://itxcrusher.github.io/taggant/measure/> is the page that replaces it with a measurement from a real device.
+
+What the sensor resolves does not enter into it, which is worth saying because it is not obvious. Recognition runs on a frame reduced to a fixed width, so a mark occupies the same fraction of that frame whatever the sensor behind it, and the pixels the matcher gets are that fraction times the reduced width. This was got wrong: the minimum was computed by dividing pixels the matcher needs by pixels a 1080p sensor has, which are different currencies with a reduction between them that appeared in neither the arithmetic nor the comment. Every width it printed was about four times too small, and a print made to one would not have been found at all.
 
 ## Packages
 
@@ -248,7 +251,7 @@ These hold for every release and are the reason the project exists in this shape
 
 ## What has and has not been verified
 
-The seven workspace projects are exercised by 347 tests, which is the number CI runs; a machine that cannot start all three browser engines runs fewer, and says which it skipped. The whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all.
+The seven workspace projects are exercised by 352 tests, which is the number CI runs; a machine that cannot start all three browser engines runs fewer, and says which it skipped. The whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all.
 
 The runtime is driven in a real browser rather than asserted: the artwork is drawn into a canvas sitting in a larger frame, that canvas is handed to the page as its camera, and the test waits for the page to reach its tracking state, then checks that the content landed where the frame actually put the artwork. A published bundle is driven the same way and in every engine, from a static folder with nothing else running, on artwork put through the real compiler first, which is the only place the two halves of the system meet. That is the artifact a viewer actually gets, so it is the one worth opening in more than one browser: the test watches every request the page makes, fails on anything that 404s or leaves the origin, and requires the content to land where the frame put the artwork, at the size it was tracked at, with something actually in it, and with the recognition off the page's thread. Feeding it a frame the artwork is not in fails it, which is how that was established to be a check on recognition rather than on the page loading; that was run by hand, and no standing test keeps it true.
 

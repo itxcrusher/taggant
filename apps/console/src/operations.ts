@@ -25,10 +25,17 @@ import { type Experience, type Workspace, WorkspaceError, publishable } from "./
  * Distance a person is expected to hold the camera from the print, in millimetres.
  *
  * It is the one input the compiler cannot infer, and it changes the answer: the same
- * artwork asks for more width the further away it will be read. 350 mm is a pack held in
- * the hand, which is the common case, and it is offered rather than imposed.
+ * artwork asks for more width the further away it will be read.
+ *
+ * 150 mm, which is closer than it sounds and is what this actually reaches. Recognition
+ * runs on a frame reduced to a fixed width, so a mark has to fill roughly two thirds of the
+ * picture to put enough pixels across itself, and that is a short working distance for
+ * anything pack-sized: a 120 mm front panel is readable to about 155 mm and an A6 postcard
+ * to about 190. This was 350 mm, a pack held at arm's length, which the report agreed with
+ * because the report was dividing by the wrong pixels; it never worked. Reaching further is
+ * a change to how far down the compiled target is described, not to this number.
  */
-export const DEFAULT_SCAN_DISTANCE_MM = 350;
+export const DEFAULT_SCAN_DISTANCE_MM = 150;
 
 export interface CompileOutcome {
   targetId: string;

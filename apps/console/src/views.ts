@@ -8,6 +8,7 @@
  */
 
 import type { Report } from "@taggant/compiler";
+import { DEFAULT_SCAN_DISTANCE_MM } from "./operations.js";
 import {
   type DraftManifest,
   ID_PATTERN_ATTRIBUTE,
@@ -188,7 +189,7 @@ export function experiencePage(view: ExperienceView): string {
   <p class="quiet mono source-line">${esc(target.source)} &middot; ${target.contentCount} content item${target.contentCount === 1 ? "" : "s"}</p>
   ${
     target.report
-      ? verdict(target.report, target.scanDistanceMm ?? 350)
+      ? verdict(target.report, target.report.scanDistanceMm)
       : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
   }
   ${target.tooSmall ? `<div class="notice bad gap-md"><p>${esc(target.tooSmall)}</p></div>` : ""}
@@ -196,7 +197,7 @@ export function experiencePage(view: ExperienceView): string {
     <div class="row bottom">
       <div class="field narrow">
         <label for="d-${esc(target.id)}">Read from, mm</label>
-        <input id="d-${esc(target.id)}" name="scanDistanceMm" type="number" min="50" max="5000" step="10" value="${esc(target.scanDistanceMm ?? 350)}">
+        <input id="d-${esc(target.id)}" name="scanDistanceMm" type="number" min="50" max="5000" step="10" value="${esc(target.scanDistanceMm ?? target.report?.scanDistanceMm ?? DEFAULT_SCAN_DISTANCE_MM)}">
       </div>
       <button type="submit">${target.report ? "Compile again" : "Compile"}</button>
     </div>

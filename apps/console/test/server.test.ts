@@ -107,9 +107,12 @@ describe("the whole path, driven the way the pages drive it", () => {
     expect(page).toContain("artwork/front-panel-final.png");
     expect(page).toContain("Not compiled yet");
 
+    // 150 mm, because that is a distance a 120 mm front panel can actually be read from.
+    // At 350 the compiler asks for 270 mm and the bundler refuses to publish a target
+    // whose print is narrower than its artwork needs, which is both of them working.
     const compiled = await post(
       "/e/botanica-500/targets/front-panel/compile",
-      new URLSearchParams({ scanDistanceMm: "350" }),
+      new URLSearchParams({ scanDistanceMm: "150" }),
     );
     expect(compiled.status).toBe(303);
 
@@ -117,7 +120,7 @@ describe("the whole path, driven the way the pages drive it", () => {
     expect(page).toContain("Ready for press");
     // The verdict is a sentence; the measurement behind it is disclosed, not asserted.
     expect(page).toContain("Under the lamp: what the compiler measured");
-    expect(page).toMatch(/Print it at least \d+ mm wide to be read from 350 mm away/);
+    expect(page).toMatch(/Print it at least \d+ mm wide to be read from 150 mm away/);
 
     const content = new FormData();
     content.append("type", "video");

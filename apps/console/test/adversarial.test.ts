@@ -336,6 +336,7 @@ describe("L1: the score", () => {
         analysisWidth: 640,
         smallestUsableScale: 0.5,
         minimumWidthMm: 70,
+        scanDistanceMm: 150,
         reasons: [],
       },
       350,

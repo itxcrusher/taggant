@@ -23,7 +23,7 @@ describe("the postcard example", () => {
   it("has artwork that passes its own print readiness check", async () => {
     const target = await compileTarget(await readFile(join(EXAMPLE, "artwork.png")), {
       id: "front",
-      scanDistanceMm: 350,
+      scanDistanceMm: 190,
     });
     expect(target.report.pass).toBe(true);
     expect(target.report.score).toBe(100);
@@ -34,7 +34,7 @@ describe("the postcard example", () => {
     const declared = manifest.targets[0].physicalWidthMm;
     const target = await compileTarget(await readFile(join(EXAMPLE, "artwork.png")), {
       id: "front",
-      scanDistanceMm: 350,
+      scanDistanceMm: 190,
     });
     // The point of the example is that these two numbers agree. If the artwork or the
     // thresholds move far enough that they stop agreeing, the example is telling a story
@@ -51,10 +51,10 @@ describe("the postcard example", () => {
     const readme = await readFile(join(EXAMPLE, "../../README.md"), "utf8");
     const target = await compileTarget(await readFile(join(EXAMPLE, "artwork.png")), {
       id: "front",
-      scanDistanceMm: 350,
+      scanDistanceMm: 190,
     });
     const across = Math.round(target.report.smallestUsableScale * target.report.analysisWidth);
-    expect(readme).toContain(`needs ${across} px across and so ${target.report.minimumWidthMm} mm at 350 mm`);
+    expect(readme).toContain(`needs ${across} px across and so ${target.report.minimumWidthMm} mm at 190 mm`);
   });
 
   it("quotes the whole compile in the example README, not only the width", async () => {
@@ -64,7 +64,7 @@ describe("the postcard example", () => {
     const readme = await readFile(join(EXAMPLE, "README.md"), "utf8");
     const target = await compileTarget(await readFile(join(EXAMPLE, "artwork.png")), {
       id: "front",
-      scanDistanceMm: 350,
+      scanDistanceMm: 190,
     });
     const report = target.report;
     const across = Math.round(report.smallestUsableScale * report.analysisWidth);
@@ -73,7 +73,7 @@ describe("the postcard example", () => {
       `size                  ${target.width} x ${target.height} px`,
       `tracking quality      ${report.score} / 100`,
       `features              ${report.featureCount}, reaching ${report.areasWithFeatures} of ${report.areas} areas`,
-      `minimum print width   ${report.minimumWidthMm} mm to be read from 350 mm away, being ${across} px across the artwork`,
+      `minimum print width   ${report.minimumWidthMm} mm to be read from 190 mm away, being ${across} px across the artwork`,
       `repeated detail       ${repetition}% of features have a look-alike`,
     ]) {
       expect(readme, `the README does not say: ${line}`).toContain(line);
@@ -87,7 +87,7 @@ describe("the postcard example", () => {
     const page = await readFile(join(EXAMPLE, "../../site/index.html"), "utf8");
     const target = await compileTarget(await readFile(join(EXAMPLE, "artwork.png")), {
       id: "front",
-      scanDistanceMm: 350,
+      scanDistanceMm: 190,
     });
     const report = target.report;
     const across = Math.round(report.smallestUsableScale * report.analysisWidth);
@@ -95,7 +95,7 @@ describe("the postcard example", () => {
       `COMPILED ${target.width} x ${target.height} px`,
       `tracking quality ${report.score} / 100`,
       `${report.featureCount} features, ${report.areasWithFeatures} of ${report.areas} areas`,
-      `min width ${report.minimumWidthMm} mm to read at 350 mm`,
+      `min width ${report.minimumWidthMm} mm to read at 190 mm`,
       `${Math.round((report.repetition ?? 0) * 100)}% of features have a look-alike`,
       report.pass ? "VERDICT READY FOR PRESS" : "VERDICT NOT READY",
     ]) {

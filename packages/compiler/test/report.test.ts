@@ -100,41 +100,68 @@ describe("the numbers a printer acts on", () => {
   });
 
   it("asks for a larger print when the artwork stops holding up at the smaller sizes", () => {
-    const image = { width: 1000, height: 1000 };
+    // The raster artwork is actually analysed at, so these widths mean what they mean in a
+    // real report. At 1000 they did not: everything needed more pixels across the mark than
+    // a frame has, which is a real refusal and not what this case is about.
+    const image = { width: 640, height: 640 };
     const good = buildReport({
       image,
-      levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 1000) })),
+      levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
       scanDistanceMm: 400,
     });
-    // The same artwork, but nothing survives below full size.
+    // The same artwork, but the smaller sizes stop carrying detail sooner.
     const fragile = buildReport({
       image,
       levels: [
-        { scale: 1, corners: lattice(40, 1000) },
-        { scale: 0.79, corners: lattice(400, 1000) },
+        { scale: 1, corners: lattice(40, 640) },
+        { scale: 0.79, corners: lattice(40, 640) },
+        { scale: 0.63, corners: lattice(40, 640) },
+        { scale: 0.5, corners: lattice(400, 640) },
       ],
       scanDistanceMm: 400,
     });
     expect(good.smallestUsableScale).toBe(0.5);
-    expect(fragile.smallestUsableScale).toBe(1);
+    expect(fragile.smallestUsableScale).toBe(0.63);
     expect(fragile.minimumWidthMm ?? 0).toBeGreaterThan(good.minimumWidthMm ?? 0);
   });
 
   it("says what the width was derived from, so it cannot be read as a measurement of the design", () => {
     const report = buildReport({
-      image: { width: 1000, height: 1000 },
-      levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 1000) })),
+      image: { width: 640, height: 640 },
+      levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
       scanDistanceMm: 400,
     });
     const described = describeWidth(report, 400);
     expect(described).toContain("400 mm away");
     expect(described).toContain("px across the artwork");
-    expect(report.analysisWidth).toBe(1000);
+    expect(report.analysisWidth).toBe(640);
+  });
+
+  /**
+   * Artwork whose detail survives only at or near full size cannot be read at any distance,
+   * because the print would have to be wider than the whole picture to put enough pixels
+   * across itself. A width printed here would name a size that does not work.
+   */
+  it("refuses a width when no print size could ever carry enough pixels", () => {
+    const image = { width: 640, height: 640 };
+    const onlyAtFullSize = buildReport({
+      image,
+      levels: [
+        { scale: 1, corners: lattice(40, 640) },
+        { scale: 0.79, corners: lattice(400, 640) },
+      ],
+      scanDistanceMm: 400,
+    });
+    expect(onlyAtFullSize.minimumWidthMm).toBeNull();
+    expect(onlyAtFullSize.pass).toBe(false);
+    expect(onlyAtFullSize.reasons.join(" ")).toMatch(/more than the whole picture/);
+    // And it says so rather than printing a number a printer could act on.
+    expect(describeWidth(onlyAtFullSize, 400)).toBe("not printable until the artwork passes");
   });
 
   it("scales the width with the scan distance, because a camera further away sees less", () => {
-    const image = { width: 1000, height: 1000 };
-    const levels = [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 1000) }));
+    const image = { width: 640, height: 640 };
+    const levels = [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) }));
     const near = buildReport({ image, levels, scanDistanceMm: 300 });
     const far = buildReport({ image, levels, scanDistanceMm: 900 });
     expect(far.minimumWidthMm ?? 0).toBeGreaterThan((near.minimumWidthMm ?? 0) * 2);
@@ -158,7 +185,10 @@ describe("the numbers a printer acts on", () => {
       levels: [{ scale: 1, corners: [] }],
       scanDistanceMm: 400,
     });
-    expect(report.reasons).toEqual(["too few features to track reliably"]);
+    // Both are true of artwork with nothing on it, and the point of this case is the one
+    // that is not said: nothing about features being bunched together, since there are none.
+    expect(report.reasons).toContain("too few features to track reliably");
+    expect(report.reasons.join(" ")).not.toMatch(/concentrated|corner of the artwork/i);
   });
 
   it("keeps the area count inside the grid even for coordinates it did not produce", () => {

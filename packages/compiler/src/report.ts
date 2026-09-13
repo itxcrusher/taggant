@@ -50,17 +50,45 @@ export interface Report {
    * smallest size the compiled target covers.
    */
   minimumWidthMm: number | null;
+  /**
+   * The distance the width above was worked out for.
+   *
+   * Carried with it, because the two are meaningless apart and were being paired by whoever
+   * displayed them: the console showed a width computed for one distance beside a default
+   * of 350 mm it had invented, so the sentence a printer reads named a distance the number
+   * had nothing to do with.
+   */
+  scanDistanceMm: number;
   reasons: string[];
 }
 
 /**
- * Assumed camera resolving power, in pixels across a target one metre away.
+ * How wide the picture is, in millimetres, one metre from the camera.
  *
- * ASSUMPTION. It is the one number here that is not derived, and it is due to be replaced
- * by the measured value from the device benchmark. It is roughly a 1080p sensor over a 60
- * degree field, which is optimistic for a browser camera stream: 720p is more common.
+ * ASSUMPTION, and the only one here. A 60 degree horizontal field, which is ordinary for a
+ * phone's rear camera, spans 2 * 1000 * tan(30) millimetres at a metre. Narrower optics
+ * span less and make every minimum below smaller; a wide angle lens makes them larger.
  */
-const PIXELS_PER_MM_AT_1M = 1.6;
+export const FRAME_WIDTH_MM_AT_1M = 2 * 1000 * Math.tan((30 * Math.PI) / 180);
+
+/**
+ * How many pixels recognition gets across that picture.
+ *
+ * **Not the sensor's.** The runtime reduces every frame to this width before it recognises
+ * anything, so the sensor's own resolution cancels out: a mark occupies the same fraction
+ * of the frame whatever the sensor, and that fraction times this number is how many pixels
+ * the matcher actually has to work with. Keep it in step with `processWidth` in the
+ * runtime's camera.
+ *
+ * This was a sensor figure, 1.6 pixels per millimetre at a metre from a 1080p sensor, and
+ * the minimum widths below were computed by dividing pixels the recogniser needs by pixels
+ * the sensor has. Those are different currencies and the reduction between them was in
+ * neither the arithmetic nor the comment, so every minimum was optimistic by the ratio of
+ * the two, which for 1080p reduced to 480 is a factor of four. Measured against the example
+ * artwork: the width the report called sufficient put 176 pixels across the mark where the
+ * matcher needs about 300, so a print made to it would not have been found at all.
+ */
+export const RECOGNISED_PIXELS_ACROSS_FRAME = 480;
 
 const MIN_FEATURES = 60;
 const MIN_AREAS = 8;
@@ -127,7 +155,7 @@ export function buildReport(input: ReportInput): Report {
   if (repetition !== null && repetition > MAX_REPETITION) {
     reasons.push("the artwork repeats itself, so content could be placed on the wrong copy");
   }
-  const pass = reasons.length === 0;
+  let pass = reasons.length === 0;
 
   // The smallest size that still holds up. A camera further away than this puts fewer
   // pixels across the mark than any size the target covers, and nothing will match.
@@ -137,12 +165,28 @@ export function buildReport(input: ReportInput): Report {
     smallestUsableScale = level.scale;
   }
 
-  const pixelsPerMm = PIXELS_PER_MM_AT_1M * (1000 / scanDistanceMm);
-  const minimumWidthMm = pass ? Math.ceil((smallestUsableScale * image.width) / pixelsPerMm) : null;
+  // Pixels the recogniser has per millimetre of print, at this distance. The frame is a
+  // fixed number of pixels wide and covers a width of print that grows with distance.
+  const frameWidthMm = FRAME_WIDTH_MM_AT_1M * (scanDistanceMm / 1000);
+  const pixelsPerMm = RECOGNISED_PIXELS_ACROSS_FRAME / frameWidthMm;
+  const pixelsNeeded = smallestUsableScale * image.width;
+
+  // Artwork that holds up only at or near its full size cannot be read at any distance.
+  // The mark would have to be wider than the whole picture to put enough pixels across
+  // itself, and no print size or working distance can arrange that. Printing a width here
+  // would name a size that does not work, which is worse than saying it cannot be done.
+  if (pixelsNeeded > RECOGNISED_PIXELS_ACROSS_FRAME) {
+    pass = false;
+    reasons.push(
+      "detail survives only near full size, so the print would have to fill more than the whole picture to be read",
+    );
+  }
+  const minimumWidthMm = pass ? Math.ceil(pixelsNeeded / pixelsPerMm) : null;
 
   return {
     score: scoreOf(featureCount / MIN_FEATURES, areasWithFeatures / MIN_AREAS, pass),
     pass,
+    scanDistanceMm,
     featureCount,
     areasWithFeatures,
     areas: GRID * GRID,
