@@ -199,7 +199,7 @@ export function experiencePage(view: ExperienceView): string {
     target.report
       ? verdict(target.report)
       : target.staleReport
-        ? `<p class="quiet small">Compiled by an older build, whose minimum print width was too small to trust. Compile it again to see what this artwork needs.</p>`
+        ? `<div class="notice gap-md"><p>Compiled by an older build, whose minimum print width was too small to trust. Compile it again to see what this artwork needs.</p></div>`
         : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
   }
   ${target.tooSmall ? `<div class="notice bad gap-md"><p>${esc(target.tooSmall)}</p></div>` : ""}
@@ -259,7 +259,7 @@ ${
     </div>
     <div class="field narrow">
       <label for="t-width">Printed width, mm</label>
-      <input id="t-width" name="physicalWidthMm" type="number" min="1" max="10000" step="1" required placeholder="62">
+      <input id="t-width" name="physicalWidthMm" type="number" min="1" max="10000" step="1" required placeholder="148">
     </div>
     <div class="field">
       <label for="t-file">Artwork</label>
