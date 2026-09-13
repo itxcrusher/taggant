@@ -132,10 +132,18 @@ describe("the postcard example", () => {
     const manifest = JSON.parse(await readFile(join(EXAMPLE, "manifest.json"), "utf8"));
     const artwork = await readFile(join(EXAMPLE, "artwork.png"));
 
+    // Kept per distance. Four places name a distance and only two distinct values among
+    // them, and compiling this artwork is about a second each, which put the test over the
+    // default budget under load.
+    const seen = new Map<number, number>();
     const needsAt = async (distance: number) => {
+      const already = seen.get(distance);
+      if (already !== undefined) return already;
       const report = (await compileTarget(artwork, { id: "front", scanDistanceMm: distance })).report;
       expect(report.pass, `the example does not pass at ${distance} mm`).toBe(true);
-      return report.minimumWidthMm ?? Number.POSITIVE_INFINITY;
+      const needs = report.minimumWidthMm ?? Number.POSITIVE_INFINITY;
+      seen.set(distance, needs);
+      return needs;
     };
 
     let checked = 0;
@@ -170,6 +178,34 @@ describe("the postcard example", () => {
 
     // A regex that matched nothing would pass every assertion above without running one.
     expect(checked, "nothing was found compiling the example").toBeGreaterThan(3);
+  }, 30_000);
+
+  it("prints, for the artwork it refuses, exactly what the README says it prints", async () => {
+    // The README shows a failing run beside the passing one, and only the passing one was
+    // ever checked. The failing block named a file that is not in the repository, claimed
+    // an analysis size the loader cannot produce (it fits the longest edge to 640, and the
+    // block said 800 x 600), and omitted the repeated-detail line the formatter always
+    // emits. None of that could be caught by comparing documents, because there was no
+    // second document: the figures were written by hand and never run.
+    const readme = await readFile(join(EXAMPLE, "../../README.md"), "utf8");
+    const target = await compileTarget(await readFile(join(EXAMPLE, "../wordmark.png")), {
+      id: "wordmark",
+      scanDistanceMm: 190,
+    });
+    const report = target.report;
+    expect(report.pass, "the artwork the README shows being refused now passes").toBe(false);
+    const repetition = Math.round((report.repetition ?? 0) * 100);
+    for (const line of [
+      `size                  ${target.width} x ${target.height} px`,
+      `tracking quality      ${report.score} / 100`,
+      `features              ${report.featureCount}, reaching ${report.areasWithFeatures} of ${report.areas} areas`,
+      "minimum print width   not printable until the artwork passes",
+      `repeated detail       ${repetition}% of features have a look-alike elsewhere on the artwork`,
+      "verdict               not ready",
+      `      ${report.reasons[0]}`,
+    ]) {
+      expect(readme, `the README does not say: ${line}`).toContain(line);
+    }
   });
 
   it("names files that exist", async () => {

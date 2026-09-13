@@ -92,8 +92,17 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // sees both numbers.
   for (const target of manifest.targets) {
     const compiled = options.targets[target.id] as {
-      report?: { minimumWidthMm?: number | null; scanDistanceMm?: number };
+      features?: unknown[];
+      report?: { minimumWidthMm?: number | null; scanDistanceMm?: number; pass?: boolean };
     };
+    // Nothing to recognise with. The parser accepts an empty list, because an array of zero
+    // is a legal array, so a target truncated in a copy or built from artwork that produced
+    // nothing publishes a bundle that points a camera at a page and can never answer.
+    if (Array.isArray(compiled?.features) && compiled.features.length === 0) {
+      throw new Error(
+        `${target.id} has no features in it, so nothing in a camera frame could ever match it. Compile it again.`,
+      );
+    }
     const report = compiled?.report;
     // A target with no report at all was never claimed to have been checked, and this gate
     // has nothing to say about it. A target that carries a report but no distance is a
@@ -104,6 +113,15 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     if (report !== undefined && typeof report.scanDistanceMm !== "number") {
       throw new Error(
         `${target.id} was compiled by an older build, whose minimum print width was too small to trust. Compile it again before publishing.`,
+      );
+    }
+    // Refused before the width is looked at, because a failing report has no width: it is
+    // null, and comparing against null compares nothing. The gate read the width alone, so
+    // the artwork it had most to say about was the artwork it said nothing about, and the
+    // publish went through clean.
+    if (report?.pass === false) {
+      throw new Error(
+        `${target.id} did not pass its print readiness check, so it cannot be published. Compile it again and read what it says about the artwork.`,
       );
     }
     const needs = report?.minimumWidthMm;

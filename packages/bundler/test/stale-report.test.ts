@@ -48,7 +48,8 @@ describe("a compiled target from an older build", () => {
     ],
   };
 
-  const features = { formatVersion: 2, id: "front", width: 640, height: 452, features: [] };
+  const FEATURE = { x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] };
+  const features = { formatVersion: 2, id: "front", width: 640, height: 452, features: [FEATURE] };
 
   it("is refused rather than published on a width that cannot be trusted", async () => {
     // The shape the previous build wrote: a report, and no distance anywhere in it.
@@ -74,6 +75,15 @@ describe("a compiled target from an older build", () => {
     const current = { ...features, report: { minimumWidthMm: 300, pass: true, scanDistanceMm: 190 } };
     await expect(bundle({ manifest, targets: { front: current }, ...(await scratch()) })).rejects.toThrow(
       /at least 300 mm to be read at 190 mm/,
+    );
+  });
+
+  it("refuses a target with no features in it at all", async () => {
+    // The parser accepts an empty list, because zero is a legal length, so a target
+    // truncated in a copy publishes a bundle that can never recognise anything.
+    const empty = { ...features, features: [] };
+    await expect(bundle({ manifest, targets: { front: empty }, ...(await scratch()) })).rejects.toThrow(
+      /no features in it/,
     );
   });
 

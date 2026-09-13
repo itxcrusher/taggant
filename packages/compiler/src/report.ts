@@ -105,11 +105,45 @@ export const RECOGNISED_PIXELS_ACROSS_FRAME = 480;
  * on anyway.
  */
 export function carriesItsDistance(report: unknown): report is Report {
-  return (
-    typeof report === "object" &&
-    report !== null &&
-    typeof (report as { scanDistanceMm?: unknown }).scanDistanceMm === "number"
-  );
+  if (typeof report !== "object" || report === null) return false;
+  const distance = (report as { scanDistanceMm?: unknown }).scanDistanceMm;
+  // A number a person could hold a camera at, not merely a number. Hand-edited target files
+  // are the whole population this guard exists for, and `typeof x === "number"` believed
+  // zero and negatives from one: the console rendered "to be read from -5 mm away".
+  return typeof distance === "number" && Number.isFinite(distance) && distance >= 50 && distance <= 10_000;
+}
+
+/**
+ * The distance an older report was computed for, worked back out of it.
+ *
+ * The build that wrote these files divided by a sensor figure of 1.6 pixels per millimetre
+ * at a metre, so its width was `ceil(pixelsNeeded * distance / 1600)` and the distance comes
+ * straight back out. Against this repository's own example: 70 mm over 320 px gives exactly
+ * 350, which is the distance it was compiled at.
+ *
+ * Worth doing rather than falling back to a default, because the default is closer than
+ * anything an operator who chose 350 mm meant, and recompiling at it turns a piece the
+ * publish gate should refuse into one that sails through. The rounding in the original
+ * `ceil` is worth under `1600 / pixelsNeeded` millimetres and errs long, which puts the
+ * recovered distance at or just past the real one, and further is the cautious direction.
+ *
+ * Null when the fields are not there or do not give a distance anyone could hold, and the
+ * caller then has to say so rather than guess.
+ */
+export function distanceBehind(report: unknown): number | null {
+  const fields = report as {
+    minimumWidthMm?: unknown;
+    smallestUsableScale?: unknown;
+    analysisWidth?: unknown;
+  };
+  const width = fields?.minimumWidthMm;
+  const scale = fields?.smallestUsableScale;
+  const across = fields?.analysisWidth;
+  if (typeof width !== "number" || typeof scale !== "number" || typeof across !== "number") return null;
+  const pixelsNeeded = scale * across;
+  if (!(pixelsNeeded > 0) || !(width > 0)) return null;
+  const distance = Math.round((width * 1600) / pixelsNeeded);
+  return distance >= 50 && distance <= 5000 ? distance : null;
 }
 
 const MIN_FEATURES = 60;
@@ -177,7 +211,7 @@ export function buildReport(input: ReportInput): Report {
   if (repetition !== null && repetition > MAX_REPETITION) {
     reasons.push("the artwork repeats itself, so content could be placed on the wrong copy");
   }
-  let pass = reasons.length === 0;
+  const pass = reasons.length === 0;
 
   // The smallest size that still holds up. A camera further away than this puts fewer
   // pixels across the mark than any size the target covers, and nothing will match.
@@ -193,22 +227,23 @@ export function buildReport(input: ReportInput): Report {
   const pixelsPerMm = RECOGNISED_PIXELS_ACROSS_FRAME / frameWidthMm;
   const pixelsNeeded = smallestUsableScale * image.width;
 
-  // Artwork that holds up only at or near its full size cannot be read at any distance.
-  // The mark would have to be wider than the whole picture to put enough pixels across
-  // itself, and no print size or working distance can arrange that. Printing a width here
-  // would name a size that does not work, which is worse than saying it cannot be done.
+  // There is deliberately no ceiling here, and there was one for a day, which was a mistake
+  // worth leaving a note about. It refused artwork needing more pixels across itself than
+  // the frame is wide, on the reasoning that the print would have to fill more than the
+  // whole picture and no size could arrange that. The recogniser does not need the whole
+  // mark in view. Driven against this repository's own example, at the frame width the
+  // runtime uses:
   //
-  // Only said about artwork that is otherwise fine. Something that failed on features or on
-  // repetition never gets a usable size below full, so it trips this too, and then the
-  // report tells someone whose artwork is too faint to track that their problem is that the
-  // print is too small. It is not, and printing it larger will not fix it. The first reason
-  // is the one to act on, so it is the only one given.
-  if (pass && pixelsNeeded > RECOGNISED_PIXELS_ACROSS_FRAME) {
-    pass = false;
-    reasons.push(
-      "detail survives only near full size, so the print would have to fill more than the whole picture to be read",
-    );
-  }
+  //   506 px across the mark,  95% of its width in frame -> found, 116 inliers
+  //   560 px across the mark,  86% of its width in frame -> found,  36 inliers
+  //   640 px across the mark,  75% of its width in frame -> found, 123 inliers
+  //   800 px across the mark,  60% of its width in frame -> not found
+  //
+  // So the width below stays a minimum and nothing else. Printing larger than it is never
+  // the problem it looked like: a reader with a bigger piece in front of them stands back,
+  // and standing back puts the same pixels across the same mark. What a large `pixelsNeeded`
+  // really says is that the distance asked for is optimistic, and the width already says
+  // that, in millimetres, which is the unit the person reading it works in.
   const minimumWidthMm = pass ? Math.ceil(pixelsNeeded / pixelsPerMm) : null;
 
   return {
@@ -226,11 +261,17 @@ export function buildReport(input: ReportInput): Report {
   };
 }
 
-/** The line that goes next to the number, so nobody reads it as a measurement of the design. */
-export function describeWidth(report: Report, scanDistanceMm: number): string {
+/**
+ * The line that goes next to the number, so nobody reads it as a measurement of the design.
+ *
+ * The distance comes out of the report rather than in as an argument, for the same reason
+ * it does in the console: a caller holding a width and a distance separately is a caller
+ * who can pair a width with a distance it was never computed for, and one already had.
+ */
+export function describeWidth(report: Report): string {
   if (report.minimumWidthMm === null) return "not printable until the artwork passes";
   const pixels = Math.round(report.smallestUsableScale * report.analysisWidth);
-  return `${report.minimumWidthMm} mm to be read from ${scanDistanceMm} mm away, being ${pixels} px across the artwork`;
+  return `${report.minimumWidthMm} mm to be read from ${report.scanDistanceMm} mm away, being ${pixels} px across the artwork`;
 }
 
 function areasTouched(corners: Corner[], image: { width: number; height: number }): number {

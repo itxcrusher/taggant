@@ -1,4 +1,10 @@
-export { Camera, CameraError, type CameraFailure, type CameraOptions } from "./camera.js";
+export {
+  Camera,
+  CameraError,
+  DEFAULT_PROCESS_WIDTH,
+  type CameraFailure,
+  type CameraOptions,
+} from "./camera.js";
 export { type BuiltContent, buildContent } from "./content.js";
 export {
   type ExperienceOptions,

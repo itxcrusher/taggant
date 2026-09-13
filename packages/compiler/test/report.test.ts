@@ -131,18 +131,26 @@ describe("the numbers a printer acts on", () => {
       levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
       scanDistanceMm: 400,
     });
-    const described = describeWidth(report, 400);
+    const described = describeWidth(report);
     expect(described).toContain("400 mm away");
     expect(described).toContain("px across the artwork");
     expect(report.analysisWidth).toBe(640);
   });
 
   /**
-   * Artwork whose detail survives only at or near full size cannot be read at any distance,
-   * because the print would have to be wider than the whole picture to put enough pixels
-   * across itself. A width printed here would name a size that does not work.
+   * Artwork that holds up only near its own size asks for a big print, and a big print is
+   * a legal answer.
+   *
+   * There was a ceiling here for a day: anything needing more pixels across itself than the
+   * frame is wide was refused, on the reasoning that it would have to fill more than the
+   * whole picture. The recogniser does not need the whole mark in view. Against this
+   * repository's example, at the runtime's own frame width, a mark 506 px across was found
+   * with 116 inliers with 95% of its width in frame, and one 640 px across was found with
+   * 123 inliers with 75% of it in frame. The ceiling refused artwork that works, and it
+   * refused the same file one way up and passed it the other, because the analysis raster
+   * fits the longest edge.
    */
-  it("refuses a width when no print size could ever carry enough pixels", () => {
+  it("names a width larger than the frame rather than refusing it", () => {
     const image = { width: 640, height: 640 };
     const onlyAtFullSize = buildReport({
       image,
@@ -152,11 +160,13 @@ describe("the numbers a printer acts on", () => {
       ],
       scanDistanceMm: 400,
     });
-    expect(onlyAtFullSize.minimumWidthMm).toBeNull();
-    expect(onlyAtFullSize.pass).toBe(false);
-    expect(onlyAtFullSize.reasons.join(" ")).toMatch(/more than the whole picture/);
-    // And it says so rather than printing a number a printer could act on.
-    expect(describeWidth(onlyAtFullSize, 400)).toBe("not printable until the artwork passes");
+    expect(onlyAtFullSize.pass).toBe(true);
+    // 640 px across the artwork at its smallest usable size, in a frame 480 px wide: the
+    // width is the one at which the whole mark spans the picture, and printing larger is
+    // read from further back.
+    expect(onlyAtFullSize.minimumWidthMm ?? 0).toBeGreaterThan(480 / (480 / (1154.7 * 0.4)));
+    expect(onlyAtFullSize.reasons).toEqual([]);
+    expect(describeWidth(onlyAtFullSize)).toContain("mm");
   });
 
   it("does not tell someone whose artwork cannot track that the print is too small", () => {

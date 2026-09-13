@@ -144,17 +144,20 @@ function reportRecord(report: Report): string {
  * distance the width in front of it had never been computed for.
  */
 export function verdict(report: Report): string {
-  const width =
+  // Two different sentences rather than one with a hole in it. Artwork that does not pass
+  // has no width, and the hole was filled with a phrase that read, in full, "Print it at
+  // least no width, because no width would fix it."
+  const line =
     report.minimumWidthMm === null
-      ? "no width, because no width would fix it"
-      : `${report.minimumWidthMm} mm wide to be read from ${report.scanDistanceMm} mm away, being ${Math.round(
-          report.smallestUsableScale * report.analysisWidth,
-        )} px across the artwork`;
+      ? "No print width would fix this. The artwork has to change."
+      : `Print it at least ${report.minimumWidthMm} mm wide to be read from ${
+          report.scanDistanceMm
+        } mm away, being ${Math.round(report.smallestUsableScale * report.analysisWidth)} px across the artwork.`;
   return `<div class="verdict ${report.pass ? "pass" : "fail"}">
   <span class="state">${report.pass ? "Ready for press" : "Not ready"}</span>
   <span class="score mono">${esc(report.score)} / 100</span>
 </div>
-<p class="mono width-line">Print it at least ${esc(width)}.</p>
+<p class="mono width-line">${esc(line)}</p>
 ${
   report.reasons.length > 0
     ? `<ul class="reasons">${report.reasons.map((reason) => `<li>${esc(reason)}</li>`).join("")}</ul>`

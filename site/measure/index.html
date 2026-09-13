@@ -61,7 +61,7 @@
 
     <div class="scroller"><table id="results">
       <thead>
-        <tr><th>distance</th><th>printed</th><th>camera</th><th>px across</th><th>px/mm</th><th>px/mm at 1 m</th><th>inliers</th></tr>
+        <tr><th>distance</th><th>printed</th><th>camera</th><th>px across</th><th>picture mm</th><th>picture mm at 1 m</th><th>field deg</th><th>inliers</th></tr>
       </thead>
       <tbody></tbody>
     </table></div>
@@ -101,9 +101,14 @@
       };
       // Recognition runs at this width whatever the camera gives, because a target is
       // described down from its own raster and an observation far larger than that has
-      // nowhere on the pyramid to meet it. The result is scaled back up to the camera's
-      // own pixels afterwards, which is the figure that means something.
-      const PROCESS_WIDTH = 640;
+      // nowhere on the pyramid to meet it.
+      //
+      // 480, which is what the runtime uses. This said 640, and that is not a detail: at
+      // 640 this page finds prints the shipped runtime cannot. Measured on one piece at one
+      // distance, 120 mm across put 263 px in a 480 px frame and was not found, and 350 px
+      // in a 640 px frame and was found with 47 inliers. A page that answers yes where the
+      // product answers no is worse than no page.
+      const PROCESS_WIDTH = 480;
 
       let distanceMm = 350;
       const distances = document.getElementById("distances");
@@ -189,13 +194,26 @@
         const [ax, ay] = applyHomography(result.homography, 0, 0);
         const [bx, by] = applyHomography(result.homography, target.width, 0);
         const acrossProcessed = Math.hypot(bx - ax, by - ay);
-        // Back to the camera's own pixels: this is the figure a print is read at.
-        const acrossNative = acrossProcessed * (nativeWidth / width);
-        const perMm = acrossNative / printedMm();
+        // How much of the world the picture covers, which is the one thing the compiler
+        // assumes and the only reason this page exists.
+        //
+        // It used to report pixels per millimetre on the sensor, and pixels per millimetre
+        // at a metre, which is precisely the currency the compiler was corrected for
+        // dividing by: sensor pixels do not decide what is recognised, because every frame
+        // is reduced to PROCESS_WIDTH first. There is no longer a constant those numbers
+        // could be put into. This one there is: the compiler assumes a 60 degree field,
+        // which is 1155 mm across at a metre, and everything it prints scales with it.
+        //
+        // Scale free on purpose. A mark filling a given fraction of the picture gives the
+        // same answer whatever width the frame was reduced to, so this does not depend on
+        // the constant above being right.
+        const frameWidthMm = (printedMm() * width) / acrossProcessed;
+        const atOneMetre = (frameWidthMm * 1000) / distanceMm;
         return {
-          acrossNative,
-          perMm,
-          atOneMetre: perMm * (distanceMm / 1000),
+          acrossProcessed,
+          frameWidthMm,
+          atOneMetre,
+          fieldDegrees: 2 * Math.atan(atOneMetre / 2000) * (180 / Math.PI),
           inliers: result.inliers,
           corners: [
             applyHomography(result.homography, 0, 0),
@@ -243,10 +261,12 @@
         latest = reading;
         foundLine.dataset.found = reading ? "yes" : "no";
         foundLine.textContent = reading
-          ? Math.round(reading.acrossNative) +
-            " px across, " +
-            reading.perMm.toFixed(2) +
-            " px/mm, " +
+          ? Math.round(reading.acrossProcessed) +
+            " px across, picture " +
+            Math.round(reading.atOneMetre) +
+            " mm wide at 1 m (" +
+            reading.fieldDegrees.toFixed(0) +
+            " deg), " +
             reading.inliers +
             " inliers"
           : "not found";
@@ -267,9 +287,10 @@
           // cannot be read afterwards.
           printed: printedMm() + " mm",
           camera: cameraLine,
-          across: Math.round(latest.acrossNative),
-          perMm: latest.perMm.toFixed(2),
-          atOneMetre: latest.atOneMetre.toFixed(2),
+          across: Math.round(latest.acrossProcessed),
+          frameWidthMm: Math.round(latest.frameWidthMm),
+          atOneMetre: Math.round(latest.atOneMetre),
+          field: latest.fieldDegrees.toFixed(0),
           inliers: latest.inliers,
         };
         rows.push(row);
@@ -279,8 +300,9 @@
           row.printed,
           row.camera,
           row.across,
-          row.perMm,
+          row.frameWidthMm,
           row.atOneMetre,
+          row.field,
           row.inliers,
         ]) {
           const td = document.createElement("td");
@@ -293,9 +315,9 @@
 
       document.getElementById("copy").addEventListener("click", async () => {
         const text = [
-          "distance\tprinted\tcamera\tpx across\tpx/mm\tpx/mm at 1 m\tinliers",
+          "distance\tprinted\tcamera\tpx across\tpicture mm\tpicture mm at 1 m\tfield deg\tinliers",
           ...rows.map((r) =>
-            [r.distance, r.printed, r.camera, r.across, r.perMm, r.atOneMetre, r.inliers].join("\t"),
+            [r.distance, r.printed, r.camera, r.across, r.frameWidthMm, r.atOneMetre, r.field, r.inliers].join("\t"),
           ),
         ].join("\n");
         try {

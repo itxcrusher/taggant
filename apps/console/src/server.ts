@@ -423,22 +423,34 @@ export function createConsole(options: ConsoleOptions): Server {
       const id = assertId(decode(publishing[1], "that experience"));
       const experience = await workspace.read(id);
       const outDir = bundleDirFor(publishRoot, id);
-      const result = await publish(workspace, experience, outDir, {
-        ...(options.runtimeDir === undefined ? {} : { runtimeDir: options.runtimeDir }),
-      });
+      // Which targets the publish rebuilt, filled in as it goes, because a publish that
+      // fails at the bundler has already written any rebuild it did and the operator is
+      // owed that either way. The success path used to be the only one that mentioned it.
+      const rebuilt: string[] = [];
+      let result: Awaited<ReturnType<typeof publish>>;
+      try {
+        result = await publish(workspace, experience, outDir, {
+          onRebuild: (targetId: string, at: number) => rebuilt.push(`${targetId} at ${at} mm`),
+          ...(options.runtimeDir === undefined ? {} : { runtimeDir: options.runtimeDir }),
+        });
+      } catch (error) {
+        // Anything rebuilt before the failure is already on disk under a reading distance
+        // the operator did not type, and nothing was published, so the two facts have to
+        // arrive together or the workspace has quietly changed under them.
+        if (rebuilt.length === 0) throw error;
+        const why = error instanceof Error ? error.message : String(error);
+        throw new WorkspaceError(`${why}. On the way there, ${rebuilt.join(", ")} was compiled again.`);
+      }
       // A publish can rebuild a target on the way past: one the runtime cannot read, or one
-      // from a build whose print widths were wrong. That rebuild has no distance to work
-      // from, so it uses the default, and the bundle then describes a reading distance the
-      // operator did not choose. Saying so costs a sentence; not saying so was the whole
-      // shape of the width defect, where a number went out under a distance nobody named.
-      const rebuilt = result.compiled.map((one) => one.targetId);
+      // from a build whose print widths were wrong. Which ones, and at what distance, since
+      // a distance recovered from an old report or fallen back to the default is a reading
+      // distance the operator did not type. Saying so costs a sentence; not saying so was
+      // the whole shape of the width defect, where a number went out under a distance
+      // nobody named.
       redirect(response, `/e/${encodeURIComponent(id)}`, {
         tone: "good",
         message: `Published ${result.files.length} files.`,
-        detail:
-          rebuilt.length > 0
-            ? `${outDir} (${rebuilt.join(", ")} had to be compiled again, at the default ${DEFAULT_SCAN_DISTANCE_MM} mm reading distance)`
-            : outDir,
+        detail: rebuilt.length > 0 ? `${outDir} (compiled again on the way: ${rebuilt.join(", ")})` : outDir,
       });
       return;
     }

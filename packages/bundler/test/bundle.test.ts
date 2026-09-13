@@ -23,7 +23,12 @@ const MANIFEST = {
   ],
 };
 
-const TARGET = { formatVersion: 2, id: "front", width: 100, height: 100, features: [] };
+// One feature rather than none. An empty list is what every fixture here used to carry,
+// and the bundler now refuses it: a target with nothing in it publishes a bundle that
+// points a camera at a page and can never answer, which is worth refusing even though it
+// costs every fixture a line.
+const FEATURE = { x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] };
+const TARGET = { formatVersion: 2, id: "front", width: 100, height: 100, features: [FEATURE] };
 
 /** Every directory this file made, so the run can take them away again. */
 const scratchRoots: string[] = [];

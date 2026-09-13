@@ -156,26 +156,48 @@ describe("a target on disk from a build whose print widths were wrong", () => {
     const media = await workspace.storeFile(created.id, "media", "overlay.svg", await read(overlay));
     await workspace.save(created.id, {
       ...created.manifest,
-      // Wide enough to clear the width the old model printed, nowhere near the real one.
-      targets: [{ id: "front", source, physicalWidthMm: 200, content: [{ type: "image", src: media }] }],
+      // Comfortably over the width the old model printed for 190 mm, and comfortably under
+      // the real one, which is the position every piece made against that model is in.
+      targets: [{ id: "front", source, physicalWidthMm: 100, content: [{ type: "image", src: media }] }],
     });
 
-    const outcome = await compile(workspace, await workspace.read(created.id), "front", 190);
+    const chosenDistanceMm = 190;
+    const outcome = await compile(workspace, await workspace.read(created.id), "front", chosenDistanceMm);
     const path = join(workspace.directoryFor(created.id), outcome.path);
     const stored = JSON.parse(await read(path, "utf8"));
-    const { scanDistanceMm: _dropped, ...oldReport } = stored.report;
-    await write(path, JSON.stringify({ ...stored, report: { ...oldReport, minimumWidthMm: 147 } }));
+
+    // Rewritten as the previous build would have written it: no distance, and the width its
+    // own arithmetic gave, which divided by a sensor figure of 1.6 px per mm at a metre.
+    const { scanDistanceMm: _dropped, ...oldShape } = stored.report;
+    const pixelsNeeded = stored.report.smallestUsableScale * stored.report.analysisWidth;
+    const asTheOldBuildWroteIt = Math.ceil((pixelsNeeded * chosenDistanceMm) / 1600);
+    expect(asTheOldBuildWroteIt).toBeLessThan(stored.report.minimumWidthMm);
+    await write(
+      path,
+      JSON.stringify({ ...stored, report: { ...oldShape, minimumWidthMm: asTheOldBuildWroteIt } }),
+    );
 
     const out = join(root, "old-widths-out");
-    const published = await publish(workspace, await workspace.read(created.id), out, { runtimeDir });
-    expect(published.compiled, "the stale target was published rather than rebuilt").toHaveLength(1);
-    const shipped = JSON.parse(await read(join(out, "targets", "front.json"), "utf8"));
-    // A rebuild has no distance to recover, because the distance is exactly the field the
-    // old shape was missing, so it uses the default. The point is that the shipped report
-    // now says which distance it means instead of leaving the bundler to compare against
-    // a number computed for nobody knows what.
-    expect(shipped.report.scanDistanceMm).toBe(150);
-    expect(shipped.report.minimumWidthMm).toBeGreaterThan(0);
+    const rebuiltAt: number[] = [];
+    await expect(
+      publish(workspace, await workspace.read(created.id), out, {
+        runtimeDir,
+        onRebuild: (_id: string, at: number) => rebuiltAt.push(at),
+      }),
+      "the piece is 100 mm and cannot be read at the distance it was compiled for, so the publish has to fail",
+    ).rejects.toThrow(/needs at least/);
+
+    // The distance the operator chose, taken back out of the old report rather than
+    // replaced by the default. Falling back to 150 mm was the defect: the same artwork
+    // needs less than half the width there, so a piece the gate had to refuse published
+    // clean and the operator's own choice was gone from disk with it.
+    expect(rebuiltAt, "nothing was rebuilt, so the stale report was published as it stood").toHaveLength(1);
+    expect(rebuiltAt[0]).toBe(chosenDistanceMm);
+
+    // And the workspace now holds a target that says what distance it means.
+    const onDisk = JSON.parse(await read(path, "utf8"));
+    expect(onDisk.report.scanDistanceMm).toBe(chosenDistanceMm);
+    expect(onDisk.report.minimumWidthMm).toBeGreaterThan(asTheOldBuildWroteIt);
   }, 60_000);
 });
 
