@@ -74,8 +74,13 @@
     </table></div>
 
     <p class="note">
-      Hold the phone square on to the print. Tilting it foreshortens the artwork, and the
-      reading is then of a narrower print than the one in front of you.
+      Hold it square on, and turning sideways matters more than tipping. Tipping shortens one
+      horizontal edge and stretches the other, which cancels in the width this reads; turning
+      shortens both together and nothing cancels. Past about fifteen degrees the reading says
+      TILTED and will not record, because a tilted reading is wrong rather than merely noisy.
+      The figure is measured across the picture's <em>width</em>, so it depends on which way
+      up the phone is: the camera line says which, and a phone held upright gives the narrower
+      of its two fields.
     </p>
     <p class="note">Nothing is uploaded. The rows stay in this page until you copy them.</p>
 
@@ -102,9 +107,17 @@
       // number here false, and nothing in a camera picture can tell. So it is asked for
       // rather than assumed, and the answer wanted is a ruler's, not the print dialog's.
       const printedInput = document.getElementById("printed");
+      /**
+       * The measured width, or null.
+       *
+       * This fell back to 148 when the box was empty or held junk, which is the worst
+       * possible behaviour: every figure to the right of it is divided by this, so a blank
+       * field produced a full row of confident numbers about a print nobody had measured.
+       * Null instead, and nothing records until there is a real number in both boxes.
+       */
       const printedMm = () => {
         const value = Number(printedInput.value);
-        return Number.isFinite(value) && value > 0 ? value : 148;
+        return printedInput.value.trim() !== "" && Number.isFinite(value) && value > 0 ? value : null;
       };
       // Recognition runs at this width whatever the camera gives, because a target is
       // described down from its own raster and an observation far larger than that has
@@ -126,30 +139,30 @@
       // the artwork was found and every reading was then divided by 350 mm because that was
       // the only thing selected, which turned a correct measurement into a wrong answer.
       const typed = document.getElementById("distance");
-      let distanceMm = Number(typed.value);
+      /** The measured distance, or null, for the same reason as the width above. */
+      const distanceMm = () => {
+        const value = Number(typed.value);
+        return typed.value.trim() !== "" && Number.isFinite(value) && value >= 30 ? value : null;
+      };
       const distances = document.getElementById("distances");
-      const press = (mm) => {
-        distanceMm = mm;
-        typed.value = String(mm);
+      const pressed = () => {
         for (const other of distances.children) {
-          other.setAttribute("aria-pressed", String(Number(other.dataset.mm) === mm));
+          other.setAttribute("aria-pressed", String(Number(other.dataset.mm) === distanceMm()));
         }
+      };
+      const press = (mm) => {
+        typed.value = String(mm);
+        pressed();
       };
       for (const mm of [120, 150, 175, 200, 250, 350]) {
         const button = document.createElement("button");
         button.textContent = mm + " mm";
         button.dataset.mm = String(mm);
-        button.setAttribute("aria-pressed", String(mm === distanceMm));
+        button.setAttribute("aria-pressed", String(mm === distanceMm()));
         button.addEventListener("click", () => press(mm));
         distances.append(button);
       }
-      typed.addEventListener("input", () => {
-        const value = Number(typed.value);
-        if (Number.isFinite(value) && value >= 30) distanceMm = value;
-        for (const other of distances.children) {
-          other.setAttribute("aria-pressed", String(Number(other.dataset.mm) === distanceMm));
-        }
-      });
+      typed.addEventListener("input", pressed);
 
       const video = document.getElementById("feed");
       const mark = document.getElementById("mark");
@@ -198,11 +211,22 @@
       /**
        * How even the opposite edges have to look before a reading is worth recording.
        *
-       * 0.86, which is about 15 degrees of pitch. Measured: taking the top edge alone, as
-       * this page did, 15 degrees of tilt reported the picture 12 per cent narrower than it
-       * is, and every print width the compiler derives scales with that number. Averaging
-       * the two edges brings the same case inside two per cent, and past roughly this much
-       * tilt even the average drifts.
+       * Turning away from the print about its horizontal axis and about its vertical axis
+       * are not the same problem, and the second is the one that decides this number.
+       * Measured against pinhole views built at known angles, reading the width as the mean
+       * of the two horizontal edges:
+       *
+       *   turned about      10 deg   20 deg   28 deg   35 deg
+       *   the horizontal    +0.2%    +0.7%    +1.2%    +2.0%     evenness 0.92 to 0.75
+       *   the vertical      -1.1%    -4.2%    -8.6%   -13.3%     evenness 0.89 to 0.67
+       *
+       * Averaging the two horizontal edges is two errors of opposite sign cancelling, so it
+       * answers the first row and does nothing at all for the second: turning about the
+       * vertical axis shortens both horizontal edges together. That is why the figure below
+       * is the worse of the two pairs rather than the horizontal one.
+       *
+       * 0.86 holds the reading inside about 1.5 per cent either way, which is 19 degrees of
+       * the forgiving rotation and 12 of the unforgiving one.
        */
       const SQUARE_ENOUGH = 0.86;
 
@@ -278,8 +302,21 @@
         // Scale free on purpose. A mark filling a given fraction of the picture gives the
         // same answer whatever width the frame was reduced to, so this does not depend on
         // the constant above being right.
-        const frameWidthMm = (printedMm() * width) / acrossProcessed;
-        const atOneMetre = (frameWidthMm * 1000) / distanceMm;
+        // The outline is kept either way, so a reader with an empty box can still see that
+        // it has locked on, and is told what is missing rather than shown a number.
+        const outline = [
+          [ax, ay],
+          [bx, by],
+          [cx, cy],
+          [dx, dy],
+        ];
+        const printed = printedMm();
+        const distance = distanceMm();
+        if (printed === null || distance === null) {
+          return { needsNumbers: true, squareness, corners: outline, scale: { width, height } };
+        }
+        const frameWidthMm = (printed * width) / acrossProcessed;
+        const atOneMetre = (frameWidthMm * 1000) / distance;
         return {
           acrossProcessed,
           squareness,
@@ -287,12 +324,7 @@
           atOneMetre,
           fieldDegrees: 2 * Math.atan(atOneMetre / 2000) * (180 / Math.PI),
           inliers: result.inliers,
-          corners: [
-            applyHomography(result.homography, 0, 0),
-            applyHomography(result.homography, target.width, 0),
-            applyHomography(result.homography, target.width, target.height),
-            applyHomography(result.homography, 0, target.height),
-          ],
+          corners: outline,
           scale: { width, height },
         };
       };
@@ -331,8 +363,10 @@
           return;
         }
         latest = reading;
-        foundLine.dataset.found = reading ? "yes" : "no";
-        foundLine.textContent = reading
+        foundLine.dataset.found = reading && !reading.needsNumbers ? "yes" : "no";
+        foundLine.textContent = reading?.needsNumbers
+          ? "found, but type the measured print width and distance before this means anything"
+          : reading
           ? Math.round(reading.acrossProcessed) +
             " px across, picture " +
             Math.round(reading.atOneMetre) +
@@ -346,10 +380,8 @@
               : "TILTED (" + Math.round(reading.squareness * 100) + "% even), turn it flatter")
           : "not found";
         // A tilted reading is not a nervous reading, it is a wrong one, and it arrives
-        // looking exactly like a good one. The threshold is where the averaged estimate
-        // was still inside two per cent against frames built at a known pitch: 15 degrees
-        // of pitch leaves the two horizontal edges about 86 per cent even.
-        recordButton.disabled = !reading || reading.squareness < SQUARE_ENOUGH;
+        // looking exactly like a good one. See SQUARE_ENOUGH for where the line is and why.
+        recordButton.disabled = !reading || reading.needsNumbers || reading.squareness < SQUARE_ENOUGH;
         draw(reading);
         requestAnimationFrame(tick);
       };
@@ -358,9 +390,9 @@
       const rows = [];
       const body = document.querySelector("#results tbody");
       recordButton.addEventListener("click", () => {
-        if (!latest) return;
+        if (!latest || latest.needsNumbers) return;
         const row = {
-          distance: distanceMm + " mm",
+          distance: distanceMm() + " mm",
           // Recorded per row, because it can be changed between rows and every figure to
           // the right of it is divided by it. A table that does not say which width it used
           // cannot be read afterwards.

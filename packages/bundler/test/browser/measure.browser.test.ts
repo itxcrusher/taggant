@@ -280,6 +280,96 @@ describe("the measurement page", () => {
     expect(square.recordable).toBe(true);
   }, 180_000);
 
+  it("will not turn an empty measurement box into a number", async () => {
+    if (!browser) throw new Error(`chromium could not be launched: ${launchFailure}`);
+    // The width box fell back to 148 mm whenever it held nothing usable, so a reader who
+    // cleared it, or never typed in it, got a full row of confident figures about a print
+    // nobody had measured. That is how the first real reading off this page came back: both
+    // boxes left at their defaults, and a field of view derived from two numbers that were
+    // not measurements of anything.
+    const field = 70;
+    const distance = 150;
+    const printed = 148;
+    const native = 640;
+    const share = printed / (2 * 1000 * Math.tan((field / 2) * (Math.PI / 180)) * (distance / 1000));
+
+    const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
+    await page.addInitScript(
+      ({ artworkUrl, width, fill }) => {
+        const fake = {
+          async getUserMedia() {
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = Math.round((width * 3) / 4);
+            const context = canvas.getContext("2d");
+            const image = new Image();
+            image.src = artworkUrl;
+            await image.decode();
+            const draw = () => {
+              if (!context) return;
+              context.fillStyle = "#969696";
+              context.fillRect(0, 0, canvas.width, canvas.height);
+              const w = canvas.width * fill;
+              const h = (image.height / image.width) * w;
+              context.drawImage(image, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+              requestAnimationFrame(draw);
+            };
+            draw();
+            return (canvas as HTMLCanvasElement & { captureStream(fps: number): MediaStream }).captureStream(
+              30,
+            );
+          },
+          async enumerateDevices() {
+            return [];
+          },
+        };
+        Object.defineProperty(navigator, "mediaDevices", { configurable: true, get: () => fake });
+        Object.defineProperty(Navigator.prototype, "mediaDevices", { configurable: true, get: () => fake });
+      },
+      { artworkUrl: `${origin}/artwork.png`, width: native, fill: share },
+    );
+    await page.goto(`${origin}/measure/`, { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => (document.getElementById("found")?.textContent ?? "").includes("px across"),
+      undefined,
+      {
+        timeout: 60_000,
+      },
+    );
+
+    // Clear the width. The artwork is still found; the figures must stop.
+    await page.fill("#printed", "");
+    await page.waitForTimeout(400);
+    const cleared = (await page.textContent("#found")) ?? "";
+    expect(cleared, `with the width cleared the page still said: ${cleared}`).not.toContain("px across");
+    expect(cleared).toContain("type the measured print width");
+    expect(await page.isDisabled("#record"), "an unmeasured reading could still be recorded").toBe(true);
+
+    // And the same for the distance on its own.
+    await page.fill("#printed", String(printed));
+    await page.fill("#distance", "");
+    await page.waitForTimeout(400);
+    expect(await page.isDisabled("#record"), "a reading with no distance could still be recorded").toBe(true);
+
+    // Both back: it records, and records the numbers that are in the boxes.
+    await page.fill("#distance", String(distance));
+    await page.waitForTimeout(400);
+    expect(await page.isDisabled("#record")).toBe(false);
+    await page.click("#record");
+    const row = await page.evaluate(() => {
+      const heads = Array.from(document.querySelectorAll("#results thead th")).map(
+        (c) => c.textContent?.trim() ?? "",
+      );
+      const cells = Array.from(document.querySelectorAll("#results tbody tr td")).map(
+        (c) => c.textContent?.trim() ?? "",
+      );
+      return { printed: cells[heads.indexOf("printed")], distance: cells[heads.indexOf("distance")] };
+    });
+    await page.close();
+    expect(row.printed).toBe(`${printed} mm`);
+    expect(row.distance).toBe(`${distance} mm`);
+  }, 120_000);
+
   it("offers distances the artwork it names can actually be read at", async () => {
     if (!browser) throw new Error(`chromium could not be launched: ${launchFailure}`);
     // The page tells the reader to show a 148 mm wide copy. Under the corrected model that
