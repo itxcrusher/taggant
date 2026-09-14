@@ -96,7 +96,7 @@ describe("the measurement page", () => {
    * Open the page with a canvas camera standing at a chosen geometry, and read back the
    * field of view it reports.
    */
-  async function ask(fieldDegrees: number, distanceMm: number, printedMm: number) {
+  async function ask(fieldDegrees: number, distanceMm: number, printedMm: number, pitch = 0) {
     if (!browser) throw new Error(`chromium could not be launched: ${launchFailure}`);
     const native = 640;
     const pictureAtOneMetre = 2 * 1000 * Math.tan((fieldDegrees / 2) * (Math.PI / 180));
@@ -104,7 +104,7 @@ describe("the measurement page", () => {
 
     const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
     await page.addInitScript(
-      ({ artworkUrl, share, width }) => {
+      ({ artworkUrl, share, width, pitch }) => {
         const fake = {
           async getUserMedia() {
             const canvas = document.createElement("canvas");
@@ -114,6 +114,80 @@ describe("the measurement page", () => {
             const image = new Image();
             image.src = artworkUrl;
             await image.decode();
+
+            /**
+             * The artwork as a pinhole camera sees it when the plane is pitched.
+             *
+             * Built once by inverse mapping, from the geometry rather than by stretching
+             * rows. A stack of rows of varying width is a trapezoid and not a perspective
+             * view of a rectangle: no homography fits it, so the matcher settles on a
+             * near-similarity and the tilt it was built to show disappears. Asked for 28
+             * degrees, that stub drew a top edge of 356 px against a bottom of 614 and the
+             * page still called the view square on.
+             *
+             * For a plane pitched by t about its own horizontal axis, a distance d from a
+             * camera of focal length f, a plane point (u, v) lands at
+             * x = f*u/z, y = f*v*cos(t)/z with z = d + v*sin(t). That inverts in closed
+             * form, which is all this needs.
+             */
+            let warped: HTMLCanvasElement | null = null;
+            if (pitch !== 0) {
+              const scratch = document.createElement("canvas");
+              scratch.width = image.width;
+              scratch.height = image.height;
+              scratch.getContext("2d")?.drawImage(image, 0, 0);
+              const source = scratch.getContext("2d")?.getImageData(0, 0, image.width, image.height);
+              warped = document.createElement("canvas");
+              warped.width = width;
+              warped.height = Math.round((width * 3) / 4);
+              const out = warped.getContext("2d");
+              if (source && out) {
+                const frame = out.createImageData(warped.width, warped.height);
+                const t = (pitch * Math.PI) / 180;
+                const d = 1000;
+                // Focal length in pixels from the share the artwork should fill at zero tilt.
+                const f = warped.width / 2 / (share / 2);
+                const halfW = (share * warped.width * d) / (2 * f);
+                const halfH = halfW * (image.height / image.width);
+                const cx = warped.width / 2;
+                const cy = warped.height / 2;
+                for (let py = 0; py < warped.height; py++) {
+                  for (let px = 0; px < warped.width; px++) {
+                    const x = px - cx;
+                    const y = py - cy;
+                    const denom = f * Math.cos(t) - y * Math.sin(t);
+                    const at = (py * warped.width + px) * 4;
+                    let r = 150;
+                    let g = 150;
+                    let b = 150;
+                    if (denom !== 0) {
+                      const v = (y * d) / denom;
+                      const z = d + v * Math.sin(t);
+                      const u = (x * z) / f;
+                      if (z > 0 && Math.abs(u) <= halfW && Math.abs(v) <= halfH) {
+                        const sx = Math.min(
+                          image.width - 1,
+                          Math.max(0, Math.round(((u + halfW) / (2 * halfW)) * image.width)),
+                        );
+                        const sy = Math.min(
+                          image.height - 1,
+                          Math.max(0, Math.round(((v + halfH) / (2 * halfH)) * image.height)),
+                        );
+                        const from = (sy * image.width + sx) * 4;
+                        r = source.data[from] ?? 150;
+                        g = source.data[from + 1] ?? 150;
+                        b = source.data[from + 2] ?? 150;
+                      }
+                    }
+                    frame.data[at] = r;
+                    frame.data[at + 1] = g;
+                    frame.data[at + 2] = b;
+                    frame.data[at + 3] = 255;
+                  }
+                }
+                out.putImageData(frame, 0, 0);
+              }
+            }
             const draw = () => {
               if (!context) return;
               // Flat mid grey, so every feature the page finds came from the artwork.
@@ -121,7 +195,12 @@ describe("the measurement page", () => {
               context.fillRect(0, 0, canvas.width, canvas.height);
               const w = canvas.width * share;
               const h = (image.height / image.width) * w;
-              context.drawImage(image, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+              const top = (canvas.height - h) / 2;
+              if (pitch === 0) {
+                context.drawImage(image, (canvas.width - w) / 2, top, w, h);
+              } else if (warped) {
+                context.drawImage(warped, 0, 0);
+              }
               requestAnimationFrame(draw);
             };
             draw();
@@ -136,7 +215,7 @@ describe("the measurement page", () => {
         Object.defineProperty(navigator, "mediaDevices", { configurable: true, get: () => fake });
         Object.defineProperty(Navigator.prototype, "mediaDevices", { configurable: true, get: () => fake });
       },
-      { artworkUrl: `${origin}/artwork.png`, share: fraction, width: native },
+      { artworkUrl: `${origin}/artwork.png`, share: fraction, width: native, pitch },
     );
 
     await page.goto(`${origin}/measure/`, { waitUntil: "domcontentloaded" });
@@ -146,8 +225,9 @@ describe("the measurement page", () => {
     await page.fill("#printed", String(printedMm));
     await page.fill("#distance", String(distanceMm));
     await page.waitForTimeout(400);
-    await page.click("#record");
+    if (!(await page.isDisabled("#record"))) await page.click("#record");
 
+    const recordable = !(await page.isDisabled("#record"));
     const reading = await page.evaluate(() => {
       const heads = Array.from(document.querySelectorAll("#results thead th")).map(
         (c) => c.textContent?.trim() ?? "",
@@ -158,8 +238,9 @@ describe("the measurement page", () => {
       const at = (name: string) => Number(cells[heads.indexOf(name)]);
       return { field: at("field deg"), pictureMm: at("picture mm"), atOneMetre: at("picture mm at 1 m") };
     });
+    const line = (await page.textContent("#found"))?.trim() ?? "";
     await page.close();
-    return reading;
+    return { ...reading, recordable, line };
   }
 
   it.each([
@@ -182,6 +263,22 @@ describe("the measurement page", () => {
     },
     120_000,
   );
+
+  it("refuses to record a tilted reading, because it is wrong rather than merely nervous", async () => {
+    // The page measured the width from the top edge alone, and tilt foreshortens that edge.
+    // Against frames built at a known pitch the reading came back 4.4 per cent low at 5
+    // degrees and 12.1 per cent low at 15, and every print width the compiler derives
+    // scales with it. It averages both horizontal edges now, which holds the same cases
+    // inside two per cent, and past that it says so and will not take the reading.
+    const tilted = await ask(70, 150, 148, 28);
+    expect(tilted.line, `the page did not call this tilted: ${tilted.line}`).toContain("TILTED");
+    expect(tilted.recordable, "a tilted reading could still be recorded").toBe(false);
+
+    // And it is not simply refusing everything: square on, the same geometry records.
+    const square = await ask(70, 150, 148, 0);
+    expect(square.line).toContain("square on");
+    expect(square.recordable).toBe(true);
+  }, 180_000);
 
   it("offers distances the artwork it names can actually be read at", async () => {
     if (!browser) throw new Error(`chromium could not be launched: ${launchFailure}`);
