@@ -91,11 +91,43 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // manifest states the width it will actually be printed at. Nothing else in the system
   // sees both numbers.
   for (const target of manifest.targets) {
-    const compiled = options.targets[target.id] as { report?: { minimumWidthMm?: number | null } };
-    const needs = compiled?.report?.minimumWidthMm;
+    const compiled = options.targets[target.id] as {
+      features?: unknown[];
+      report?: { minimumWidthMm?: number | null; scanDistanceMm?: number; pass?: boolean };
+    };
+    // Nothing to recognise with. The parser accepts an empty list, because an array of zero
+    // is a legal array, so a target truncated in a copy or built from artwork that produced
+    // nothing publishes a bundle that points a camera at a page and can never answer.
+    if (Array.isArray(compiled?.features) && compiled.features.length === 0) {
+      throw new Error(
+        `${target.id} has no features in it, so nothing in a camera frame could ever match it. Compile it again.`,
+      );
+    }
+    const report = compiled?.report;
+    // A target with no report at all was never claimed to have been checked, and this gate
+    // has nothing to say about it. A target that carries a report but no distance is a
+    // different thing: it was written by the build whose width was computed against the
+    // sensor's pixels rather than the recogniser's, so the width in it is about four times
+    // too small and this comparison would pass a piece that cannot be read. A gate that is
+    // four times too lenient is worse than an absent one, because it reads as a gate.
+    if (report !== undefined && typeof report.scanDistanceMm !== "number") {
+      throw new Error(
+        `${target.id} was compiled by an older build, whose minimum print width was too small to trust. Compile it again before publishing.`,
+      );
+    }
+    // Refused before the width is looked at, because a failing report has no width: it is
+    // null, and comparing against null compares nothing. The gate read the width alone, so
+    // the artwork it had most to say about was the artwork it said nothing about, and the
+    // publish went through clean.
+    if (report?.pass === false) {
+      throw new Error(
+        `${target.id} did not pass its print readiness check, so it cannot be published. Compile it again and read what it says about the artwork.`,
+      );
+    }
+    const needs = report?.minimumWidthMm;
     if (typeof needs === "number" && target.physicalWidthMm < needs) {
       throw new Error(
-        `${target.id} is declared ${target.physicalWidthMm} mm wide, and its artwork needs at least ${needs} mm to be read at the distance it was compiled for`,
+        `${target.id} is declared ${target.physicalWidthMm} mm wide, and its artwork needs at least ${needs} mm to be read at ${report?.scanDistanceMm} mm, the distance it was compiled for`,
       );
     }
   }

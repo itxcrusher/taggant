@@ -138,6 +138,69 @@ describe("a target on disk the runtime cannot read", () => {
   }, 60_000);
 });
 
+describe("a target on disk from a build whose print widths were wrong", () => {
+  it("is rebuilt on publish, because the bundler would otherwise wave the piece through", async () => {
+    // The one above is a target the runtime cannot read. This one it reads perfectly: only
+    // the print advice inside it is wrong, by about four times, and the bundler compares
+    // the declared print width against exactly that number before letting anything be
+    // published. Left alone the gate passes a piece that will not be recognised, which is
+    // the failure the gate exists to catch.
+    const { compile, publish } = await import("../src/operations.js");
+    const { readFile: read, writeFile: write } = await import("node:fs/promises");
+    const artwork = fileURLToPath(new URL("../../../examples/postcard/artwork.png", import.meta.url));
+    const overlay = fileURLToPath(new URL("../../../examples/postcard/overlay.svg", import.meta.url));
+    const runtimeDir = fileURLToPath(new URL("../../../packages/runtime/dist", import.meta.url));
+
+    const created = await workspace.create("old-widths", "Old widths");
+    const source = await workspace.storeFile(created.id, "artwork", "artwork.png", await read(artwork));
+    const media = await workspace.storeFile(created.id, "media", "overlay.svg", await read(overlay));
+    await workspace.save(created.id, {
+      ...created.manifest,
+      // Comfortably over the width the old model printed for 190 mm, and comfortably under
+      // the real one, which is the position every piece made against that model is in.
+      targets: [{ id: "front", source, physicalWidthMm: 100, content: [{ type: "image", src: media }] }],
+    });
+
+    const chosenDistanceMm = 190;
+    const outcome = await compile(workspace, await workspace.read(created.id), "front", chosenDistanceMm);
+    const path = join(workspace.directoryFor(created.id), outcome.path);
+    const stored = JSON.parse(await read(path, "utf8"));
+
+    // Rewritten as the previous build would have written it: no distance, and the width its
+    // own arithmetic gave, which divided by a sensor figure of 1.6 px per mm at a metre.
+    const { scanDistanceMm: _dropped, ...oldShape } = stored.report;
+    const pixelsNeeded = stored.report.smallestUsableScale * stored.report.analysisWidth;
+    const asTheOldBuildWroteIt = Math.ceil((pixelsNeeded * chosenDistanceMm) / 1600);
+    expect(asTheOldBuildWroteIt).toBeLessThan(stored.report.minimumWidthMm);
+    await write(
+      path,
+      JSON.stringify({ ...stored, report: { ...oldShape, minimumWidthMm: asTheOldBuildWroteIt } }),
+    );
+
+    const out = join(root, "old-widths-out");
+    const rebuiltAt: number[] = [];
+    await expect(
+      publish(workspace, await workspace.read(created.id), out, {
+        runtimeDir,
+        onRebuild: (_id: string, at: number) => rebuiltAt.push(at),
+      }),
+      "the piece is 100 mm and cannot be read at the distance it was compiled for, so the publish has to fail",
+    ).rejects.toThrow(/needs at least/);
+
+    // The distance the operator chose, taken back out of the old report rather than
+    // replaced by the default. Falling back to 150 mm was the defect: the same artwork
+    // needs less than half the width there, so a piece the gate had to refuse published
+    // clean and the operator's own choice was gone from disk with it.
+    expect(rebuiltAt, "nothing was rebuilt, so the stale report was published as it stood").toHaveLength(1);
+    expect(rebuiltAt[0]).toBe(chosenDistanceMm);
+
+    // And the workspace now holds a target that says what distance it means.
+    const onDisk = JSON.parse(await read(path, "utf8"));
+    expect(onDisk.report.scanDistanceMm).toBe(chosenDistanceMm);
+    expect(onDisk.report.minimumWidthMm).toBeGreaterThan(asTheOldBuildWroteIt);
+  }, 60_000);
+});
+
 describe("H5: registering a code", () => {
   it("leaves every other link on that code alone", async () => {
     // The shape this repository ships as its worked example: an English page, a French
@@ -325,21 +388,19 @@ describe("M4 and M7: what a body may weigh", () => {
 describe("L1: the score", () => {
   it("is escaped like everything else that reaches a page", async () => {
     const { verdict } = await import("../src/views.js");
-    const rendered = verdict(
-      {
-        score: "</span><img src=x onerror=alert(1)><span>" as unknown as number,
-        pass: true,
-        featureCount: 1,
-        areasWithFeatures: 1,
-        repetition: null,
-        areas: 16,
-        analysisWidth: 640,
-        smallestUsableScale: 0.5,
-        minimumWidthMm: 70,
-        reasons: [],
-      },
-      350,
-    );
+    const rendered = verdict({
+      score: "</span><img src=x onerror=alert(1)><span>" as unknown as number,
+      pass: true,
+      featureCount: 1,
+      areasWithFeatures: 1,
+      repetition: null,
+      areas: 16,
+      analysisWidth: 640,
+      smallestUsableScale: 0.5,
+      minimumWidthMm: 70,
+      scanDistanceMm: 150,
+      reasons: [],
+    });
     expect(rendered).not.toContain("<img src=x");
     expect(rendered).toContain("&lt;img");
   });

@@ -109,7 +109,7 @@ export function formatReportLines(source: string, target: CompiledTarget, scanDi
     // Said in full rather than as a bare number, because it is a resolution
     // requirement set by the camera and the target, not a measurement of the design, and
     // a bare millimetre figure under a filename reads as the latter.
-    `  minimum print width   ${describeWidth(report, scanDistanceMm)}`,
+    `  minimum print width   ${describeWidth(report)}`,
     `  repeated detail       ${describeRepetition(report)}`,
     `  verdict               ${report.pass ? "ready for press" : "not ready"}`,
   ];

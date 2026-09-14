@@ -23,7 +23,12 @@ const MANIFEST = {
   ],
 };
 
-const TARGET = { formatVersion: 2, id: "front", width: 100, height: 100, features: [] };
+// One feature rather than none. An empty list is what every fixture here used to carry,
+// and the bundler now refuses it: a target with nothing in it publishes a bundle that
+// points a camera at a page and can never answer, which is worth refusing even though it
+// costs every fixture a line.
+const FEATURE = { x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] };
+const TARGET = { formatVersion: 2, id: "front", width: 100, height: 100, features: [FEATURE] };
 
 /** Every directory this file made, so the run can take them away again. */
 const scratchRoots: string[] = [];
@@ -153,12 +158,12 @@ describe("bundle", () => {
         manifest: tooSmall,
         // The compiler says this artwork needs 70 mm; the manifest says it will be printed
         // at 20. Nothing else in the system sees both numbers.
-        targets: { front: { ...TARGET, report: { minimumWidthMm: 70 } } },
+        targets: { front: { ...TARGET, report: { minimumWidthMm: 70, scanDistanceMm: 150 } } },
         sourceDir,
         outDir,
         runtimeDir: RUNTIME_DIST,
       }),
-    ).rejects.toThrow(/declared 20 mm wide, and its artwork needs at least 70 mm/);
+    ).rejects.toThrow(/declared 20 mm wide, and its artwork needs at least 70 mm to be read at 150 mm/);
   });
 
   it("publishes when the piece is wide enough", async () => {
@@ -166,7 +171,7 @@ describe("bundle", () => {
     await expect(
       bundle({
         manifest: MANIFEST,
-        targets: { front: { ...TARGET, report: { minimumWidthMm: 70 } } },
+        targets: { front: { ...TARGET, report: { minimumWidthMm: 70, scanDistanceMm: 150 } } },
         sourceDir,
         outDir,
         runtimeDir: RUNTIME_DIST,

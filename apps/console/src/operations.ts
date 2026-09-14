@@ -10,7 +10,13 @@ import { randomBytes } from "node:crypto";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { bundle, realWithin } from "@taggant/bundler";
-import { type Report, compileTarget, toTargetJson } from "@taggant/compiler";
+import {
+  type Report,
+  carriesItsDistance,
+  compileTarget,
+  distanceBehind,
+  toTargetJson,
+} from "@taggant/compiler";
 import {
   type LinkTable,
   type StoredLink,
@@ -25,10 +31,17 @@ import { type Experience, type Workspace, WorkspaceError, publishable } from "./
  * Distance a person is expected to hold the camera from the print, in millimetres.
  *
  * It is the one input the compiler cannot infer, and it changes the answer: the same
- * artwork asks for more width the further away it will be read. 350 mm is a pack held in
- * the hand, which is the common case, and it is offered rather than imposed.
+ * artwork asks for more width the further away it will be read.
+ *
+ * 150 mm, which is closer than it sounds and is what this actually reaches. Recognition
+ * runs on a frame reduced to a fixed width, so a mark has to fill roughly two thirds of the
+ * picture to put enough pixels across itself, and that is a short working distance for
+ * anything pack-sized: a 120 mm front panel is readable to about 155 mm and an A6 postcard
+ * to about 190. This was 350 mm, a pack held at arm's length, which the report agreed with
+ * because the report was dividing by the wrong pixels; it never worked. Reaching further is
+ * a change to how far down the compiled target is described, not to this number.
  */
-export const DEFAULT_SCAN_DISTANCE_MM = 350;
+export const DEFAULT_SCAN_DISTANCE_MM = 150;
 
 export interface CompileOutcome {
   targetId: string;
@@ -88,7 +101,18 @@ export async function publish(
   workspace: Workspace,
   experience: Experience,
   outDir: string,
-  options: { runtimeDir?: string; scanDistanceMm?: number } = {},
+  options: {
+    runtimeDir?: string;
+    scanDistanceMm?: number;
+    /**
+     * Called as each target is rebuilt, before anything is published.
+     *
+     * A rebuild writes to the workspace, and the publish can still fail afterwards at the
+     * bundler, so what was rebuilt has to be reportable on the failure path too. Reading it
+     * off the returned outcome only worked when there was a returned outcome.
+     */
+    onRebuild?: (targetId: string, atDistanceMm: number) => void;
+  } = {},
 ): Promise<PublishOutcome> {
   // Refused here rather than half way through writing a folder. `publishable` is where
   // the schema stops being advice and becomes a gate: a bundle is what the world sees, and
@@ -103,16 +127,50 @@ export async function publish(
     // the answer is to build it again rather than to refuse and leave the operator with a
     // message about a file format and no way to act on it.
     let stored: unknown;
+    // The distance to rebuild at, when a rebuild turns out to be needed. Undefined means
+    // nothing better than the default is known.
+    let rebuildAt = options.scanDistanceMm;
     if (await workspace.hasTarget(experience.id, target.id)) {
       try {
         stored = await workspace.readTarget(experience.id, target.id);
         fromTargetFile(stored);
+        // Usable to recognise with and still not one to publish. A target written before
+        // the report carried its own scan distance carries a minimum print width from the
+        // model that divided by the sensor's pixels instead of the recogniser's, and the
+        // bundler compares the declared print width against exactly that number. Left
+        // alone it publishes with a gate that is four times too lenient.
+        const report = (stored as { report?: unknown }).report;
+        if (report !== undefined && !carriesItsDistance(report)) {
+          stored = undefined;
+          // Rebuilt at the distance that report was computed for, which the old model's
+          // own arithmetic gives back exactly. Falling back to the default instead was
+          // silently moving an operator who chose 350 mm to 150, where the same artwork
+          // needs less than half the width, so a piece the gate had to refuse published
+          // clean and the choice they made was gone from disk with it.
+          rebuildAt = distanceBehind(report) ?? options.scanDistanceMm;
+        }
       } catch {
         stored = undefined;
       }
     }
     if (stored === undefined) {
-      compiled.push(await compile(workspace, experience, target.id, options.scanDistanceMm));
+      try {
+        const outcome = await compile(workspace, experience, target.id, rebuildAt);
+        compiled.push(outcome);
+        options.onRebuild?.(target.id, outcome.report.scanDistanceMm);
+      } catch (error) {
+        // `compile` reaches the artwork through the manifest, and the artwork can be gone:
+        // renamed, tidied away, or on a drive that is not mounted. That arrives from the
+        // path resolver as a plain error, which the server renders as "something failed",
+        // so an operator whose file moved gets a 500 and no idea which target or which
+        // file. Before this rebuild existed the same experience published, with a bad
+        // width in it, so the opaque failure is new and is ours.
+        throw new WorkspaceError(
+          `${target.id} had to be compiled again before publishing and could not be: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
       stored = await workspace.readTarget(experience.id, target.id);
     }
     targets[target.id] = stored;

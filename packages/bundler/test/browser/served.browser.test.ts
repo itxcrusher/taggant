@@ -107,7 +107,11 @@ beforeAll(async () => {
   })
     .png()
     .toBuffer();
-  const compiled = await compileTarget(artworkPng, { id: "front", scanDistanceMm: 350 });
+  // Compiled for the distance this artwork can actually be read from. The bundler refuses
+  // to publish a target whose print is narrower than its artwork needs, and at 350 mm this
+  // one needs 270 mm against the 148 mm the manifest declares, which is the guard working
+  // rather than the fixture being unlucky.
+  const compiled = await compileTarget(artworkPng, { id: "front", scanDistanceMm: 190 });
   await bundle({
     manifest: {
       schemaVersion: "1.0.0",

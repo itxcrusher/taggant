@@ -23,6 +23,16 @@ export interface CameraOptions {
   facingMode?: "environment" | "user";
 }
 
+/**
+ * Width every frame is reduced to before it is recognised.
+ *
+ * The compiler's minimum print width is this number divided by how much of the world the
+ * picture covers, so the two have to be the same number. They are in packages that do not
+ * depend on each other, and a comment was the whole of what kept them together; there is a
+ * test in the bundler, which sees both, that fails if they drift.
+ */
+export const DEFAULT_PROCESS_WIDTH = 480;
+
 export type CameraFailure = "denied" | "unavailable" | "no-camera";
 
 export class CameraError extends Error {
@@ -206,7 +216,19 @@ export class Camera {
     const { videoWidth, videoHeight } = this.video;
     if (videoWidth < 1 || videoHeight < 1) return null;
 
-    const processWidth = Math.min(this.options.processWidth ?? 480, videoWidth);
+    // Capped at what the camera actually delivers, because upscaling invents nothing. It
+    // does mean this is a ceiling and not a guarantee, and every printed width assumes the
+    // guarantee: a stream narrower than DEFAULT_PROCESS_WIDTH puts fewer pixels across the
+    // mark than the compiler promised, and the print that was made to that promise stops
+    // being found. Measured against the example at its own stated width:
+    //
+    //   the camera delivers 480 px wide -> 322 px across the mark -> found, 58 inliers
+    //   the camera delivers 400 px wide -> 268 px across the mark -> not found
+    //   the camera delivers 320 px wide -> 214 px across the mark -> not found
+    //
+    // Nothing here can fix that; a camera that gives 320 px gives 320 px. It is worth
+    // saying because the compiler's side of it reads like a constant and is not one.
+    const processWidth = Math.min(this.options.processWidth ?? DEFAULT_PROCESS_WIDTH, videoWidth);
     const width = Math.max(1, Math.round(processWidth));
     const height = Math.max(1, Math.round((videoHeight / videoWidth) * width));
 

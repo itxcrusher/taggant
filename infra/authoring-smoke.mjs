@@ -151,9 +151,15 @@ target.append("artwork", new Blob([artwork], { type: "image/png" }), "artwork.pn
 await did("artwork is uploaded as a target", await post(`/e/${ID}/targets`, target));
 
 // The compiler is a native module, so this is also the check that it runs in the image.
+//
+// 150 mm, which is the console's own default and is about as far as a 120 mm panel goes:
+// it needs 320 px across itself, so 2.7 px per mm, so a picture 180 mm wide, so 156 mm from
+// the camera. This said 350 mm, which the compiler agreed with while its widths were four
+// times too small; the corrected bundler refuses to publish the piece at that distance and
+// this script went red three checks later, on the publish.
 await did(
   "the artwork compiles inside the container",
-  await post(`/e/${ID}/targets/front/compile`, new URLSearchParams({ scanDistanceMm: "350" })),
+  await post(`/e/${ID}/targets/front/compile`, new URLSearchParams({ scanDistanceMm: "150" })),
 );
 
 const page = await (await ask(`${CONSOLE}/e/${ID}`)).text();

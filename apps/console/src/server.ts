@@ -12,6 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
+import { carriesItsDistance } from "@taggant/compiler";
 import { DEFAULT_SCAN_DISTANCE_MM, bundleDirFor, compile, publish, registerCode } from "./operations.js";
 import { STYLESHEET } from "./style.js";
 import { type Notice, type TargetView, errorPage, experiencePage, indexPage, page } from "./views.js";
@@ -255,7 +256,12 @@ export function createConsole(options: ConsoleOptions): Server {
           report?: TargetView["report"];
           scanDistanceMm?: number;
         };
-        if (compiled.report) {
+        // Shown only when this build produced it. An older one holds a width about four
+        // times too small, and the page presents that width as the instruction a printer
+        // follows, so displaying it is worse than displaying nothing.
+        if (compiled.report && !carriesItsDistance(compiled.report)) {
+          view.staleReport = true;
+        } else if (compiled.report) {
           view.report = compiled.report;
           const needed = compiled.report.minimumWidthMm;
           if (compiled.report.pass && needed !== null && target.physicalWidthMm < needed) {
@@ -417,13 +423,34 @@ export function createConsole(options: ConsoleOptions): Server {
       const id = assertId(decode(publishing[1], "that experience"));
       const experience = await workspace.read(id);
       const outDir = bundleDirFor(publishRoot, id);
-      const result = await publish(workspace, experience, outDir, {
-        ...(options.runtimeDir === undefined ? {} : { runtimeDir: options.runtimeDir }),
-      });
+      // Which targets the publish rebuilt, filled in as it goes, because a publish that
+      // fails at the bundler has already written any rebuild it did and the operator is
+      // owed that either way. The success path used to be the only one that mentioned it.
+      const rebuilt: string[] = [];
+      let result: Awaited<ReturnType<typeof publish>>;
+      try {
+        result = await publish(workspace, experience, outDir, {
+          onRebuild: (targetId: string, at: number) => rebuilt.push(`${targetId} at ${at} mm`),
+          ...(options.runtimeDir === undefined ? {} : { runtimeDir: options.runtimeDir }),
+        });
+      } catch (error) {
+        // Anything rebuilt before the failure is already on disk under a reading distance
+        // the operator did not type, and nothing was published, so the two facts have to
+        // arrive together or the workspace has quietly changed under them.
+        if (rebuilt.length === 0) throw error;
+        const why = error instanceof Error ? error.message : String(error);
+        throw new WorkspaceError(`${why}. On the way there, ${rebuilt.join(", ")} was compiled again.`);
+      }
+      // A publish can rebuild a target on the way past: one the runtime cannot read, or one
+      // from a build whose print widths were wrong. Which ones, and at what distance, since
+      // a distance recovered from an old report or fallen back to the default is a reading
+      // distance the operator did not type. Saying so costs a sentence; not saying so was
+      // the whole shape of the width defect, where a number went out under a distance
+      // nobody named.
       redirect(response, `/e/${encodeURIComponent(id)}`, {
         tone: "good",
         message: `Published ${result.files.length} files.`,
-        detail: outDir,
+        detail: rebuilt.length > 0 ? `${outDir} (compiled again on the way: ${rebuilt.join(", ")})` : outDir,
       });
       return;
     }

@@ -107,9 +107,12 @@ describe("the whole path, driven the way the pages drive it", () => {
     expect(page).toContain("artwork/front-panel-final.png");
     expect(page).toContain("Not compiled yet");
 
+    // 150 mm, because that is a distance a 120 mm front panel can actually be read from.
+    // At 350 the compiler asks for 270 mm and the bundler refuses to publish a target
+    // whose print is narrower than its artwork needs, which is both of them working.
     const compiled = await post(
       "/e/botanica-500/targets/front-panel/compile",
-      new URLSearchParams({ scanDistanceMm: "350" }),
+      new URLSearchParams({ scanDistanceMm: "150" }),
     );
     expect(compiled.status).toBe(303);
 
@@ -117,7 +120,7 @@ describe("the whole path, driven the way the pages drive it", () => {
     expect(page).toContain("Ready for press");
     // The verdict is a sentence; the measurement behind it is disclosed, not asserted.
     expect(page).toContain("Under the lamp: what the compiler measured");
-    expect(page).toMatch(/Print it at least \d+ mm wide to be read from 350 mm away/);
+    expect(page).toMatch(/Print it at least \d+ mm wide to be read from 150 mm away/);
 
     const content = new FormData();
     content.append("type", "video");
@@ -291,6 +294,49 @@ describe("what it says", () => {
   it("does not take a message from whoever wrote the address", async () => {
     const page = await pageAt("/?said=everything-published-successfully");
     expect(page).not.toContain("everything-published-successfully");
+  });
+
+  it("does not print a width from a build whose widths were wrong", async () => {
+    // The workspace an operator already has. A target compiled last week is still perfectly
+    // good at recognising artwork, and its minimum print width is about four times too
+    // small, because it was computed by dividing by the sensor pixels instead of the ones
+    // the recogniser gets. The page presents that width as the instruction a printer
+    // follows, and it printed "read from undefined mm away" beside it, which is how this
+    // was found.
+    await post("/experiences", new URLSearchParams({ id: "last-week", title: "Last week" }));
+    const target = new FormData();
+    target.append("targetId", "front");
+    target.append("physicalWidthMm", "148");
+    target.append("artwork", new Blob([await artwork()], { type: "image/png" }), "front.png");
+    await post("/e/last-week/targets", target);
+
+    // Written straight onto disk in the old shape, because no build here can produce it any
+    // more, and an operator who compiled before the fix has exactly this sitting in theirs.
+    await workspace.writeTarget("last-week", "front", {
+      formatVersion: 2,
+      id: "front",
+      width: 640,
+      height: 452,
+      features: [],
+      report: {
+        score: 100,
+        pass: true,
+        featureCount: 300,
+        areasWithFeatures: 16,
+        areas: 16,
+        repetition: 0.36,
+        analysisWidth: 640,
+        smallestUsableScale: 0.5,
+        minimumWidthMm: 147,
+        reasons: [],
+      },
+    });
+
+    const page = await pageAt("/e/last-week");
+    expect(page).not.toContain("undefined mm away");
+    expect(page).not.toContain("147 mm");
+    expect(page).toContain("Compiled by an older build");
+    expect(page).toContain("Compile again");
   });
 
   it("warns when the printed width is smaller than the compile says it needs", async () => {
