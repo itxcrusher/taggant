@@ -65,9 +65,30 @@ export interface Report {
 /**
  * How wide the picture is, in millimetres, one metre from the camera.
  *
- * ASSUMPTION, and the only one here. A 60 degree horizontal field, which is ordinary for a
- * phone's rear camera, spans 2 * 1000 * tan(30) millimetres at a metre. Narrower optics
- * span less and make every minimum below smaller; a wide angle lens makes them larger.
+ * ASSUMPTION, and the only one here. A 60 degree field across the picture spans
+ * 2 * 1000 * tan(30) millimetres at a metre. Narrower optics span less and make every
+ * minimum below smaller; a wider one makes them larger.
+ *
+ * It said "ordinary for a phone's rear camera", which is not a safe way to put it, because
+ * a phone's rear camera does not have one field. It has a long axis and a short one, and
+ * which of them lies across the picture depends on how the phone is held. Published lens
+ * equivalents for main cameras are 24 to 26 mm, which is 74 to 69 degrees along the long
+ * axis; the short axis is narrower by the sensor's aspect, which the browser does not tell
+ * a page either. So the honest statement is that this number is one field where a device
+ * has two, and which one it should be is not settled.
+ *
+ * **No device measurement stands behind it yet.** One reading was taken through
+ * `site/measure/`, and it is not evidence: both of its inputs were left at their defaults,
+ * so the field it reported was arithmetic over two numbers that measured nothing, and the
+ * page it was taken on read the artwork's width from its top edge alone, which tilt
+ * foreshortens by 12 per cent at 15 degrees. A figure derived from it briefly appeared here
+ * and in the README as measured fact. It was not, and it is out.
+ *
+ * What is known without a device: the direction of the exposure is one way. A field wider
+ * than this makes the true minimum larger than what is printed below, so a print made to
+ * these widths is the one that fails, never the one that is needlessly big. `site/measure/`
+ * exists to settle it, and until it does this constant stays where it is rather than moving
+ * on desk evidence, because every published figure scales with it.
  */
 export const FRAME_WIDTH_MM_AT_1M = 2 * 1000 * Math.tan((30 * Math.PI) / 180);
 
