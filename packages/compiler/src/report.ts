@@ -65,9 +65,31 @@ export interface Report {
 /**
  * How wide the picture is, in millimetres, one metre from the camera.
  *
- * ASSUMPTION, and the only one here. A 60 degree horizontal field, which is ordinary for a
- * phone's rear camera, spans 2 * 1000 * tan(30) millimetres at a metre. Narrower optics
- * span less and make every minimum below smaller; a wide angle lens makes them larger.
+ * ASSUMPTION, and the only one here. A 60 degree field across the picture spans
+ * 2 * 1000 * tan(30) millimetres at a metre. Narrower optics span less and make every
+ * minimum below smaller; a wider one makes them larger.
+ *
+ * It said "ordinary for a phone's rear camera", which is not a safe way to put it, because
+ * a phone's rear camera does not have one field: it has a long axis and a short one, and
+ * which of them is across the picture depends on how the phone is held. Main cameras are
+ * quoted at 24 to 26 mm equivalent, so 69 to 74 degrees along the long axis, and one device
+ * measured through `site/measure/` reported 62 across its short axis and therefore 77 along
+ * its long one.
+ *
+ * What that costs, measured against this repository's own artwork at the frame width the
+ * runtime recognises at, for a 148 mm print:
+ *
+ *   held           field     px across the mark      read from up to
+ *   upright         62 deg    394, 114 inliers        185 mm
+ *   sideways        77 deg    298,  39 inliers        140 mm
+ *   this constant   60 deg                            192 mm
+ *
+ * So 60 degrees is within a few per cent of a phone held upright, which is how a person
+ * scans a pack, and about a third optimistic for one held sideways. The exposure is real
+ * and it is in one direction: a print made to a width from here is marginal if the reader
+ * turns the phone. Reaching for a wider default was deliberately not done on desk evidence,
+ * because every published figure scales with this and `site/measure/` settles it properly
+ * from a real device.
  */
 export const FRAME_WIDTH_MM_AT_1M = 2 * 1000 * Math.tan((30 * Math.PI) / 180);
 
