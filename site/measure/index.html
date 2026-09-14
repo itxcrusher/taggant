@@ -68,7 +68,7 @@
 
     <div class="scroller"><table id="results">
       <thead>
-        <tr><th>distance</th><th>printed</th><th>camera</th><th>px across</th><th>picture mm</th><th>picture mm at 1 m</th><th>field deg</th><th>inliers</th></tr>
+        <tr><th>distance</th><th>printed</th><th>camera</th><th>px across</th><th>square</th><th>picture mm</th><th>picture mm at 1 m</th><th>field deg</th><th>inliers</th></tr>
       </thead>
       <tbody></tbody>
     </table></div>
@@ -195,6 +195,17 @@
       document.getElementById("camera").textContent = cameraLine;
       say("Point it at the print.");
 
+      /**
+       * How even the opposite edges have to look before a reading is worth recording.
+       *
+       * 0.86, which is about 15 degrees of pitch. Measured: taking the top edge alone, as
+       * this page did, 15 degrees of tilt reported the picture 12 per cent narrower than it
+       * is, and every print width the compiler derives scales with that number. Averaging
+       * the two edges brings the same case inside two per cent, and past roughly this much
+       * tilt even the average drifts.
+       */
+      const SQUARE_ENOUGH = 0.86;
+
       const foundLine = document.getElementById("found");
       const recordButton = document.getElementById("record");
       let latest = null;
@@ -219,9 +230,41 @@
         const result = locate({ width, height, data: grey }, target);
         if (!result.found || !result.homography) return null;
 
-        const [ax, ay] = applyHomography(result.homography, 0, 0);
-        const [bx, by] = applyHomography(result.homography, target.width, 0);
-        const acrossProcessed = Math.hypot(bx - ax, by - ay);
+        const corner = (x, y) => applyHomography(result.homography, x, y);
+        const [ax, ay] = corner(0, 0);
+        const [bx, by] = corner(target.width, 0);
+        const [cx, cy] = corner(target.width, target.height);
+        const [dx, dy] = corner(0, target.height);
+        const top = Math.hypot(bx - ax, by - ay);
+        const bottom = Math.hypot(cx - dx, cy - dy);
+        const left = Math.hypot(dx - ax, dy - ay);
+        const right = Math.hypot(cx - bx, cy - by);
+
+        /**
+         * The mean of the two horizontal edges, not the top one.
+         *
+         * Tilting the phone away from square foreshortens the far edge and stretches the
+         * near one, and the page took the top edge alone, so a tilt nobody would notice
+         * became a measurement error in the one number the print widths scale with.
+         * Measured against frames built at a known pitch:
+         *
+         *    pitch    top edge alone    mean of both
+         *      5 deg       -4.4%            +0.2%
+         *     15 deg      -12.1%            +1.7%
+         *     30 deg      -22.1%            +9.1%
+         *
+         * The mean is not a correction, it is the average of two errors of opposite sign,
+         * so it holds where the tilt is small and drifts where it is large. Hence the
+         * squareness figure below, which says when it has stopped holding.
+         */
+        const acrossProcessed = (top + bottom) / 2;
+
+        // How square on the view is, as the worse of the two edge pairs. 1 is dead on.
+        // Pitch shows up in the horizontal pair and yaw in the vertical pair, and averaging
+        // does nothing for yaw, so both are reported rather than only the one that is
+        // partly compensated.
+        const evenness = (p, q) => (p > 0 && q > 0 ? Math.min(p, q) / Math.max(p, q) : 0);
+        const squareness = Math.min(evenness(top, bottom), evenness(left, right));
         // How much of the world the picture covers, which is the one thing the compiler
         // assumes and the only reason this page exists.
         //
@@ -239,6 +282,7 @@
         const atOneMetre = (frameWidthMm * 1000) / distanceMm;
         return {
           acrossProcessed,
+          squareness,
           frameWidthMm,
           atOneMetre,
           fieldDegrees: 2 * Math.atan(atOneMetre / 2000) * (180 / Math.PI),
@@ -296,9 +340,16 @@
             reading.fieldDegrees.toFixed(0) +
             " deg), " +
             reading.inliers +
-            " inliers"
+            " inliers, " +
+            (reading.squareness >= SQUARE_ENOUGH
+              ? "square on"
+              : "TILTED (" + Math.round(reading.squareness * 100) + "% even), turn it flatter")
           : "not found";
-        recordButton.disabled = !reading;
+        // A tilted reading is not a nervous reading, it is a wrong one, and it arrives
+        // looking exactly like a good one. The threshold is where the averaged estimate
+        // was still inside two per cent against frames built at a known pitch: 15 degrees
+        // of pitch leaves the two horizontal edges about 86 per cent even.
+        recordButton.disabled = !reading || reading.squareness < SQUARE_ENOUGH;
         draw(reading);
         requestAnimationFrame(tick);
       };
@@ -316,6 +367,7 @@
           printed: printedMm() + " mm",
           camera: cameraLine,
           across: Math.round(latest.acrossProcessed),
+          square: Math.round(latest.squareness * 100) + "%",
           frameWidthMm: Math.round(latest.frameWidthMm),
           atOneMetre: Math.round(latest.atOneMetre),
           field: latest.fieldDegrees.toFixed(0),
@@ -328,6 +380,7 @@
           row.printed,
           row.camera,
           row.across,
+          row.square,
           row.frameWidthMm,
           row.atOneMetre,
           row.field,
@@ -343,9 +396,9 @@
 
       document.getElementById("copy").addEventListener("click", async () => {
         const text = [
-          "distance\tprinted\tcamera\tpx across\tpicture mm\tpicture mm at 1 m\tfield deg\tinliers",
+          "distance\tprinted\tcamera\tpx across\tsquare\tpicture mm\tpicture mm at 1 m\tfield deg\tinliers",
           ...rows.map((r) =>
-            [r.distance, r.printed, r.camera, r.across, r.frameWidthMm, r.atOneMetre, r.field, r.inliers].join("\t"),
+            [r.distance, r.printed, r.camera, r.across, r.square, r.frameWidthMm, r.atOneMetre, r.field, r.inliers].join("\t"),
           ),
         ].join("\n");
         try {
