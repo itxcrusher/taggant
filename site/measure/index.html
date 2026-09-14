@@ -37,9 +37,11 @@
   <body>
     <h1>Measure a camera</h1>
     <p>
-      Print <a href="../artwork.png">the postcard artwork</a> at <strong>148 mm</strong> across and point this
-      at it. This reports what your camera actually delivers and how many pixels it puts across a printed
-      millimetre, which is the one number the print readiness report currently assumes rather than measures.
+      Point this at <a href="../artwork.png">the postcard artwork</a> shown at a width you have measured:
+      printed, or on another screen, either works. It reports how much of the world your camera's picture
+      covers, which is the one number the print readiness report assumes rather than measures. Hold it
+      close: the artwork has to fill most of the picture before it can be recognised at all, so start at
+      about 150 mm from a 148 mm wide copy and back off until it is lost.
     </p>
 
     <div id="view"><video id="feed" playsinline muted></video><canvas id="mark"></canvas></div>
@@ -48,7 +50,12 @@
     <p>
       Printed width:
       <input id="printed" type="number" min="20" max="1000" step="1" value="148" /> mm
-      <span class="hint">measure the print, do not trust the printer</span>
+      <span class="hint">measure it, do not trust the printer or the screen</span>
+    </p>
+    <p>
+      Distance to it:
+      <input id="distance" type="number" min="30" max="2000" step="5" value="150" /> mm
+      <span class="hint">measure this too, it divides every answer</span>
     </p>
     <p>Camera: <span id="camera">unknown</span></p>
     <p>Artwork: <span id="found" data-found="no">not found</span></p>
@@ -110,18 +117,39 @@
       // product answers no is worse than no page.
       const PROCESS_WIDTH = 480;
 
-      let distanceMm = 350;
+      // The distance is typed as well as offered, and the offers start close.
+      //
+      // They used to be 200 to 1000 mm, which is every distance except the ones this works
+      // at. A 148 mm postcard has to fill about two thirds of the picture to put enough
+      // pixels across itself, so it is readable to somewhere around 150 to 190 mm and the
+      // nearest button was already past that. Driven with a camera stood in for by a canvas,
+      // the artwork was found and every reading was then divided by 350 mm because that was
+      // the only thing selected, which turned a correct measurement into a wrong answer.
+      const typed = document.getElementById("distance");
+      let distanceMm = Number(typed.value);
       const distances = document.getElementById("distances");
-      for (const mm of [200, 250, 350, 500, 750, 1000]) {
+      const press = (mm) => {
+        distanceMm = mm;
+        typed.value = String(mm);
+        for (const other of distances.children) {
+          other.setAttribute("aria-pressed", String(Number(other.dataset.mm) === mm));
+        }
+      };
+      for (const mm of [120, 150, 175, 200, 250, 350]) {
         const button = document.createElement("button");
         button.textContent = mm + " mm";
+        button.dataset.mm = String(mm);
         button.setAttribute("aria-pressed", String(mm === distanceMm));
-        button.addEventListener("click", () => {
-          distanceMm = mm;
-          for (const other of distances.children) other.setAttribute("aria-pressed", String(other === button));
-        });
+        button.addEventListener("click", () => press(mm));
         distances.append(button);
       }
+      typed.addEventListener("input", () => {
+        const value = Number(typed.value);
+        if (Number.isFinite(value) && value >= 30) distanceMm = value;
+        for (const other of distances.children) {
+          other.setAttribute("aria-pressed", String(Number(other.dataset.mm) === distanceMm));
+        }
+      });
 
       const video = document.getElementById("feed");
       const mark = document.getElementById("mark");
