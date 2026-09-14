@@ -67,9 +67,22 @@ function refuseActiveSvg(source: string, bytes: Buffer): void {
   if (/(?:href|xlink:href)\s*=\s*["']\s*javascript:/i.test(text)) found.push("a javascript: link");
   // Anything inside this is HTML, parsed as HTML, script included.
   if (/<\s*foreignObject[\s>/]/i.test(text)) found.push("a foreignObject");
+  // A reference to somewhere else, which is a different failure from the ones above and is
+  // the one this project is least able to allow. An `<image href="https://...">` is not
+  // script and runs nothing, so every check above passes it; it is fetched anyway, on every
+  // scan, by every reader. That breaks the whole claim: a bundle is supposed to outlive the
+  // service that served it, and this one is a request to somebody else's host that can be
+  // logged, changed or switched off. The tool printed "It needs nothing else" over a folder
+  // carrying exactly this, and the README said nothing in it reaches for the network.
+  //
+  // The XML namespace is not a fetch. It is an identifier, never requested, and it is in
+  // every SVG anything has ever exported, so it is named rather than matched loosely.
+  const withoutNamespaces = text.replace(/xmlns(?::[a-z0-9-]+)?\s*=\s*["'][^"']*["']/gi, "");
+  const remote = withoutNamespaces.match(/(?:https?:)?\/\/[^\s"'<>)]+/i);
+  if (remote) found.push(`a reference to ${remote[0]}`);
   if (found.length === 0) return;
   throw new Error(
-    `${source} is an SVG carrying ${found.join(" and ")}, and a bundle is served from a host that may set no headers. Take it out, or export the artwork as a PNG.`,
+    `${source} is an SVG carrying ${found.join(" and ")}, and a bundle has to work with nothing else running. Take it out, or export the artwork as a PNG.`,
   );
 }
 

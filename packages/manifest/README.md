@@ -46,8 +46,7 @@ A manifest must name at least one target, and a target must show at least one th
         }
       ]
     }
-  ],
-  "fallback": "https://example.com/postcard"
+  ]
 }
 ```
 

@@ -59,6 +59,29 @@ jobs:
           # The per engine lines below are read out of this file and attached to the run,
           # and colour codes in them are noise wherever they are read.
           NO_COLOR: "1"
+      # The README states how many tests there are and says it is the number this job runs.
+      # That sentence had been corrected by hand every round and had been wrong twice in a
+      # week, which is the shape of every other defect found this month: a figure in a
+      # document with nothing over it. It is checked here rather than in a test because the
+      # claim is about this run, and because listing the suite from inside itself takes
+      # nearly two minutes where the totals are already on screen.
+      - name: the README says how many tests there are
+        run: |
+          # Colour codes stripped here rather than relying on NO_COLOR above, because a
+          # reporter that ignores it would make this count zero and the step would then be
+          # checking nothing, which is the failure it exists to prevent.
+          ran=$(sed "s/\[[0-9;]*m//g" test-output.txt | grep -aoE "Tests +[0-9]+ passed" | grep -aoE "[0-9]+" | awk "{n+=\$1} END {print n+0}")
+          said=$(grep -aoE "exercised by [0-9]+ tests" README.md | grep -aoE "[0-9]+")
+          echo "this run: $ran, the README: $said"
+          if [ -z "$ran" ] || [ "$ran" = "0" ]; then
+            echo "::error::no test totals were found in the output, so this check proved nothing"
+            exit 1
+          fi
+          if [ "$ran" != "$said" ]; then
+            echo "::error::the README says $said tests and this run has $ran"
+            exit 1
+          fi
+
       # What each engine actually did, on every run and not only a failing one. The tests
       # print a line per engine and those lines are the evidence behind what the README
       # claims; a run elsewhere is otherwise readable only as an exit code, because

@@ -110,10 +110,41 @@ describe("the schema documents itself", () => {
 });
 
 describe("the worked example the document quotes", () => {
-  it("is the file the example actually runs from, and it validates", () => {
+  /** Every fenced JSON block in the document, in the order it appears. */
+  const blocks = (): unknown[] => {
+    const doc = readFileSync(fileURLToPath(new URL("../README.md", import.meta.url)), "utf8");
+    const found: unknown[] = [];
+    // No newline escape in the pattern, because a fence is opened by the word and closed
+    // by the backticks and anything between them is the block.
+    for (const match of doc.matchAll(/```json([\s\S]*?)```/g)) {
+      found.push(JSON.parse((match[1] ?? "null").trim()));
+    }
+    return found;
+  };
+
+  it("is the file the example actually runs from, character for character", () => {
+    // This checked the file and never opened the document, under a name that says it
+    // compares them. It could not have caught what it was written to catch: the document
+    // showed the postcard carrying `"fallback": "https://example.com/postcard"`, which the
+    // example had removed, because refusing the camera then navigated a reader off to a
+    // reserved placeholder domain with no explanation. Two documents, one of them stale,
+    // and a test named after comparing them that compared nothing.
     const path = fileURLToPath(new URL("../../../examples/postcard/manifest.json", import.meta.url));
     const postcard = JSON.parse(readFileSync(path, "utf8"));
-    expect(validateManifest(structuredClone(postcard)).ok).toBe(true);
-    expect(postcard.targets[0].content[0].placement).toEqual({ scale: 0.5, offsetY: -0.2 });
+    const quoted = blocks().find((block) => (block as { id?: string })?.id === "postcard");
+    expect(quoted, "the document no longer quotes the postcard manifest").toBeDefined();
+    expect(quoted, "the document shows a postcard manifest that is not the one on disk").toEqual(postcard);
+  });
+
+  it("prints nothing a reader could copy that this package would then refuse", () => {
+    // Both blocks are offered as manifests to write files like. A document that prints an
+    // invalid one teaches the reader something the validator will reject.
+    const manifests = blocks().filter((block) => (block as { schemaVersion?: string })?.schemaVersion);
+    expect(manifests.length, "the document prints no manifests at all").toBeGreaterThan(1);
+    for (const manifest of manifests) {
+      const result = validateManifest(structuredClone(manifest));
+      const why = result.ok ? "" : result.errors.map((e) => `${e.path} ${e.message}`).join("; ");
+      expect(result.ok, `the document prints a manifest this package refuses: ${why}`).toBe(true);
+    }
   });
 });
