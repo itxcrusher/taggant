@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { validateManifest } from "@taggant/manifest";
 import { describe, expect, it } from "vitest";
 import { compileTarget } from "../src/compile.js";
-import { FRAME_WIDTH_MM_AT_1M, RECOGNISED_PIXELS_ACROSS_FRAME } from "../src/report.js";
 
 const EXAMPLE = join(dirname(fileURLToPath(import.meta.url)), "../../../examples/postcard");
 
@@ -208,56 +207,6 @@ describe("the postcard example", () => {
       expect(readme, `the README does not say: ${line}`).toContain(line);
     }
   });
-
-  it("states the orientation exposure in figures the model actually produces", async () => {
-    // The README now says how far the example postcard can be read with the phone held
-    // upright, held sideways, and under the constant the compiler holds. Three numbers in a
-    // document, which is the shape of the defect this whole round was about: the figures
-    // agreed with each other and with nothing that runs.
-    //
-    // One device reported 62 degrees across the short axis of a 3 by 4 sensor, so 77 along
-    // the long one. Those two and the assumed 60 give the three reaches.
-    const readme = await readFile(join(EXAMPLE, "../../README.md"), "utf8");
-    const manifest = JSON.parse(await readFile(join(EXAMPLE, "manifest.json"), "utf8"));
-    const printed = manifest.targets[0].physicalWidthMm;
-    const report = (
-      await compileTarget(await readFile(join(EXAMPLE, "artwork.png")), { id: "front", scanDistanceMm: 190 })
-    ).report;
-    const pixelsNeeded = report.smallestUsableScale * report.analysisWidth;
-
-    /** How far a print this wide can be read, given how wide the picture is at a metre. */
-    const reach = (pictureAtOneMetre: number) =>
-      Math.round(((printed * RECOGNISED_PIXELS_ACROSS_FRAME) / pixelsNeeded / pictureAtOneMetre) * 1000);
-    const spanOf = (degrees: number) => 2 * 1000 * Math.tan((degrees / 2) * (Math.PI / 180));
-
-    const upright = reach(spanOf(62));
-    const sideways = reach(spanOf(77));
-    const assumed = reach(FRAME_WIDTH_MM_AT_1M);
-    expect(
-      readme,
-      `the README should say ${upright} mm upright, ${sideways} mm sideways and ${assumed} mm assumed`,
-    ).toContain(
-      `readable to ${upright} mm with the phone upright and ${sideways} mm with it turned sideways, against the ${assumed} mm this constant implies`,
-    );
-
-    // And the direction of the exposure, which is the whole point of stating it: the
-    // constant is optimistic against the wider axis, never the reverse.
-    expect(assumed).toBeGreaterThan(sideways);
-
-    // `reach` above inverts the model rather than using it, so on its own it could agree
-    // with a model that is wrong. Closed here through the compiler itself: compiled for the
-    // distance it names, the artwork should ask for about the width the postcard is. If the
-    // two ever part company, the inversion and the model have drifted and every figure in
-    // this test is measuring the inversion.
-    const atThatDistance = (
-      await compileTarget(await readFile(join(EXAMPLE, "artwork.png")), {
-        id: "front",
-        scanDistanceMm: assumed,
-      })
-    ).report.minimumWidthMm;
-    expect(atThatDistance, "the reach arithmetic and the compiler disagree").not.toBeNull();
-    expect(Math.abs((atThatDistance ?? 0) - printed)).toBeLessThanOrEqual(1);
-  }, 30_000);
 
   it("names files that exist", async () => {
     const manifest = JSON.parse(await readFile(join(EXAMPLE, "manifest.json"), "utf8"));

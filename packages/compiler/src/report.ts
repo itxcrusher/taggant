@@ -70,26 +70,25 @@ export interface Report {
  * minimum below smaller; a wider one makes them larger.
  *
  * It said "ordinary for a phone's rear camera", which is not a safe way to put it, because
- * a phone's rear camera does not have one field: it has a long axis and a short one, and
- * which of them is across the picture depends on how the phone is held. Main cameras are
- * quoted at 24 to 26 mm equivalent, so 69 to 74 degrees along the long axis, and one device
- * measured through `site/measure/` reported 62 across its short axis and therefore 77 along
- * its long one.
+ * a phone's rear camera does not have one field. It has a long axis and a short one, and
+ * which of them lies across the picture depends on how the phone is held. Published lens
+ * equivalents for main cameras are 24 to 26 mm, which is 74 to 69 degrees along the long
+ * axis; the short axis is narrower by the sensor's aspect, which the browser does not tell
+ * a page either. So the honest statement is that this number is one field where a device
+ * has two, and which one it should be is not settled.
  *
- * What that costs, measured against this repository's own artwork at the frame width the
- * runtime recognises at, for a 148 mm print:
+ * **No device measurement stands behind it yet.** One reading was taken through
+ * `site/measure/`, and it is not evidence: both of its inputs were left at their defaults,
+ * so the field it reported was arithmetic over two numbers that measured nothing, and the
+ * page it was taken on read the artwork's width from its top edge alone, which tilt
+ * foreshortens by 12 per cent at 15 degrees. A figure derived from it briefly appeared here
+ * and in the README as measured fact. It was not, and it is out.
  *
- *   held           field     px across the mark      read from up to
- *   upright         62 deg    394, 114 inliers        185 mm
- *   sideways        77 deg    298,  39 inliers        140 mm
- *   this constant   60 deg                            192 mm
- *
- * So 60 degrees is within a few per cent of a phone held upright, which is how a person
- * scans a pack, and about a third optimistic for one held sideways. The exposure is real
- * and it is in one direction: a print made to a width from here is marginal if the reader
- * turns the phone. Reaching for a wider default was deliberately not done on desk evidence,
- * because every published figure scales with this and `site/measure/` settles it properly
- * from a real device.
+ * What is known without a device: the direction of the exposure is one way. A field wider
+ * than this makes the true minimum larger than what is printed below, so a print made to
+ * these widths is the one that fails, never the one that is needlessly big. `site/measure/`
+ * exists to settle it, and until it does this constant stays where it is rather than moving
+ * on desk evidence, because every published figure scales with it.
  */
 export const FRAME_WIDTH_MM_AT_1M = 2 * 1000 * Math.tan((30 * Math.PI) / 180);
 

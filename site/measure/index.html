@@ -11,8 +11,13 @@
       body { font: 15px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 16px; }
       h1 { font-size: 15px; letter-spacing: 0.18em; text-transform: uppercase; margin: 0 0 4px; }
       p { margin: 0 0 12px; color: var(--dim); max-width: 62ch; }
+      /* The preview follows the stream, set from the first frame. It was locked to 4 by 3
+         with object-fit: cover, so a phone held upright showed a cropped strip of its own
+         picture: the reader lined the artwork up against a frame that was not the one being
+         measured, and the outline was drawn with the same crop so nothing on screen gave it
+         away. `contain` rather than `cover` now, so the whole picture is always shown. */
       #view { position: relative; width: 100%; aspect-ratio: 4 / 3; background: #000; border: 1px solid var(--line); overflow: hidden; }
-      #view video { width: 100%; height: 100%; object-fit: cover; }
+      #view video { width: 100%; height: 100%; object-fit: contain; }
       /* Width and height as well as inset, because a canvas is a replaced element: with
          width auto it keeps its intrinsic 300 by 150 and sits in the corner, so the outline
          was drawn into a small box beside the picture rather than over it. */
@@ -23,7 +28,7 @@
       button:disabled { opacity: 0.45; }
       #found { color: var(--bad); }
       #found[data-found="yes"] { color: var(--good); }
-      /* The table is six columns wide and its cells do not wrap, so on a phone it dragged
+      /* The table is wider than a phone and its cells do not wrap, so it once dragged
          the whole page sideways by 308 px. It scrolls inside its own box instead. */
       .scroller { overflow-x: auto; margin-top: 12px; }
       table { border-collapse: collapse; width: 100%; font-size: 13px; }
@@ -37,11 +42,16 @@
   <body>
     <h1>Measure a camera</h1>
     <p>
-      Point this at <a href="../artwork.png">the postcard artwork</a> shown at a width you have measured:
-      printed, or on another screen, either works. It reports how much of the world your camera's picture
-      covers, which is the one number the print readiness report assumes rather than measures. Hold it
-      close: the artwork has to fill most of the picture before it can be recognised at all, so start at
-      about 150 mm from a 148 mm wide copy and back off until it is lost.
+      Print <a href="../artwork.png">the postcard artwork</a>, measure how wide it came out, and point this
+      at it. It reports how much of the world your camera's picture covers, which is the one number the
+      print readiness report assumes rather than measures. Hold it close and square on: the artwork has to
+      fill most of the picture before it can be recognised at all, so start at about 150 mm from a 148 mm
+      wide copy and back off until it is lost.
+    </p>
+    <p>
+      On paper, not on a screen. A screen's own pixel grid beats against the camera's and takes recognition
+      apart: against a clean print the matcher agreed on 102 points, and against a grid at the period that
+      beats worst, 12. It still finds the artwork, in flickers, which is worse than not finding it.
     </p>
 
     <div id="view"><video id="feed" playsinline muted></video><canvas id="mark"></canvas></div>
@@ -68,7 +78,7 @@
 
     <div class="scroller"><table id="results">
       <thead>
-        <tr><th>distance</th><th>printed</th><th>camera</th><th>px across</th><th>square</th><th>picture mm</th><th>picture mm at 1 m</th><th>field deg</th><th>inliers</th></tr>
+        <tr><th>distance</th><th>printed</th><th>camera</th><th>px across</th><th>square</th><th>centred</th><th>picture mm</th><th>picture mm at 1 m</th><th>field deg</th><th>inliers</th></tr>
       </thead>
       <tbody></tbody>
     </table></div>
@@ -106,6 +116,23 @@
       // thing in this to get wrong: a printer set to fit the page silently makes every
       // number here false, and nothing in a camera picture can tell. So it is asked for
       // rather than assumed, and the answer wanted is a ruler's, not the print dialog's.
+      /**
+       * A number field's value, if it is one the field itself says it will take.
+       *
+       * A browser does not clamp `.value` to the `min` and `max` in the markup, it only
+       * marks the field invalid, and nothing here was reading that. So the range the page
+       * advertises and the range it acted on were different: a printed width of 100000 mm
+       * gave a picture 947310 mm wide at a metre and a field of 180 degrees, which is not a
+       * thing a rectilinear camera has, and it recorded and copied as a plain number.
+       * `Math.atan` saturating is what makes that dangerous, because the absurd input stops
+       * looking absurd by the time it reaches the table.
+       */
+      const within = (input, low, high) => {
+        if (input.value.trim() === "") return null;
+        const value = Number(input.value);
+        return Number.isFinite(value) && value >= low && value <= high ? value : null;
+      };
+
       const printedInput = document.getElementById("printed");
       /**
        * The measured width, or null.
@@ -115,10 +142,7 @@
        * field produced a full row of confident numbers about a print nobody had measured.
        * Null instead, and nothing records until there is a real number in both boxes.
        */
-      const printedMm = () => {
-        const value = Number(printedInput.value);
-        return printedInput.value.trim() !== "" && Number.isFinite(value) && value > 0 ? value : null;
-      };
+      const printedMm = () => within(printedInput, 20, 1000);
       // Recognition runs at this width whatever the camera gives, because a target is
       // described down from its own raster and an observation far larger than that has
       // nowhere on the pyramid to meet it.
@@ -140,10 +164,7 @@
       // the only thing selected, which turned a correct measurement into a wrong answer.
       const typed = document.getElementById("distance");
       /** The measured distance, or null, for the same reason as the width above. */
-      const distanceMm = () => {
-        const value = Number(typed.value);
-        return typed.value.trim() !== "" && Number.isFinite(value) && value >= 30 ? value : null;
-      };
+      const distanceMm = () => within(typed, 30, 2000);
       const distances = document.getElementById("distances");
       const pressed = () => {
         for (const other of distances.children) {
@@ -196,7 +217,7 @@
       // The frame's own dimensions, because those are what the arithmetic below divides by.
       // A track's reported settings can differ from them, and a line that disagrees with the
       // number beside it is worse than no line.
-      const cameraLine =
+      const cameraNow = () =>
         video.videoWidth +
         " x " +
         video.videoHeight +
@@ -205,30 +226,68 @@
         " fps, " +
         (settings.facingMode ?? "unknown") +
         " facing";
-      document.getElementById("camera").textContent = cameraLine;
+      const cameraOut = document.getElementById("camera");
+      cameraOut.textContent = cameraNow();
+      const view = document.getElementById("view");
+      const followStream = () => {
+        if (video.videoWidth > 0 && video.videoHeight > 0) {
+          view.style.aspectRatio = video.videoWidth + " / " + video.videoHeight;
+        }
+      };
+      followStream();
+
+      // A camera that cannot deliver the width recognition runs at will never find anything,
+      // and the page said nothing at all about it: driven at 320 by 240 it sat on "Point it
+      // at the print" and "not found" indefinitely, which reads as the artwork being wrong.
+      if (video.videoWidth > 0 && video.videoWidth < PROCESS_WIDTH) {
+        say(
+          "This camera gives " +
+            video.videoWidth +
+            " px across, and recognition needs " +
+            PROCESS_WIDTH +
+            ". Nothing will be found here, and the same is true of the runtime.",
+          true,
+        );
+      }
       say("Point it at the print.");
 
       /**
-       * How even the opposite edges have to look before a reading is worth recording.
+       * How even the opposite edges have to look, and how near the middle the mark has to
+       * sit, before a reading is worth recording.
        *
-       * Turning away from the print about its horizontal axis and about its vertical axis
-       * are not the same problem, and the second is the one that decides this number.
-       * Measured against pinhole views built at known angles, reading the width as the mean
-       * of the two horizontal edges:
+       * Measured at the geometry this page instructs, a 148 mm print read from 150 mm by a
+       * 70 degree camera, reading the width as the mean of the two horizontal edges:
        *
-       *   turned about      10 deg   20 deg   28 deg   35 deg
-       *   the horizontal    +0.2%    +0.7%    +1.2%    +2.0%     evenness 0.92 to 0.75
-       *   the vertical      -1.1%    -4.2%    -8.6%   -13.3%     evenness 0.89 to 0.67
+       *   turned about the      5 deg     9 deg    12 deg    15 deg    20 deg
+       *   horizontal axis      +0.17%    +0.38%    +0.63%    +0.95%    +1.58%
+       *     evenness            0.939     0.894     0.865     0.833     0.783
+       *   vertical axis        -0.13%    -0.49%    -0.68%    -1.16%    -2.40%
+       *     evenness            0.920     0.859     0.815     0.774     0.712
        *
-       * Averaging the two horizontal edges is two errors of opposite sign cancelling, so it
-       * answers the first row and does nothing at all for the second: turning about the
-       * vertical axis shortens both horizontal edges together. That is why the figure below
-       * is the worse of the two pairs rather than the horizontal one.
+       * So 0.86 is about 12 degrees of tipping and about 9 of turning, and holds the
+       * reading inside roughly 0.6 per cent. An earlier version of this note gave 19 and 12
+       * degrees and 1.5 per cent, from a sweep run at a different geometry than the one the
+       * page asks for; the threshold was right and the reasoning behind it was not.
        *
-       * 0.86 holds the reading inside about 1.5 per cent either way, which is 19 degrees of
-       * the forgiving rotation and 12 of the unforgiving one.
+       * **Evenness compares opposite edges, so it cannot see anything symmetric about the
+       * mark's centre.** Barrel distortion, a non-square pixel aspect and pure rotation in
+       * the plane all leave it at 1.000. Rotation is harmless, the other two are not, and
+       * neither is visible in a single view of one flat object: a lens bending the picture
+       * by 10 per cent at the edges shifts this reading by about 4 with the figure reading
+       * dead square. Calibrating that needs more than one view and is not attempted.
+       *
+       * What it also could not see, and now does, is where in the frame the mark sits. At 5
+       * degrees of turn the evenness holds at 0.92 whether the mark is centred or a third of
+       * the way to the edge, while the reading goes from -0.13 per cent to -4.4. That is
+       * larger than anything the evenness gate catches, so the centre of the mark has to be
+       * near the centre of the picture too.
+       *
+       *   off centre, at 5 degrees of turn    3%      7%     16%     25%     34%
+       *   error in the reading              -0.13%  -1.26%  -2.53%  -3.39%  -4.43%
        */
       const SQUARE_ENOUGH = 0.86;
+      /** How far the mark's centre may sit from the picture's, as a share of the half width. */
+      const CENTRED_ENOUGH = 0.1;
 
       const foundLine = document.getElementById("found");
       const recordButton = document.getElementById("record");
@@ -289,6 +348,8 @@
         // partly compensated.
         const evenness = (p, q) => (p > 0 && q > 0 ? Math.min(p, q) / Math.max(p, q) : 0);
         const squareness = Math.min(evenness(top, bottom), evenness(left, right));
+        // Where the mark sits, which the evenness above is blind to. See SQUARE_ENOUGH.
+        const offCentre = Math.abs((ax + bx + cx + dx) / 4 - width / 2) / (width / 2);
         // How much of the world the picture covers, which is the one thing the compiler
         // assumes and the only reason this page exists.
         //
@@ -313,13 +374,14 @@
         const printed = printedMm();
         const distance = distanceMm();
         if (printed === null || distance === null) {
-          return { needsNumbers: true, squareness, corners: outline, scale: { width, height } };
+          return { needsNumbers: true, squareness, offCentre, corners: outline, scale: { width, height } };
         }
         const frameWidthMm = (printed * width) / acrossProcessed;
         const atOneMetre = (frameWidthMm * 1000) / distance;
         return {
           acrossProcessed,
           squareness,
+          offCentre,
           frameWidthMm,
           atOneMetre,
           fieldDegrees: 2 * Math.atan(atOneMetre / 2000) * (180 / Math.PI),
@@ -336,9 +398,10 @@
         }
         marking.clearRect(0, 0, mark.width, mark.height);
         if (!reading) return;
-        // The video is shown with object-fit: cover, so the same crop has to be applied to
-        // the outline or it sits somewhere the artwork is not.
-        const shownScale = Math.max(mark.width / reading.scale.width, mark.height / reading.scale.height);
+        // The video is shown with object-fit: contain, so the outline is fitted the same way
+        // or it sits somewhere the artwork is not. This was `cover` and took the larger of
+        // the two ratios; `contain` takes the smaller.
+        const shownScale = Math.min(mark.width / reading.scale.width, mark.height / reading.scale.height);
         const offsetX = (mark.width - reading.scale.width * shownScale) / 2;
         const offsetY = (mark.height - reading.scale.height * shownScale) / 2;
         marking.strokeStyle = "#7fe0a8";
@@ -359,7 +422,22 @@
         try {
           reading = measure();
         } catch (error) {
-          say("Recognition stopped: " + (error?.message ?? error));
+          // Keep going, and forget what was on screen.
+          //
+          // This said its piece and returned, which ended the loop for good: one frame that
+          // could not be read stopped recognition permanently, and because `latest` and the
+          // button's state were both left as they were, the record button stayed armed over
+          // a reading that was now minutes old. A reader who then moved the camera and
+          // retyped the boxes recorded a row built from a frame of somewhere else. Driven,
+          // that produced a row reading "null mm" for both inputs and a confident 70
+          // degrees beside them.
+          say("Could not read that frame: " + (error?.message ?? error));
+          latest = null;
+          recordButton.disabled = true;
+          foundLine.dataset.found = "no";
+          foundLine.textContent = "not found";
+          draw(null);
+          requestAnimationFrame(tick);
           return;
         }
         latest = reading;
@@ -375,13 +453,21 @@
             " deg), " +
             reading.inliers +
             " inliers, " +
-            (reading.squareness >= SQUARE_ENOUGH
-              ? "square on"
-              : "TILTED (" + Math.round(reading.squareness * 100) + "% even), turn it flatter")
+            (reading.squareness < SQUARE_ENOUGH
+              ? "TILTED (" + Math.round(reading.squareness * 100) + "% even), turn it flatter"
+              : reading.offCentre > CENTRED_ENOUGH
+                ? "OFF TO ONE SIDE (" + Math.round(reading.offCentre * 100) + "%), point straight at it"
+                : "square on and centred")
           : "not found";
         // A tilted reading is not a nervous reading, it is a wrong one, and it arrives
         // looking exactly like a good one. See SQUARE_ENOUGH for where the line is and why.
-        recordButton.disabled = !reading || reading.needsNumbers || reading.squareness < SQUARE_ENOUGH;
+        recordButton.disabled =
+          !reading ||
+          reading.needsNumbers ||
+          reading.squareness < SQUARE_ENOUGH ||
+          reading.offCentre > CENTRED_ENOUGH;
+        cameraOut.textContent = cameraNow();
+        followStream();
         draw(reading);
         requestAnimationFrame(tick);
       };
@@ -390,16 +476,28 @@
       const rows = [];
       const body = document.querySelector("#results tbody");
       recordButton.addEventListener("click", () => {
+        // Checked again here rather than trusting the button's state. The state is set by
+        // the loop, and a loop that has stopped leaves it wherever it last was, so every
+        // condition that makes a reading worth recording is re-read at the moment of the
+        // click against the boxes as they are now.
+        const distance = distanceMm();
+        const printed = printedMm();
         if (!latest || latest.needsNumbers) return;
+        if (distance === null || printed === null) return;
+        if (latest.squareness < SQUARE_ENOUGH || latest.offCentre > CENTRED_ENOUGH) return;
         const row = {
-          distance: distanceMm() + " mm",
+          distance: distance + " mm",
           // Recorded per row, because it can be changed between rows and every figure to
           // the right of it is divided by it. A table that does not say which width it used
           // cannot be read afterwards.
-          printed: printedMm() + " mm",
-          camera: cameraLine,
+          printed: printed + " mm",
+          // Read now, not at start up. This was captured once when the page loaded, so every
+          // row carried the orientation the phone happened to be in then, and the note below
+          // the table tells the reader this column says which way up it was held.
+          camera: cameraNow(),
           across: Math.round(latest.acrossProcessed),
           square: Math.round(latest.squareness * 100) + "%",
+          centred: Math.round((1 - latest.offCentre) * 100) + "%",
           frameWidthMm: Math.round(latest.frameWidthMm),
           atOneMetre: Math.round(latest.atOneMetre),
           field: latest.fieldDegrees.toFixed(0),
@@ -413,6 +511,7 @@
           row.camera,
           row.across,
           row.square,
+          row.centred,
           row.frameWidthMm,
           row.atOneMetre,
           row.field,
@@ -428,9 +527,9 @@
 
       document.getElementById("copy").addEventListener("click", async () => {
         const text = [
-          "distance\tprinted\tcamera\tpx across\tsquare\tpicture mm\tpicture mm at 1 m\tfield deg\tinliers",
+          "distance\tprinted\tcamera\tpx across\tsquare\tcentred\tpicture mm\tpicture mm at 1 m\tfield deg\tinliers",
           ...rows.map((r) =>
-            [r.distance, r.printed, r.camera, r.across, r.square, r.frameWidthMm, r.atOneMetre, r.field, r.inliers].join("\t"),
+            [r.distance, r.printed, r.camera, r.across, r.square, r.centred, r.frameWidthMm, r.atOneMetre, r.field, r.inliers].join("\t"),
           ),
         ].join("\n");
         try {

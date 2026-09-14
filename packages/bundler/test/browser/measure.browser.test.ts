@@ -96,7 +96,13 @@ describe("the measurement page", () => {
    * Open the page with a canvas camera standing at a chosen geometry, and read back the
    * field of view it reports.
    */
-  async function ask(fieldDegrees: number, distanceMm: number, printedMm: number, pitch = 0) {
+  async function ask(
+    fieldDegrees: number,
+    distanceMm: number,
+    printedMm: number,
+    turn: { degrees: number; axis: "pitch" | "yaw" } = { degrees: 0, axis: "pitch" },
+    offsetMm = 0,
+  ) {
     if (!browser) throw new Error(`chromium could not be launched: ${launchFailure}`);
     const native = 640;
     const pictureAtOneMetre = 2 * 1000 * Math.tan((fieldDegrees / 2) * (Math.PI / 180));
@@ -104,7 +110,7 @@ describe("the measurement page", () => {
 
     const page = await browser.newPage({ viewport: { width: 420, height: 900 } });
     await page.addInitScript(
-      ({ artworkUrl, share, width, pitch }) => {
+      ({ artworkUrl, share, width, turn, offsetMm, fieldDegrees, distanceMm, printedMm }) => {
         const fake = {
           async getUserMedia() {
             const canvas = document.createElement("canvas");
@@ -131,7 +137,7 @@ describe("the measurement page", () => {
              * form, which is all this needs.
              */
             let warped: HTMLCanvasElement | null = null;
-            if (pitch !== 0) {
+            if (turn.degrees !== 0 || offsetMm !== 0) {
               const scratch = document.createElement("canvas");
               scratch.width = image.width;
               scratch.height = image.height;
@@ -143,11 +149,22 @@ describe("the measurement page", () => {
               const out = warped.getContext("2d");
               if (source && out) {
                 const frame = out.createImageData(warped.width, warped.height);
-                const t = (pitch * Math.PI) / 180;
-                const d = 1000;
-                // Focal length in pixels from the share the artwork should fill at zero tilt.
-                const f = warped.width / 2 / (share / 2);
-                const halfW = (share * warped.width * d) / (2 * f);
+                // The camera being simulated, in its own units, rather than a camera that
+                // happens to put the artwork on screen at the right size.
+                //
+                // The focal length came from the share of the frame the artwork fills, and
+                // the plane size was then derived from that, which for ask(70, 150, 148)
+                // built a 38.8 degree camera looking at a 496 mm print from 1000 mm. The
+                // apparent size was right, so every zero-turn case passed: the page's
+                // arithmetic is scale free. Perspective is not. It depends on the print's
+                // width against the distance, and that stub had half the depth spread and
+                // about a quarter of the error at any angle, so 28 degrees of it was worth
+                // about 14 real ones and the tilt case passed with a point of margin over a
+                // reading wrong by 0.78 per cent.
+                const t = (turn.degrees * Math.PI) / 180;
+                const d = distanceMm;
+                const f = warped.width / 2 / Math.tan((fieldDegrees / 2) * (Math.PI / 180));
+                const halfW = printedMm / 2;
                 const halfH = halfW * (image.height / image.width);
                 const cx = warped.width / 2;
                 const cy = warped.height / 2;
@@ -155,15 +172,25 @@ describe("the measurement page", () => {
                   for (let px = 0; px < warped.width; px++) {
                     const x = px - cx;
                     const y = py - cy;
-                    const denom = f * Math.cos(t) - y * Math.sin(t);
+                    // Turned about the horizontal axis, or about the vertical one: the
+                    // same algebra with the two image axes swapped. The vertical axis was
+                    // never simulated here at all, and it is the one that averaging the
+                    // horizontal edges cannot compensate for.
+                    const [along, across] = turn.axis === "yaw" ? [x, y] : [y, x];
+                    const denom = f * Math.cos(t) - along * Math.sin(t);
                     const at = (py * warped.width + px) * 4;
                     let r = 150;
                     let g = 150;
                     let b = 150;
                     if (denom !== 0) {
-                      const v = (y * d) / denom;
-                      const z = d + v * Math.sin(t);
-                      const u = (x * z) / f;
+                      const p = (along * d) / denom;
+                      const z = d + p * Math.sin(t);
+                      const q = (across * z) / f;
+                      const pair = turn.axis === "yaw" ? [p, q] : [q, p];
+                      // Slid sideways in the plane, so the mark sits away from the middle of
+                      // the picture without changing how it is turned.
+                      const u = (pair[0] ?? 0) - offsetMm;
+                      const v = pair[1] ?? 0;
                       if (z > 0 && Math.abs(u) <= halfW && Math.abs(v) <= halfH) {
                         const sx = Math.min(
                           image.width - 1,
@@ -196,7 +223,7 @@ describe("the measurement page", () => {
               const w = canvas.width * share;
               const h = (image.height / image.width) * w;
               const top = (canvas.height - h) / 2;
-              if (pitch === 0) {
+              if (turn.degrees === 0) {
                 context.drawImage(image, (canvas.width - w) / 2, top, w, h);
               } else if (warped) {
                 context.drawImage(warped, 0, 0);
@@ -215,7 +242,16 @@ describe("the measurement page", () => {
         Object.defineProperty(navigator, "mediaDevices", { configurable: true, get: () => fake });
         Object.defineProperty(Navigator.prototype, "mediaDevices", { configurable: true, get: () => fake });
       },
-      { artworkUrl: `${origin}/artwork.png`, share: fraction, width: native, pitch },
+      {
+        artworkUrl: `${origin}/artwork.png`,
+        share: fraction,
+        width: native,
+        turn,
+        offsetMm,
+        fieldDegrees,
+        distanceMm,
+        printedMm,
+      },
     );
 
     await page.goto(`${origin}/measure/`, { waitUntil: "domcontentloaded" });
@@ -264,21 +300,47 @@ describe("the measurement page", () => {
     120_000,
   );
 
-  it("refuses to record a tilted reading, because it is wrong rather than merely nervous", async () => {
-    // The page measured the width from the top edge alone, and tilt foreshortens that edge.
-    // Against frames built at a known pitch the reading came back 4.4 per cent low at 5
-    // degrees and 12.1 per cent low at 15, and every print width the compiler derives
-    // scales with it. It averages both horizontal edges now, which holds the same cases
-    // inside two per cent, and past that it says so and will not take the reading.
-    const tilted = await ask(70, 150, 148, 28);
-    expect(tilted.line, `the page did not call this tilted: ${tilted.line}`).toContain("TILTED");
-    expect(tilted.recordable, "a tilted reading could still be recorded").toBe(false);
+  it("refuses a reading turned far enough to bend it, about either axis", async () => {
+    // The stub this used to run against was not the camera it named: it set the focal length
+    // from the apparent size, which made a 38.8 degree camera looking at a 496 mm print from
+    // a metre. Apparent size is all the page's arithmetic needs, so the square cases passed,
+    // but perspective needs the real width against the real distance, and that stub carried
+    // about a quarter of the turning error. Asked for 28 degrees it showed what 14 would, and
+    // this case passed with one point of margin over a reading wrong by 0.78 per cent, which
+    // is exactly the "merely nervous" it claimed to be distinguishing from.
+    //
+    // Angles from a sweep at this geometry: turning about the vertical axis is the one that
+    // averaging the horizontal edges cannot answer, and the gate falls at about 9 degrees of
+    // it against about 12 of tipping.
+    const tipped = await ask(70, 150, 148, { degrees: 20, axis: "pitch" });
+    expect(tipped.line, `tipping 20 degrees was not called tilted: ${tipped.line}`).toContain("TILTED");
+    expect(tipped.recordable, "a reading tipped 20 degrees could still be recorded").toBe(false);
 
-    // And it is not simply refusing everything: square on, the same geometry records.
-    const square = await ask(70, 150, 148, 0);
-    expect(square.line).toContain("square on");
+    const turned = await ask(70, 150, 148, { degrees: 20, axis: "yaw" });
+    expect(turned.line, `turning 20 degrees was not called tilted: ${turned.line}`).toContain("TILTED");
+    expect(turned.recordable, "a reading turned 20 degrees could still be recorded").toBe(false);
+
+    // And it is not refusing everything: square on, the same geometry records.
+    const square = await ask(70, 150, 148);
+    expect(square.line).toContain("square on and centred");
     expect(square.recordable).toBe(true);
-  }, 180_000);
+  }, 240_000);
+
+  it("refuses a reading taken with the mark off to one side, which evenness cannot see", async () => {
+    // Evenness compares opposite edges, so it is blind to where in the frame the mark sits.
+    // Swept at this geometry with 5 degrees of turn throughout, the evenness held at 0.92
+    // from centred to a third of the way out while the reading went from -0.13 per cent to
+    // -4.4, which is larger than anything the evenness gate catches.
+    const centred = await ask(70, 150, 148, { degrees: 5, axis: "yaw" });
+    expect(centred.line).toContain("square on and centred");
+    expect(centred.recordable).toBe(true);
+
+    const aside = await ask(70, 150, 148, { degrees: 5, axis: "yaw" }, 40);
+    expect(aside.line, `an off-centre reading was not called out: ${aside.line}`).toContain(
+      "OFF TO ONE SIDE",
+    );
+    expect(aside.recordable, "a reading taken from the side could still be recorded").toBe(false);
+  }, 240_000);
 
   it("will not turn an empty measurement box into a number", async () => {
     if (!browser) throw new Error(`chromium could not be launched: ${launchFailure}`);
