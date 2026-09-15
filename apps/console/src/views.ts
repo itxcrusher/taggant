@@ -8,13 +8,22 @@
  */
 
 import type { Report } from "@taggant/compiler";
+import { manifestSchema } from "@taggant/manifest";
 import { DEFAULT_SCAN_DISTANCE_MM } from "./operations.js";
+
 import {
   type DraftManifest,
   ID_PATTERN_ATTRIBUTE,
   type Listed,
   TARGET_ID_PATTERN_ATTRIBUTE,
 } from "./workspace.js";
+/**
+ * The ceilings the manifest format sets, read from the schema so that the pages, the
+ * request handlers and the schema itself cannot disagree. A form offered past its ceiling
+ * is a button whose only outcome is a refusal.
+ */
+const MOST_TARGETS = manifestSchema.properties.targets.maxItems;
+const MOST_CONTENT = manifestSchema.$defs.target.properties.content.maxItems;
 
 /** HTML escaping, for text and for attribute values alike. */
 export function esc(value: unknown): string {
@@ -218,7 +227,10 @@ export function experiencePage(view: ExperienceView): string {
 
   <details class="record">
     <summary>Add content to this target</summary>
-    <form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/content" enctype="multipart/form-data" class="gap-md">
+    ${
+      target.contentCount >= MOST_CONTENT
+        ? `<p class="quiet">This target shows ${MOST_CONTENT} pieces of content, which is as many as the manifest format allows.</p>`
+        : `<form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/content" enctype="multipart/form-data" class="gap-md">
       <div class="row bottom">
         <div class="field narrow">
           <label for="ct-${esc(target.id)}">Type</label>
@@ -235,7 +247,8 @@ export function experiencePage(view: ExperienceView): string {
         </div>
         <button type="submit">Add</button>
       </div>
-    </form>
+    </form>`
+    }
   </details>
 </section>`,
     )
@@ -254,7 +267,10 @@ ${
 }
 
 <h3>Add a target</h3>
-<form method="post" action="/e/${esc(view.id)}/targets" enctype="multipart/form-data" class="card gap-md">
+${
+  view.targets.length >= MOST_TARGETS
+    ? `<div class="empty">This experience holds ${MOST_TARGETS} targets, which is as many as the manifest format allows. Every one is compiled, published and held in the browser at once.</div>`
+    : `<form method="post" action="/e/${esc(view.id)}/targets" enctype="multipart/form-data" class="card gap-md">
   <div class="row bottom">
     <div class="field narrow">
       <label for="t-id">Target id</label>
@@ -271,7 +287,8 @@ ${
     <button class="primary" type="submit">Add</button>
   </div>
   <p class="quiet note">Printed width is what the artwork actually measures on the finished piece. The compiler compares it against the width the artwork needs and says so if the print would be too small to read.</p>
-</form>
+</form>`
+}
 
 <h3>Publish</h3>
 <p class="quiet small">Writes a folder that runs on its own: the entry page, the manifest, the compiled targets, the assets, and the runtime carried in. It does not call back here, so this console can be switched off afterwards.</p>

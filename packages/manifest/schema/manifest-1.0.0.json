@@ -38,9 +38,10 @@
       }
     },
     "targets": {
-      "description": "The artwork a camera recognises, and what is anchored to each piece of it. At least one, because a manifest with nothing to recognise describes nothing.",
+      "description": "The artwork a camera recognises, and what is anchored to each piece of it. At least one, because a manifest with nothing to recognise describes nothing. At most 64: every target is compiled, published and then held in the browser at once, and a piece of print with more than a few dozen recognisable areas on it is not a thing anyone designed.",
       "type": "array",
       "minItems": 1,
+      "maxItems": 64,
       "items": { "$ref": "#/$defs/target" }
     },
     "fallback": {
@@ -74,9 +75,10 @@
           "maximum": 5000
         },
         "content": {
-          "description": "What is shown when this target is found. At least one, because a target that recognises artwork and then shows nothing is not an experience.",
+          "description": "What is shown when this target is found. At least one, because a target that recognises artwork and then shows nothing is not an experience. At most 32: each piece is fetched and placed when the target is found, and every SVG among them costs a render at publish, so an unbounded list is a publish and a page with no bound either.",
           "type": "array",
           "minItems": 1,
+          "maxItems": 32,
           "items": { "$ref": "#/$defs/content" }
         }
       }

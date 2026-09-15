@@ -130,6 +130,11 @@ export async function prepareAsset(
     case "glb":
       return { bytes, extension: `.${kind}` };
     case "svg": {
+      if (bytes.length > LARGEST_SVG_BYTES) {
+        throw new Error(
+          `${source} is ${Math.round(bytes.length / (1024 * 1024))} MB of SVG, and the most this bundler will parse is ${LARGEST_SVG_BYTES / (1024 * 1024)} MB. A drawing that large is a photograph embedded in it; put the photograph in the bundle as its own asset, where it is copied rather than parsed.`,
+        );
+      }
       // The clock on one render, or what is left of the publish's budget, whichever is
       // shorter. Renders run one at a time and a manifest may name as many drawings as it
       // likes, so a publish is bounded as a whole and not only a drawing at a time.
@@ -287,6 +292,20 @@ export const RENDER_TIMEOUT_MS = 20_000;
 export const RENDER_BUDGET_MS = 120_000;
 
 /**
+ * The largest SVG this bundler will parse.
+ *
+ * Every other asset passes through: it is read and written, so a publish holds roughly the
+ * file and no more. An SVG is parsed, and the parse is the one place where a small input
+ * can cost a large amount of work. Measured, the read and the pipe together cost about
+ * three times the file (a 64 MB document took the publishing process from 54 to 194 MB of
+ * resident memory, linearly, with no blowup), and the XML parser refuses a single run of
+ * text past ten million characters anyway. Eight megabytes of text is not a drawing: it is
+ * a photograph somebody embedded, and that belongs in the bundle as its own asset, where
+ * it is copied rather than parsed.
+ */
+export const LARGEST_SVG_BYTES = 8 * 1024 * 1024;
+
+/**
  * The render process's script: beside this file once built, and in `dist` when this file
  * itself is running from source under the test runner.
  */
@@ -396,7 +415,7 @@ async function rasterise(
   // is, or entities expanding past what it allows.
   if (/code 114|huge|amplification|resource limit/i.test(why)) {
     throw new Error(
-      `${source} was refused by the XML parser for its size: a single run of text longer than ten million characters, which an embedded image of about 7 MB is, or entities expanding past its limit. Keep a large image as its own asset rather than embedding it, or export the artwork as a PNG.`,
+      `${source} was refused by the XML parser for reaching one of its limits: entities that expand past what it allows, or a single run of text longer than ten million characters. Neither is a thing a drawing does; if there is a large image in the file, keep it in the bundle as its own asset rather than embedding it.`,
     );
   }
   if (result.code !== 1) {

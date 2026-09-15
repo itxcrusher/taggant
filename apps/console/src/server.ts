@@ -13,6 +13,7 @@
 import { randomUUID } from "node:crypto";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { carriesItsDistance } from "@taggant/compiler";
+import { manifestSchema } from "@taggant/manifest";
 import { DEFAULT_SCAN_DISTANCE_MM, bundleDirFor, compile, publish, registerCode } from "./operations.js";
 import { STYLESHEET } from "./style.js";
 import { type Notice, type TargetView, errorPage, experiencePage, indexPage, page } from "./views.js";
@@ -26,6 +27,17 @@ import { type Experience, type Workspace, WorkspaceError, assertId, assertTarget
  * memory the process uses.
  */
 const MAX_BODY_BYTES = 256 * 1024 * 1024;
+
+/**
+ * How many targets an experience may hold, and how many pieces of content a target may,
+ * read out of the manifest schema rather than written here as well.
+ *
+ * The schema refuses more than this at the next save, which is correct and arrives as a
+ * validation error naming a JSON path. An operator adding artwork through a form should
+ * meet a sentence instead, before the upload is stored.
+ */
+const MOST_TARGETS = manifestSchema.properties.targets.maxItems;
+const MOST_CONTENT = manifestSchema.$defs.target.properties.content.maxItems;
 
 /**
  * The bound on a form that carries no file.
@@ -345,6 +357,16 @@ export function createConsole(options: ConsoleOptions): Server {
       }
       const file = form.get("artwork");
       if (!(file instanceof File) || file.size === 0) throw new WorkspaceError("no artwork was uploaded");
+      // Checked before the upload is stored, so a refusal does not leave a file on disk
+      // that nothing in the manifest names, and read out of the schema rather than written
+      // here twice. Without this the operator meets the ceiling as a validation error at
+      // the next save, which is a correct refusal in an unreadable form.
+      const existing = await workspace.read(id);
+      if (existing.manifest.targets.length >= MOST_TARGETS) {
+        throw new WorkspaceError(
+          `${id} already has ${existing.manifest.targets.length} targets, which is as many as the manifest format allows`,
+        );
+      }
       const source = await workspace.storeFile(
         id,
         "artwork",
@@ -357,6 +379,15 @@ export function createConsole(options: ConsoleOptions): Server {
       await workspace.update(id, (manifest) => {
         if (manifest.targets.some((target) => target.id === targetId)) {
           throw new WorkspaceError(`${id} already has a target called ${targetId}`);
+        }
+        // Again, inside the turn that writes. The check above reads before storing the
+        // upload so that a refusal leaves nothing behind; this one is the correct place,
+        // because two forms submitted at the same moment both read a manifest below the
+        // ceiling and only this runs with the write.
+        if (manifest.targets.length >= MOST_TARGETS) {
+          throw new WorkspaceError(
+            `${id} already has ${manifest.targets.length} targets, which is as many as the manifest format allows`,
+          );
         }
         return {
           ...manifest,
@@ -402,14 +433,26 @@ export function createConsole(options: ConsoleOptions): Server {
       }
       const file = form.get("file");
       if (!(file instanceof File) || file.size === 0) throw new WorkspaceError("no file was uploaded");
+      const holding = (await workspace.read(id)).manifest.targets.find(
+        (candidate) => candidate.id === targetId,
+      );
+      if (holding !== undefined && holding.content.length >= MOST_CONTENT) {
+        throw new WorkspaceError(
+          `${targetId} already shows ${holding.content.length} pieces of content, which is as many as the manifest format allows`,
+        );
+      }
       const src = await workspace.storeFile(id, "media", file.name, new Uint8Array(await file.arrayBuffer()));
       await workspace.update(id, (manifest) => ({
         ...manifest,
-        targets: manifest.targets.map((target) =>
-          target.id === targetId
-            ? { ...target, content: [...target.content, { type: type as "image", src }] }
-            : target,
-        ),
+        targets: manifest.targets.map((target) => {
+          if (target.id !== targetId) return target;
+          if (target.content.length >= MOST_CONTENT) {
+            throw new WorkspaceError(
+              `${targetId} already shows ${target.content.length} pieces of content, which is as many as the manifest format allows`,
+            );
+          }
+          return { ...target, content: [...target.content, { type: type as "image", src }] };
+        }),
       }));
       redirect(response, `/e/${encodeURIComponent(id)}`, {
         tone: "good",

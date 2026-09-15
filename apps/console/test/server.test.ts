@@ -309,6 +309,50 @@ not finished`;
     expect(await pageAt("/e/hostile-art")).toContain("front");
   }, 120_000);
 
+  it("says the ceiling in a sentence rather than as a validation error, and stores nothing", async () => {
+    // The manifest format caps an experience at 64 targets and a target at 32 pieces of
+    // content, because every one is compiled, published and held in a browser at once, and
+    // every SVG among them costs a render at publish. Without this the operator meets that
+    // cap as a schema error naming a JSON path, after their upload is already on disk.
+    // The numbers come from the schema in both places, so there is one of each.
+    const { manifestSchema } = await import("@taggant/manifest");
+    const most = manifestSchema.properties.targets.maxItems;
+    await post("/experiences", new URLSearchParams({ id: "full-up", title: "Full up" }));
+    const saved = await workspace.read("full-up");
+    await workspace.save("full-up", {
+      ...saved.manifest,
+      targets: Array.from({ length: most }, (_, index) => ({
+        id: `t-${String(index).padStart(3, "0")}`,
+        source: "artwork/a.png",
+        physicalWidthMm: 120,
+        content: [{ type: "image" as const, src: "media/o.png" }],
+      })),
+    });
+
+    // The page does not offer the form at all, which is the first place the ceiling should
+    // appear: a button whose only outcome is a refusal is worse than no button.
+    const full = await pageAt("/e/full-up");
+    expect(full).toContain(`holds ${most} targets`);
+    expect(full).not.toContain('action="/e/full-up/targets"');
+
+    // And the request is refused anyway, because a page is not a control.
+    const form = new FormData();
+    form.append("targetId", "one-too-many");
+    form.append("physicalWidthMm", "120");
+    form.append("artwork", new Blob([await artwork()], { type: "image/png" }), "extra.png");
+    const response = await post("/e/full-up/targets", form);
+    const said = await fetch(`${origin}${response.headers.get("location")}`);
+    expect(await said.text()).toContain(`already has ${most} targets`);
+
+    // And the refusal came before the upload was stored, so nothing is left on disk that
+    // no manifest names.
+    const after = await workspace.read("full-up");
+    expect(after.manifest.targets).toHaveLength(most);
+    const { readdir } = await import("node:fs/promises");
+    const artworkFolder = await readdir(join(after.directory, "artwork")).catch(() => [] as string[]);
+    expect(artworkFolder).not.toContain("extra.png");
+  }, 60_000);
+
   it("keeps every target when several are added at the same moment", async () => {
     await post("/experiences", new URLSearchParams({ id: "at-once", title: "At once" }));
     const png = await artwork();

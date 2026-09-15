@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-import { LARGEST_DECLARED_EDGE, RASTER_EDGE, prepareAsset } from "../src/assets.js";
+import { LARGEST_DECLARED_EDGE, LARGEST_SVG_BYTES, RASTER_EDGE, prepareAsset } from "../src/assets.js";
 
 /**
  * What the bundler decides about a file from its bytes, and what it says when it refuses.
@@ -118,15 +118,36 @@ describe("what an SVG says about its own size", () => {
     );
   }, 60_000);
 
-  it("names the XML parser's limit when a file embeds a photograph", async () => {
-    // A single run of text past ten million characters, which an embedded image of about
-    // 7 MB is. The parser calls this a corrupt header; the file is not corrupt, and an
-    // embedded raster is the most ordinary thing in a handed-over overlay.
-    const embedded = SVG(
-      `<image href="data:image/png;base64,${"A".repeat(10_500_000)}" width="400" height="100"/>`,
-    );
-    await expect(prepareAsset("overlay.svg", embedded)).rejects.toThrow(/ten million characters/);
-  }, 120_000);
+  it("names the XML parser's own limit when entities expand past it", async () => {
+    // The parser reports its ceilings as a corrupt header, and the file is not corrupt.
+    // A single run of text past ten million characters was one way to reach one of them,
+    // which the size limit below now catches first; nested entities are the other, and a
+    // few hundred bytes of them reach it, so that path stays open and is named here.
+    const nested = [
+      '<!ENTITY a "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">',
+      '<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">',
+      '<!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">',
+      '<!ENTITY d "&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;">',
+      '<!ENTITY e "&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;">',
+      '<!ENTITY f "&e;&e;&e;&e;&e;&e;&e;&e;&e;&e;">',
+    ].join("");
+    const bomb = Buffer.concat([
+      Buffer.from(`<!DOCTYPE svg [${nested}]>`),
+      SVG('<text x="10" y="50">&f;</text>'),
+    ]);
+    expect(bomb.length).toBeLessThan(1024);
+    await expect(prepareAsset("overlay.svg", bomb)).rejects.toThrow(/XML parser/);
+  }, 60_000);
+
+  it("refuses more SVG than a drawing ever is, and says where a photograph belongs", async () => {
+    // Every other asset passes through, so a publish holds roughly the file. An SVG is
+    // parsed, which is the one place a small input buys a lot of work, and the read and the
+    // pipe together cost about three times the file. Eight megabytes of text is not a
+    // drawing; it is an embedded photograph, which belongs in the bundle as its own asset.
+    const bulk = SVG(`<!--${"x".repeat(LARGEST_SVG_BYTES)}--><rect width="400" height="100" fill="#c33"/>`);
+    expect(bulk.length).toBeGreaterThan(LARGEST_SVG_BYTES);
+    await expect(prepareAsset("overlay.svg", bulk)).rejects.toThrow(/the most this bundler will parse/);
+  }, 60_000);
 
   /** Where the drawing lands in the raster: the box of pixels that are not transparent. */
   async function drawnBox(

@@ -58,7 +58,7 @@ A manifest must name at least one target, and a target must show at least one th
 | `id` | required | Identifies the experience. It becomes the name of the folder a published bundle is written to, and so part of the address that folder is served from. Once a code carrying that address has been printed, the id is fixed. Lower case letters, digits and hyphens, three to sixty four characters. |
 | `title` | | A name for people. Nothing renders it; it is what makes a list of manifests readable. |
 | `subject` | | What physical thing the experience belongs to: `kind` is one of `product`, `print`, `artwork`, `other`, and `reference` is whatever the thing is called wherever it is already catalogued. **Nothing in this project reads it.** It is here so a manifest carries its own answer to what it is for, without a database alongside it to ask. |
-| `targets` | required | The artwork a camera recognises. At least one. |
+| `targets` | required | The artwork a camera recognises. At least one, and at most 64: every target is compiled, published and then held in the browser at once. |
 | `fallback` | | Where a scan goes when the experience cannot be shown at all, such as a browser that will not open a camera. Held to `http` and `https`: a manifest is authored data and must not be able to carry script into a browser. |
 
 ### A target
@@ -68,7 +68,7 @@ A manifest must name at least one target, and a target must show at least one th
 | `id` | required | Identifies the target within the experience. A compiled target file is matched to it by this name, so it is the one thing the compiler's output and this manifest have to agree on. Same shape as the experience id. |
 | `source` | required | Path to the artwork this target was compiled from, relative to the manifest. Carried so the target can be built again from the thing it was made from, rather than from whoever remembers which file it was. |
 | `physicalWidthMm` | required | How wide the artwork is on the finished piece, in millimetres. **This is the number the print readiness report is measured against.** The compiler says the smallest width the artwork can still be read at from a stated distance; a piece printed narrower than that will not be recognised, whatever else is right about it. |
-| `content` | required | What is shown when the target is found. At least one. |
+| `content` | required | What is shown when the target is found. At least one, and at most 32: each piece is fetched and placed when the target is found, and every SVG among them costs a render when the bundle is published. |
 
 ### A piece of content
 
