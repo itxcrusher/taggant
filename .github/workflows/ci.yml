@@ -70,7 +70,7 @@ jobs:
           # Colour codes stripped here rather than relying on NO_COLOR above, because a
           # reporter that ignores it would make this count zero and the step would then be
           # checking nothing, which is the failure it exists to prevent.
-          ran=$(sed "s/\[[0-9;]*m//g" test-output.txt | grep -aoE "Tests +[0-9]+ passed" | grep -aoE "[0-9]+" | awk "{n+=\$1} END {print n+0}")
+          ran=$(sed "s/\x1b\[[0-9;]*m//g" test-output.txt | grep -aoE "Tests +[0-9]+ passed" | grep -aoE "[0-9]+" | awk "{n+=\$1} END {print n+0}")
           said=$(grep -aoE "exercised by [0-9]+ tests" README.md | grep -aoE "[0-9]+")
           echo "this run: $ran, the README: $said"
           if [ -z "$ran" ] || [ "$ran" = "0" ]; then
