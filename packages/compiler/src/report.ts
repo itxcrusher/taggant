@@ -167,6 +167,22 @@ export function distanceBehind(report: unknown): number | null {
   return distance >= 50 && distance <= 5000 ? distance : null;
 }
 
+/**
+ * The widest a piece can be declared in a manifest, and so the widest answer worth giving.
+ *
+ * `physicalWidthMm` is capped at 5000 in `packages/manifest/schema/manifest-1.0.0.json`, and
+ * the scan distance this accepts goes to ten metres, so the report could name a width no
+ * manifest can carry: the example artwork read from ten metres asks for 7699 mm and was
+ * called ready for press, which is a verdict nobody can act on. A piece declared at the
+ * largest legal width is then refused by the bundler for being too narrow, which is the
+ * first anyone hears of it.
+ *
+ * Not imported from the manifest package, because this one does not depend on it and a
+ * dependency for one number is worse than a number with a test over it. There is a test that
+ * reads the schema and fails if the two stop agreeing.
+ */
+export const WIDEST_DECLARABLE_MM = 5000;
+
 const MIN_FEATURES = 60;
 const MIN_AREAS = 8;
 const GRID = 4;
@@ -232,7 +248,7 @@ export function buildReport(input: ReportInput): Report {
   if (repetition !== null && repetition > MAX_REPETITION) {
     reasons.push("the artwork repeats itself, so content could be placed on the wrong copy");
   }
-  const pass = reasons.length === 0;
+  let pass = reasons.length === 0;
 
   // The smallest size that still holds up. A camera further away than this puts fewer
   // pixels across the mark than any size the target covers, and nothing will match.
@@ -265,7 +281,17 @@ export function buildReport(input: ReportInput): Report {
   // and standing back puts the same pixels across the same mark. What a large `pixelsNeeded`
   // really says is that the distance asked for is optimistic, and the width already says
   // that, in millimetres, which is the unit the person reading it works in.
-  const minimumWidthMm = pass ? Math.ceil(pixelsNeeded / pixelsPerMm) : null;
+  let minimumWidthMm = pass ? Math.ceil(pixelsNeeded / pixelsPerMm) : null;
+  // A width no manifest can declare is not an answer. Said here rather than left to the
+  // publish gate, because this is where "ready for press" is decided and a printer reading
+  // that sentence has no reason to doubt it.
+  if (minimumWidthMm !== null && minimumWidthMm > WIDEST_DECLARABLE_MM) {
+    pass = false;
+    minimumWidthMm = null;
+    reasons.push(
+      `it would have to be printed ${Math.ceil(pixelsNeeded / pixelsPerMm)} mm wide to be read from ${scanDistanceMm} mm, which is wider than any piece this format can describe. Read it from closer.`,
+    );
+  }
 
   return {
     score: scoreOf(featureCount / MIN_FEATURES, areasWithFeatures / MIN_AREAS, pass),

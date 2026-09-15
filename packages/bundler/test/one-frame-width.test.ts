@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { RECOGNISED_PIXELS_ACROSS_FRAME } from "@taggant/compiler";
+import { RECOGNISED_PIXELS_ACROSS_FRAME, WIDEST_DECLARABLE_MM } from "@taggant/compiler";
 import { DEFAULT_PROCESS_WIDTH } from "@taggant/runtime";
 import { describe, expect, it } from "vitest";
 
@@ -25,6 +25,21 @@ describe("the width a frame is recognised at", () => {
       DEFAULT_PROCESS_WIDTH,
       "the runtime recognises at a different width than the compiler computes print widths for, so every width the compiler prints is wrong by the ratio between them",
     ).toBe(RECOGNISED_PIXELS_ACROSS_FRAME);
+  });
+
+  it("caps the print width at the widest a manifest can declare", async () => {
+    // The compiler refuses to name a width wider than a manifest could carry, and it holds
+    // that limit as its own constant rather than depending on the manifest package for one
+    // number. So the two are compared here, in the package that sees both.
+    const schema = JSON.parse(
+      await readFile(join(ROOT, "packages/manifest/schema/manifest-1.0.0.json"), "utf8"),
+    );
+    const declared = schema?.$defs?.target?.properties?.physicalWidthMm?.maximum;
+    expect(declared, "the schema no longer caps physicalWidthMm").toBeTypeOf("number");
+    expect(
+      WIDEST_DECLARABLE_MM,
+      "the compiler's ceiling and the widest width a manifest can declare have drifted apart",
+    ).toBe(declared);
   });
 
   it("is the same number on the page that measures a camera", async () => {

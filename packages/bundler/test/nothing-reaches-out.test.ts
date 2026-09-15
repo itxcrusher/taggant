@@ -71,11 +71,25 @@ describe("a published bundle", () => {
     return out;
   }
 
-  it("carries no absolute address in any file it ships", async () => {
+  it("fetches nothing from the network in any file it ships", async () => {
+    // Written deliberately differently from the rule it is checking. The first version of
+    // this scanned with a copy of the implementation's own regular expression, so every
+    // bypass of that expression passed here too: it agreed with the code rather than with
+    // the claim, which is the exact shape of the defect this whole month has been about.
+    //
+    // This looks for a host instead. Anything that names one, in any spelling, has to be
+    // accounted for: a namespace, which is an identifier a browser never requests, or the
+    // fallback the author wrote into the manifest, which is a destination for a reader and
+    // not a resource the page loads.
     const dir = await workspace();
     const out = join(dir, "bundle");
+    const manifest = {
+      ...manifestFor("overlay.svg"),
+      // Included on purpose: a bundle that declares one is the case the claim has to survive.
+      fallback: "https://example.org/where-this-goes",
+    };
     await bundle({
-      manifest: manifestFor("overlay.svg"),
+      manifest,
       targets: { front: TARGET },
       sourceDir: join(dir, "src"),
       outDir: out,
@@ -84,18 +98,23 @@ describe("a published bundle", () => {
 
     const files = await everyFile(out);
     expect(files.length, "the bundle shipped nothing").toBeGreaterThan(5);
-    const offenders: string[] = [];
+    const unaccounted: string[] = [];
     for (const file of files) {
       const text = await readFile(file, "utf8").catch(() => "");
-      // An XML namespace is an identifier, not a request. It is never fetched, and it is in
-      // every SVG anything has ever exported, so it is removed before looking rather than
-      // excused afterwards.
-      const withoutNamespaces = text.replace(/xmlns(?::[a-z0-9-]+)?\s*=\s*["'][^"']*["']/gi, "");
-      for (const found of withoutNamespaces.matchAll(/(?:https?:)?\/\/[^\s"'<>)]+/gi)) {
-        offenders.push(`${file.slice(out.length + 1)}: ${found[0]}`);
+      for (const found of text.matchAll(
+        /[a-z][a-z0-9+.-]*:\/\/[^\s"'<>)]+|(?<![a-z:])\/\/[a-z0-9][^\s"'<>)]*/gi,
+      )) {
+        const address = found[0];
+        const at = found.index ?? 0;
+        // An XML namespace: the address is the value of an xmlns attribute.
+        const before = text.slice(Math.max(0, at - 80), at);
+        if (/xmlns(:[a-z0-9-]+)?\s*=\s*["']?$/i.test(before)) continue;
+        // The fallback the author declared, which the runtime navigates to and never fetches.
+        if (address.startsWith(manifest.fallback)) continue;
+        unaccounted.push(`${file.slice(out.length + 1)}: ${address}`);
       }
     }
-    expect(offenders, `the bundle reaches for the network: ${offenders.join(", ")}`).toEqual([]);
+    expect(unaccounted, `the bundle reaches for the network: ${unaccounted.join(", ")}`).toEqual([]);
   }, 60_000);
 
   it("is refused outright when an asset would fetch from somewhere else", async () => {
@@ -115,7 +134,7 @@ describe("a published bundle", () => {
         runtimeDir: RUNTIME_DIST,
       }),
       "an SVG that fetches a remote image was published",
-    ).rejects.toThrow(/a reference to https:\/\/tracker\.example\.net/);
+    ).rejects.toThrow(/href="https:\/\/tracker\.example\.net[^"]*", which is not inside the bundle/);
   }, 60_000);
 
   it("still publishes an SVG whose only absolute address is its own namespace", async () => {
@@ -143,22 +162,22 @@ describe("a published bundle", () => {
 
     // What each named item looks like in a file, and the words the bundler answers with.
     const shapes: Array<{ named: RegExp; svg: string; refusedAs: RegExp }> = [
-      { named: /script element/, svg: "<script>1</script>", refusedAs: /a script element/ },
-      { named: /event handler/, svg: '<rect onload="1" width="1" height="1"/>', refusedAs: /event handler/ },
+      { named: /script element/, svg: "<script>1</script>", refusedAs: /<script> element/ },
+      { named: /event handler/, svg: '<rect onload="1" width="1" height="1"/>', refusedAs: /onload handler/ },
       {
         named: /javascript:/,
         svg: '<a href="javascript:1"><rect width="1" height="1"/></a>',
-        refusedAs: /javascript: link/,
+        refusedAs: /href="javascript:/,
       },
       {
         named: /foreignObject/,
         svg: "<foreignObject><p>x</p></foreignObject>",
-        refusedAs: /a foreignObject/,
+        refusedAs: /<foreignObject> element/,
       },
       {
         named: /reference to another host/,
         svg: '<image href="https://tracker.example.net/b.png" width="1" height="1"/>',
-        refusedAs: /a reference to/,
+        refusedAs: /which is not inside the bundle/,
       },
     ];
 
@@ -208,6 +227,6 @@ describe("a published bundle", () => {
         runtimeDir: RUNTIME_DIST,
       }),
       "a protocol-relative reference was published",
-    ).rejects.toThrow(/a reference to/);
+    ).rejects.toThrow(/which is not inside the bundle/);
   }, 60_000);
 });

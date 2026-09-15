@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, realpath } from "node:fs/promises";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { extname, join, normalize, resolve, sep } from "node:path";
+import { whyNotADrawing } from "./svg.js";
 
 export interface CopiedAsset {
   /** The path as the manifest wrote it. */
@@ -28,61 +29,53 @@ export async function copyAsset(source: string, sourceDir: string, outDir: strin
 
   const absolute = await realWithin(sourceDir, file);
   const bytes = await readFile(absolute);
-  if (extname(file).toLowerCase() === ".svg") refuseActiveSvg(source, bytes);
+  refuseUnsafeAsset(source, file, bytes);
   const digest = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
   const name = `${digest}${extname(file).toLowerCase()}`;
   const assets = join(outDir, "assets");
   await mkdir(assets, { recursive: true });
-  await copyFile(absolute, join(assets, name));
+  // The bytes that were read, not the file they came from. This was `copyFile`, which opens
+  // the source again: the checked bytes and the published bytes were two reads of a path,
+  // and anything that rewrote it in between shipped unchecked content under the hash of
+  // content it no longer had. The console accepts uploads, so that window is reachable.
+  await writeFile(join(assets, name), bytes);
   return { from: source, to: `assets/${name}${fragment}`, bytes: bytes.length };
 }
 
 /**
- * An SVG is a document, not a picture, and it can carry script.
+ * Refuse an asset a browser would treat as a document rather than a picture.
  *
- * The runtime loads content through an `img` element, which does not run script, so this
- * is not reachable through the experience. Navigating straight to the asset is: the file
- * sits at its own address in the bundle, and a browser opening it runs whatever is inside
- * on the bundle's own origin.
+ * This was gated on the `.svg` extension, and a manifest may name any file: an `.html` or
+ * `.xhtml` asset carrying a script was copied in untouched and served as a document by any
+ * static host, at its own address on the bundle's origin. So the decision is made on what
+ * the bytes are, not on what the file is called.
  *
- * This was written down as something only a header on the host could fix. That is wrong in
- * a way that matters here, because a bundle is meant to be served by any static host,
- * including one that sets no headers, and the console accepts uploads: an operator can be
- * handed an SVG by a designer or a client and publish it onto their own domain without
- * ever opening it.
- *
- * So it is refused rather than stripped. Stripping would quietly change somebody's artwork
- * and publish a thing they did not draw; refusing tells them which file and what is in it.
+ * Only SVG is examined and allowed through. Every other document format is refused whole:
+ * this bundler has no business publishing HTML nobody wrote for it, and the runtime cannot
+ * show one anyway.
  */
-function refuseActiveSvg(source: string, bytes: Buffer): void {
-  // Comments first, or a commented-out handler reads as live and an author is refused for
-  // nothing. Text nodes are not stripped: script inside a `title` is still inside the file
-  // a browser parses.
-  const text = bytes.toString("utf8").replace(/<!--[\s\S]*?-->/g, "");
-  const found: string[] = [];
-  if (/<\s*script[\s>/]/i.test(text)) found.push("a script element");
-  // Any `on*` attribute is an event handler. Matched on the attribute position rather than
-  // anywhere in the text, so a word like `one=` inside a path or a title does not trip it.
-  if (/\son[a-z]+\s*=\s*["']/i.test(text)) found.push("an event handler attribute");
-  if (/(?:href|xlink:href)\s*=\s*["']\s*javascript:/i.test(text)) found.push("a javascript: link");
-  // Anything inside this is HTML, parsed as HTML, script included.
-  if (/<\s*foreignObject[\s>/]/i.test(text)) found.push("a foreignObject");
-  // A reference to somewhere else, which is a different failure from the ones above and is
-  // the one this project is least able to allow. An `<image href="https://...">` is not
-  // script and runs nothing, so every check above passes it; it is fetched anyway, on every
-  // scan, by every reader. That breaks the whole claim: a bundle is supposed to outlive the
-  // service that served it, and this one is a request to somebody else's host that can be
-  // logged, changed or switched off. The tool printed "It needs nothing else" over a folder
-  // carrying exactly this, and the README said nothing in it reaches for the network.
-  //
-  // The XML namespace is not a fetch. It is an identifier, never requested, and it is in
-  // every SVG anything has ever exported, so it is named rather than matched loosely.
-  const withoutNamespaces = text.replace(/xmlns(?::[a-z0-9-]+)?\s*=\s*["'][^"']*["']/gi, "");
-  const remote = withoutNamespaces.match(/(?:https?:)?\/\/[^\s"'<>)]+/i);
-  if (remote) found.push(`a reference to ${remote[0]}`);
-  if (found.length === 0) return;
+function refuseUnsafeAsset(source: string, file: string, bytes: Buffer): void {
+  const head = bytes
+    .subarray(0, 1024)
+    .toString("utf8")
+    .replace(/^\uFEFF/, "")
+    .trimStart()
+    .toLowerCase();
+  const extension = extname(file).toLowerCase();
+  const looksLikeMarkup = head.startsWith("<?xml") || head.startsWith("<!doctype") || head.startsWith("<");
+  if (!looksLikeMarkup && ![".svg", ".html", ".xhtml", ".xml"].includes(extension)) return;
+
+  const isSvg = extension === ".svg" || /<\s*(?:[\w.:-]*:)?svg[\s>]/.test(head);
+  if (!isSvg) {
+    throw new Error(
+      `${source} is a document rather than a picture, and a bundle serves every asset at its own address on its own origin. Export the artwork as a PNG or an SVG.`,
+    );
+  }
+
+  const wrong = whyNotADrawing(bytes);
+  if (wrong.length === 0) return;
   throw new Error(
-    `${source} is an SVG carrying ${found.join(" and ")}, and a bundle has to work with nothing else running. Take it out, or export the artwork as a PNG.`,
+    `${source} is an SVG carrying ${wrong.join(" and ")}, and a bundle has to work with nothing else running. Take it out, or export the artwork as a PNG.`,
   );
 }
 

@@ -41,10 +41,18 @@ describe("every tracked text file", () => {
       ".jpeg",
       ".gif",
       ".webp",
+      ".avif",
       ".ico",
       ".mp4",
+      ".mp3",
+      ".wav",
       ".woff",
       ".woff2",
+      ".ttf",
+      ".otf",
+      ".wasm",
+      ".zip",
+      ".gz",
       ".pdf",
     ]);
     const offenders: string[] = [];
@@ -57,7 +65,20 @@ describe("every tracked text file", () => {
       for (let index = 0; index < text.length; index++) {
         const code = text.charCodeAt(index);
         const ordinary = code === 9 || code === 10 || code === 13;
-        if (!ordinary && (code < 32 || code === 127)) {
+        // The C0 range is where the backspace came from. It is not the only way to put an
+        // invisible character into a pattern, and the others are likelier, because they
+        // survive a copy from a web page or a document where a backspace does not: a zero
+        // width space in front of the same pattern disables it identically.
+        const invisible =
+          code === 0x200b || // zero width space
+          code === 0x200c || // zero width non joiner
+          code === 0x200d || // zero width joiner
+          code === 0x2060 || // word joiner
+          code === 0xfeff || // byte order mark, anywhere including the head of a file
+          code === 0x00a0 || // no break space, which looks exactly like an indent
+          (code >= 0x202a && code <= 0x202e) || // bidirectional overrides
+          (code >= 0x2066 && code <= 0x2069);
+        if (!ordinary && (code < 32 || code === 127 || invisible)) {
           const line = text.slice(0, index).split("\n").length;
           offenders.push(`${path}:${line} holds U+${code.toString(16).padStart(4, "0").toUpperCase()}`);
           break;
