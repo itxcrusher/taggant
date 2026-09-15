@@ -39,10 +39,21 @@ describe("the third-party licence inventory", () => {
           // The row has to carry the name, the version and the licence together. A file
           // that names the package under an old version or an old licence is the failure
           // this exists to catch, so a name alone is not enough.
-          const row = new RegExp(
+          // A platform package is matched against its family row: `sharp` declares one
+          // optional package per operating system and architecture, the package manager
+          // installs only the ones for the machine it is on, and the first version of the
+          // inventory listed the Windows one and was caught by this test on its first push
+          // to the Linux runner. The family row carries the version and the licence, which
+          // are checked exactly; only the platform part of the name is left free.
+          const family = new RegExp(
+            `\\|\\s*\`${literal(familyOf(pkg.name))}\`\\s*\\|\\s*${literal(version)}\\s*\\|\\s*${literal(licence)}\\s*\\|`,
+          );
+          const plain = new RegExp(
             `\\|\\s*\`${literal(pkg.name)}\` ${literal(version)}\\s*\\|\\s*${literal(licence)}\\s*\\|`,
           );
-          if (!row.test(inventory)) wrong.push(`${pkg.name} ${version} (${licence})`);
+          if (!family.test(inventory) && !plain.test(inventory)) {
+            wrong.push(`${pkg.name} ${version} (${licence})`);
+          }
         }
       }
     }
@@ -86,6 +97,22 @@ describe("the third-party licence inventory", () => {
     }
   });
 });
+
+/**
+ * The inventory row a platform package belongs to. Everything else is its own row.
+ *
+ * `@img/sharp-libvips-linux-arm` is one patch release ahead of its siblings and has a row of
+ * its own; the rest of the libvips packages share one; the Windows prebuilts share one,
+ * because theirs carry libvips inside and so name both licences; every other prebuilt
+ * shares the last.
+ */
+function familyOf(name: string): string {
+  if (name === "@img/sharp-libvips-linux-arm") return name;
+  if (name.startsWith("@img/sharp-libvips-")) return "@img/sharp-libvips-<os>-<arch>";
+  if (name.startsWith("@img/sharp-win32-")) return "@img/sharp-win32-<arch>";
+  if (name.startsWith("@img/sharp-")) return "@img/sharp-<os>-<arch>";
+  return name;
+}
 
 function literal(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
