@@ -124,7 +124,15 @@ describe("the whole path, driven the way the pages drive it", () => {
 
     const content = new FormData();
     content.append("type", "video");
-    content.append("file", new Blob([Buffer.from("not really a video")], { type: "video/mp4" }), "pour.mp4");
+    // The bytes say MP4, which is what the bundler reads to decide what ships; a stand-in
+    // is refused by name and the publish below would then write nothing. Nothing plays it.
+    const mp4 = Buffer.concat([
+      Buffer.from([0, 0, 0, 0x18]),
+      Buffer.from("ftypisom"),
+      Buffer.from([0, 0, 0, 0]),
+      Buffer.from("isommp41"),
+    ]);
+    content.append("file", new Blob([mp4], { type: "video/mp4" }), "pour.mp4");
     expect((await post("/e/botanica-500/targets/front-panel/content", content)).status).toBe(303);
 
     page = await pageAt("/e/botanica-500");

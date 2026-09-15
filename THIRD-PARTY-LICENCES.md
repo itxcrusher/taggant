@@ -18,7 +18,7 @@ Nothing from outside this repository. The runtime a bundle carries is built from
 | `@taggant/manifest` | `ajv` 8.17.1 | MIT | wherever a manifest is validated: the compiler, the bundler and the console. Not the runtime, which reads a manifest the bundler already validated |
 | | `ajv-formats` 3.0.1 | MIT | with `ajv` |
 | `@taggant/compiler` | `sharp` 0.33.5 | Apache-2.0 | on the machine that compiles artwork, and nowhere else. Decodes and rescales print files |
-| `@taggant/bundler` | workspace packages only | | on the machine that publishes |
+| `@taggant/bundler` | `sharp` 0.33.5 | Apache-2.0 | on the machine that publishes. Renders every SVG asset to a PNG, so no document ever ships; the same `sharp` the compiler uses, one install |
 | `@taggant/console` | workspace packages only | | on the operator's machine or in their container |
 
 ## Everything `ajv` brings with it
@@ -62,6 +62,10 @@ Read from the runner (Linux x64) and this machine (Windows x64). The Mac rows fo
 ## The one licence worth a sentence
 
 `sharp` links `libvips`, which is LGPL-3.0-or-later, through a prebuilt platform package. The LGPL applies to the library, is satisfied by dynamic linking, and reaches nothing in this repository. It runs only on the machine compiling artwork and ships to no reader. Nothing here modifies `libvips`.
+
+## The example artwork
+
+The lettering in `examples/postcard/overlay.svg` is IBM Plex Mono Medium, under the SIL Open Font License 1.1, kept as outlines rather than as text so that the overlay renders to the same pixels on every machine that publishes it. The font itself is not in this repository and nothing here depends on it.
 
 ## This repository
 

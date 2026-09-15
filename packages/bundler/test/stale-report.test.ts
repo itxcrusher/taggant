@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import { bundle } from "../src/bundle.js";
 
@@ -26,7 +27,13 @@ describe("a compiled target from an older build", () => {
     scratches.push(dir);
     const sourceDir = join(dir, "src");
     await mkdir(sourceDir, { recursive: true });
-    await writeFile(join(sourceDir, "art.png"), Buffer.from("not really a png"));
+    // A real PNG: an asset is identified by its bytes, and a stand-in is refused by name.
+    await writeFile(
+      join(sourceDir, "art.png"),
+      await sharp({ create: { width: 4, height: 4, channels: 3, background: "#c33" } })
+        .png()
+        .toBuffer(),
+    );
     return { sourceDir, outDir: join(dir, "out"), runtimeDir: RUNTIME_DIST };
   }
 

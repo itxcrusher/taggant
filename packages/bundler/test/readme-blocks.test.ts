@@ -51,9 +51,11 @@ describe("what the README says these tools print", () => {
     ]);
 
     const readme = await readFile(join(REPO, "README.md"), "utf8");
-    // The asset line names a file by the hash of its own content and states its size. Both
-    // are exactly the kind of figure that goes stale without anyone noticing.
-    const asset = stdout.match(/overlay\.svg -> assets\/[0-9a-f]+\.svg \(\d+ bytes\)/)?.[0];
+    // The asset line names a file by the hash of the pixels the SVG rendered to and states
+    // their size. Both are exactly the kind of figure that goes stale without anyone
+    // noticing, and both hold on every machine only because the example's lettering is
+    // outlines rather than text set in whatever font the machine has.
+    const asset = stdout.match(/overlay\.svg -> assets\/[0-9a-f]+\.png \(\d+ bytes\)/)?.[0];
     expect(asset, `the bundler no longer prints an asset line: ${stdout}`).toBeDefined();
     expect(readme, `the README does not say: ${asset}`).toContain(asset ?? "");
 

