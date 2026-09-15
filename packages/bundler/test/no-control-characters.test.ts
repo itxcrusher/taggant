@@ -24,44 +24,86 @@ const REPO = join(dirname(fileURLToPath(import.meta.url)), "../../..");
  *
  * Tabs, newlines and carriage returns are ordinary text. Everything else in that range is
  * something nobody typed on purpose.
+ *
+ * The second sweep in this file is over the same files for a credential. Nothing in the
+ * repository needs a secret: no program in it reads one, and the services are configured
+ * by flags. That was a fact about the code and not a property anything enforced, and the
+ * way it stops being true is familiar: a key pasted into a script to try something,
+ * committed with the script, and live in every clone from then on. The sweep refuses the
+ * shapes that are unmistakable, the fixed prefixes vendors put on their keys so that they
+ * can be recognised, and the header of a private key. Anything looser would flag the tests
+ * and documents that talk about such things, and a check people learn to ignore is worse
+ * than none.
  */
-describe("every tracked text file", () => {
-  it("contains no character a person did not mean to type", async () => {
-    // Asked of git rather than walked, so generated folders and anything ignored stay out
-    // of it without a list of exceptions to keep up to date.
-    const { stdout } = await run("git", ["-C", REPO, "ls-files", "-z"], { maxBuffer: 8 * 1024 * 1024 });
-    const paths = stdout.split("\0").filter((name) => name.length > 0);
-    expect(paths.length, "git listed no files, so this checked nothing").toBeGreaterThan(50);
+const CREDENTIAL_SHAPES: Array<[string, RegExp]> = [
+  ["a private key", /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/],
+  ["an AWS access key id", /\bAKIA[0-9A-Z]{16}\b/],
+  ["a GitHub token", /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{22,}\b/],
+  ["a Slack token", /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/],
+  ["an OpenAI, OpenRouter or Anthropic key", /\bsk-(?:or-|ant-)?[A-Za-z0-9_-]{20,}\b/],
+  ["a Google API key", /\bAIza[0-9A-Za-z_-]{35}\b/],
+  ["a Stripe key", /\b[sr]k_(?:live|test)_[A-Za-z0-9]{20,}\b/],
+  ["an npm token", /\bnpm_[A-Za-z0-9]{36}\b/],
+  ["a Hugging Face token", /\bhf_[A-Za-z0-9]{30,}\b/],
+];
 
-    // Binary by extension. Reading them as text would report their own bytes as control
-    // characters, which is true and useless.
-    const binary = new Set([
-      ".png",
-      ".jpg",
-      ".jpeg",
-      ".gif",
-      ".webp",
-      ".avif",
-      ".ico",
-      ".mp4",
-      ".mp3",
-      ".wav",
-      ".woff",
-      ".woff2",
-      ".ttf",
-      ".otf",
-      ".wasm",
-      ".zip",
-      ".gz",
-      ".pdf",
-    ]);
+/** Every tracked file that reads as text, with its content. */
+async function trackedText(): Promise<Array<[string, string]>> {
+  // Asked of git rather than walked, so generated folders and anything ignored stay out
+  // of it without a list of exceptions to keep up to date.
+  const { stdout } = await run("git", ["-C", REPO, "ls-files", "-z"], { maxBuffer: 8 * 1024 * 1024 });
+  const paths = stdout.split("\0").filter((name) => name.length > 0);
+  expect(paths.length, "git listed no files, so this checked nothing").toBeGreaterThan(50);
+
+  // Binary by extension. Reading them as text would report their own bytes as control
+  // characters, which is true and useless.
+  const binary = new Set([
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".avif",
+    ".ico",
+    ".mp4",
+    ".mp3",
+    ".wav",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".wasm",
+    ".zip",
+    ".gz",
+    ".pdf",
+  ]);
+  const files: Array<[string, string]> = [];
+  for (const path of paths) {
+    if (binary.has(extname(path).toLowerCase())) continue;
+    const text = await readFile(join(REPO, path), "utf8").catch(() => null);
+    if (text !== null) files.push([path, text]);
+  }
+  expect(files.length, "no text files were opened, so this checked nothing").toBeGreaterThan(50);
+  return files;
+}
+
+describe("every tracked text file", () => {
+  it("carries no credential", async () => {
     const offenders: string[] = [];
-    let looked = 0;
-    for (const path of paths) {
-      if (binary.has(extname(path).toLowerCase())) continue;
-      const text = await readFile(join(REPO, path), "utf8").catch(() => null);
-      if (text === null) continue;
-      looked++;
+    for (const [path, text] of await trackedText()) {
+      for (const [what, shape] of CREDENTIAL_SHAPES) {
+        const at = text.search(shape);
+        if (at < 0) continue;
+        offenders.push(`${path}:${text.slice(0, at).split("\n").length} looks like ${what}`);
+        break;
+      }
+    }
+    expect(offenders, `credentials found: ${offenders.join(", ")}`).toEqual([]);
+  }, 120_000);
+
+  it("contains no character a person did not mean to type", async () => {
+    const offenders: string[] = [];
+    for (const [path, text] of await trackedText()) {
       for (let index = 0; index < text.length; index++) {
         const code = text.charCodeAt(index);
         const ordinary = code === 9 || code === 10 || code === 13;
@@ -85,7 +127,6 @@ describe("every tracked text file", () => {
         }
       }
     }
-    expect(looked, "no text files were opened, so this checked nothing").toBeGreaterThan(50);
     expect(offenders, `control characters found: ${offenders.join(", ")}`).toEqual([]);
   }, 120_000);
 });
