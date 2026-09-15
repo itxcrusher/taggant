@@ -272,6 +272,43 @@ not finished`;
     expect(await said.text()).toContain("is not a printed width in millimetres");
   });
 
+  it("survives publishing a drawing built to take the renderer down with it", async () => {
+    // The adversarial pass over the rendering design found two documents the renderer
+    // cannot survive: a dilate filter that held it for four and a half minutes, and a
+    // convolution matrix that killed the process with an illegal instruction. The bundler
+    // renders in a child process for exactly this reason, and the security policy said the
+    // server answering the upload is still there to say so, citing a test that called the
+    // bundler inside the test runner and never involved a console. This is that claim
+    // driven where it is made: an operator uploads such a drawing, presses publish, and
+    // the console has to come back with a message and go on serving.
+    await post("/experiences", new URLSearchParams({ id: "hostile-art", title: "Hostile art" }));
+    const target = new FormData();
+    target.append("targetId", "front");
+    target.append("physicalWidthMm", "120");
+    target.append("artwork", new Blob([await artwork()], { type: "image/png" }), "front.png");
+    expect((await post("/e/hostile-art/targets", target)).status).toBe(303);
+    await post("/e/hostile-art/targets/front/compile", new URLSearchParams({ scanDistanceMm: "150" }));
+
+    const taps = Array.from({ length: 900 }, () => "1").join(" ");
+    const hostile = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><filter id="f"><feConvolveMatrix order="30" kernelMatrix="${taps}"/></filter><rect width="100" height="100" fill="#c33" filter="url(#f)"/></svg>`;
+    const content = new FormData();
+    content.append("type", "image");
+    content.append("file", new Blob([hostile], { type: "image/svg+xml" }), "overlay.svg");
+    expect((await post("/e/hostile-art/targets/front/content", content)).status).toBe(303);
+
+    // The upload is accepted, because nothing has looked at it yet: the renderer is what
+    // reads an SVG and it runs at publish.
+    const published = await post("/e/hostile-art/publish", new URLSearchParams());
+    expect(published.status).toBe(303);
+    const said = await fetch(`${origin}${published.headers.get("location")}`);
+    expect(said.status).toBe(200);
+    expect(await said.text()).toMatch(/overlay\.svg/);
+
+    // And the console is still answering, which is the whole point.
+    expect((await fetch(`${origin}/`)).status).toBe(200);
+    expect(await pageAt("/e/hostile-art")).toContain("front");
+  }, 120_000);
+
   it("keeps every target when several are added at the same moment", async () => {
     await post("/experiences", new URLSearchParams({ id: "at-once", title: "At once" }));
     const png = await artwork();
