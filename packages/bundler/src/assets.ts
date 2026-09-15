@@ -25,7 +25,12 @@ export interface CopiedAsset {
  * read from the path a second time, so a file rewritten between the check and the copy
  * cannot ship unchecked content under the hash of something else.
  */
-export async function copyAsset(source: string, sourceDir: string, outDir: string): Promise<CopiedAsset> {
+export async function copyAsset(
+  source: string,
+  sourceDir: string,
+  outDir: string,
+  options: { deadline?: number } = {},
+): Promise<CopiedAsset> {
   // A fragment used to be kept so that one symbol of an SVG sprite could be referenced. No
   // SVG ships any more, a raster has no symbols, and nothing in this repository or its
   // documents ever used one, so a fragment is refused rather than carried into a path
@@ -38,7 +43,7 @@ export async function copyAsset(source: string, sourceDir: string, outDir: strin
 
   const absolute = await realWithin(sourceDir, source);
   const read = await readFile(absolute);
-  const { bytes, extension } = await prepareAsset(source, read);
+  const { bytes, extension } = await prepareAsset(source, read, options);
   const digest = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
   const name = `${digest}${extension}`;
   const assets = join(outDir, "assets");
@@ -57,17 +62,17 @@ export async function copyAsset(source: string, sourceDir: string, outDir: strin
 export const RASTER_EDGE = 2048;
 
 /**
- * The most units an SVG may declare on its long side.
+ * The most pixels an SVG may declare on its long side, at a browser's 96 to the inch.
  *
  * The renderer is asked for the drawing at RASTER_EDGE by setting the density it reads the
  * document at, and the lowest density it accepts is one dot per inch, so past this a
  * document cannot be brought to RASTER_EDGE that way. Measured, the library still scales a
  * million-unit document down on the way in (2048 px, a third of a second, 27 MB), but that
  * is its behaviour rather than a property this code sets, and no drawing anyone prints
- * declares fourteen metres at a tenth of a millimetre a unit. Past this it is refused by
- * name, so the bound on what a publish allocates is this file's own.
+ * declares fifty metres of picture. Past this it is refused by name, so the bound on what a
+ * publish allocates is this file's own.
  */
-export const LARGEST_DECLARED_EDGE = 72 * RASTER_EDGE;
+export const LARGEST_DECLARED_EDGE = 96 * RASTER_EDGE;
 
 /**
  * What ships and as what, decided from the bytes rather than from the file's name.
@@ -107,9 +112,9 @@ export const LARGEST_DECLARED_EDGE = 72 * RASTER_EDGE;
 export async function prepareAsset(
   source: string,
   bytes: Buffer,
-  options: { renderTimeoutMs?: number } = {},
+  options: { renderTimeoutMs?: number; deadline?: number } = {},
 ): Promise<{ bytes: Buffer; extension: string }> {
-  const kind = sniff(bytes);
+  const { kind, brand } = sniff(bytes);
   switch (kind) {
     case "png":
     case "jpg":
@@ -117,17 +122,46 @@ export async function prepareAsset(
     case "webp":
     case "avif":
     case "mp4":
+    case "m4a":
     case "webm":
     case "mp3":
     case "wav":
     case "ogg":
     case "glb":
       return { bytes, extension: `.${kind}` };
-    case "svg":
-      return {
-        bytes: await rasterise(source, bytes, options.renderTimeoutMs ?? RENDER_TIMEOUT_MS),
-        extension: ".png",
-      };
+    case "svg": {
+      // The clock on one render, or what is left of the publish's budget, whichever is
+      // shorter. Renders run one at a time and a manifest may name as many drawings as it
+      // likes, so a publish is bounded as a whole and not only a drawing at a time.
+      const own = options.renderTimeoutMs ?? RENDER_TIMEOUT_MS;
+      const left = options.deadline === undefined ? own : options.deadline - Date.now();
+      if (left <= 0) {
+        throw new Error(
+          `${source} was not rendered: this publish's render budget ran out. Fewer or simpler SVGs, or export them as PNGs.`,
+        );
+      }
+      return { bytes: await rasterise(source, bytes, Math.min(own, left), left < own), extension: ".png" };
+    }
+    case "mov":
+      throw new Error(
+        `${source} is a QuickTime movie (brand ${brand}), which most browsers will not play from a page. Save it as MP4 with H.264 video and AAC audio.`,
+      );
+    case "heif":
+      throw new Error(
+        `${source} is a HEIF still (brand ${brand}), which browsers do not show. Export it as a JPEG or a PNG.`,
+      );
+    case "threegp":
+      throw new Error(
+        `${source} is a 3GPP file (brand ${brand}), which browsers will not play from a page. Save it as MP4 with H.264 video and AAC audio.`,
+      );
+    case "container":
+      throw new Error(
+        `${source} is an ISO media file whose brand (${brand}) this bundler does not know, so it cannot say whether a browser would play it. Save it as MP4, or as M4A if it is audio.`,
+      );
+    case "gzip":
+      throw new Error(
+        `${source} is compressed with gzip, so nothing can see what it is. If it is an SVG saved as .svgz, save it uncompressed.`,
+      );
     case "utf16":
       throw new Error(
         `${source} is UTF-16 text, which no image or video is. If it is an SVG, save it as UTF-8; a bundle cannot carry it as it is.`,
@@ -138,7 +172,7 @@ export async function prepareAsset(
       );
     default:
       throw new Error(
-        `${source} is not a format this bundler publishes: its bytes are not a PNG, JPEG, GIF, WebP, AVIF, SVG, MP4, WebM, MP3, WAV, OGG or GLB file.`,
+        `${source} is not a format this bundler publishes: its bytes are not a PNG, JPEG, GIF, WebP, AVIF, SVG, MP4, M4A, WebM, MP3, WAV, OGG or GLB file.`,
       );
   }
 }
@@ -150,47 +184,88 @@ type Kind =
   | "webp"
   | "avif"
   | "mp4"
+  | "m4a"
   | "webm"
   | "mp3"
   | "wav"
   | "ogg"
   | "glb"
   | "svg"
+  | "mov"
+  | "heif"
+  | "threegp"
+  | "container"
+  | "gzip"
   | "utf16"
   | "document"
   | "unknown";
 
+/** The brands of an ISO base media file that a browser's video element plays as MP4. */
+const MP4_BRANDS = new Set([
+  "isom",
+  "iso2",
+  "iso3",
+  "iso4",
+  "iso5",
+  "iso6",
+  "mp41",
+  "mp42",
+  "avc1",
+  "dash",
+  "M4V ",
+]);
+
 /** What the bytes are, from their own signature. The name on disk is not consulted. */
-function sniff(bytes: Buffer): Kind {
+function sniff(bytes: Buffer): { kind: Kind; brand?: string } {
   const at = (offset: number, text: string) =>
     bytes.length >= offset + text.length &&
     bytes.subarray(offset, offset + text.length).toString("latin1") === text;
-  if (at(0, "\x89PNG\r\n\x1a\n")) return "png";
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "jpg";
-  if (at(0, "GIF87a") || at(0, "GIF89a")) return "gif";
-  if (at(0, "RIFF") && at(8, "WEBP")) return "webp";
-  if (at(0, "RIFF") && at(8, "WAVE")) return "wav";
+  if (at(0, "\x89PNG\r\n\x1a\n")) return { kind: "png" };
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
+    return { kind: "jpg" };
+  if (at(0, "GIF87a") || at(0, "GIF89a")) return { kind: "gif" };
+  if (at(0, "RIFF") && at(8, "WEBP")) return { kind: "webp" };
+  if (at(0, "RIFF") && at(8, "WAVE")) return { kind: "wav" };
   if (at(4, "ftyp")) {
+    // The brand says which family of container this is, and a browser's player does not
+    // take them all. A QuickTime movie from a phone, an M4A, a HEIF still and a 3GPP file
+    // all begin the same way and every one of them used to ship as .mp4, which a page then
+    // could not play, silently.
     const brand = bytes.subarray(8, 12).toString("latin1");
-    if (brand === "avif" || brand === "avis") return "avif";
-    return "mp4";
+    if (brand === "avif" || brand === "avis") return { kind: "avif" };
+    if (brand === "M4A ") return { kind: "m4a" };
+    if (MP4_BRANDS.has(brand)) return { kind: "mp4" };
+    if (brand === "qt  ") return { kind: "mov", brand };
+    if (/^(?:heic|heix|hevc|hevx|mif1|msf1|heif)$/.test(brand)) return { kind: "heif", brand };
+    if (brand.startsWith("3g")) return { kind: "threegp", brand };
+    return { kind: "container", brand };
   }
   if (bytes.length >= 4 && bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3)
-    return "webm";
+    return { kind: "webm" };
   if (at(0, "ID3") || (bytes.length >= 2 && bytes[0] === 0xff && ((bytes[1] ?? 0) & 0xe6) === 0xe2))
-    return "mp3";
-  if (at(0, "OggS")) return "ogg";
-  if (at(0, "glTF")) return "glb";
+    return { kind: "mp3" };
+  if (at(0, "OggS")) return { kind: "ogg" };
+  if (at(0, "glTF")) return { kind: "glb" };
+  if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) return { kind: "gzip" };
   // Text from here on. A UTF-16 byte order mark is refused by name, because a browser will
   // read such a file as a document while nothing in this function can see into it.
-  if ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff)) return "utf16";
+  if ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff))
+    return { kind: "utf16" };
   const head = bytes
     .subarray(0, 4096)
     .toString("utf8")
     .replace(/^\uFEFF/, "")
     .trimStart();
-  if (!head.startsWith("<")) return "unknown";
-  return /<(?:[\w.-]+:)?svg[\s>/]/i.test(head) ? "svg" : "document";
+  if (!head.startsWith("<")) return { kind: "unknown" };
+  // The root element may sit behind a licence comment or a DOCTYPE carrying an entity set,
+  // and both run past a few kilobytes in ordinary files, so it is looked for across the
+  // first megabyte rather than the first page. An HTML document carrying an inline svg
+  // element is still a document: whichever root comes first decides.
+  const text = bytes.subarray(0, 1024 * 1024).toString("utf8");
+  const svgAt = text.search(/<(?:[\w.-]+:)?svg[\s>/]/i);
+  const htmlAt = text.search(/<(?:!doctype\s+)?html[\s>]/i);
+  if (svgAt < 0 || (htmlAt >= 0 && htmlAt < svgAt)) return { kind: "document" };
+  return { kind: "svg" };
 }
 
 /**
@@ -200,6 +275,16 @@ function sniff(bytes: Buffer): Kind {
  * built to hold the renderer, and this is the most a publish will wait for one.
  */
 export const RENDER_TIMEOUT_MS = 20_000;
+
+/**
+ * How long all the SVG renders of one publish may take together.
+ *
+ * Renders run one at a time and a manifest may name as many drawings as it likes, so the
+ * clock above bounds a drawing and not a publish: thirty ordinary drawings took three
+ * minutes on a loaded laptop, and thirty built to hold the renderer would have taken ten.
+ * This is the most a publish waits for its drawings altogether.
+ */
+export const RENDER_BUDGET_MS = 120_000;
 
 /**
  * The render process's script: beside this file once built, and in `dist` when this file
@@ -233,7 +318,12 @@ interface Rendered {
  * child that overruns is killed rather than asked, because inside a native call it would
  * not hear.
  */
-async function rasterise(source: string, bytes: Buffer, timeoutMs: number): Promise<Buffer> {
+async function rasterise(
+  source: string,
+  bytes: Buffer,
+  timeoutMs: number,
+  budgeted: boolean,
+): Promise<Buffer> {
   const script = renderScript();
   const result = await new Promise<Rendered>((settle) => {
     const child = spawn(process.execPath, [script, String(RASTER_EDGE), String(LARGEST_DECLARED_EDGE)], {
@@ -269,22 +359,44 @@ async function rasterise(source: string, bytes: Buffer, timeoutMs: number): Prom
 
   if (result.stopped) {
     throw new Error(
-      `${source} took longer than ${timeoutMs / 1000} s to render and was stopped. A drawing that slow carries a filter or a size no phone would show; simplify it, or export the artwork as a PNG.`,
+      budgeted
+        ? `${source} was stopped: this publish's render budget ran out while it was being rendered. Fewer or simpler SVGs, or export them as PNGs.`
+        : `${source} took longer than ${timeoutMs / 1000} s to render and was stopped. A drawing that slow carries a filter or a size no phone would show; simplify it, or export the artwork as a PNG.`,
     );
   }
   if (result.code === 0) return result.stdout;
   const lines = result.stderr.split("\n").filter((line) => line.trim() !== "");
   const why = lines[lines.length - 1] ?? "";
+  // What an author can put right is named as what it is, from the code the render process
+  // exits with: past the ceiling, no size declared, a size of zero.
   if (result.code === 2) {
     throw new Error(
-      `${source} declares a size too large to render: ${why}, and the most is ${LARGEST_DECLARED_EDGE} on the long side. Give it a smaller viewBox; it is rendered at ${RASTER_EDGE} px on its long side whatever it declares.`,
+      `${source} declares a size too large to render: ${why}, and the most is ${LARGEST_DECLARED_EDGE} px on the long side. Give it a smaller viewBox; it is rendered at ${RASTER_EDGE} px on its long side whatever it declares.`,
     );
   }
-  // What an author can put right is named as what it is. The renderer reports a drawing
-  // with no size as a corrupt header, and it is not corrupt.
+  if (result.code === 3) {
+    throw new Error(
+      `${source} declares no size: its root svg element has no viewBox and no width and height, so nothing says how big the picture is, and it would ship with the drawing in one corner of a blank raster. Give it a viewBox.`,
+    );
+  }
+  if (result.code === 4) {
+    throw new Error(
+      `${source} declares a size of zero, so there is no picture to render. Give its viewBox, or its width and height, a size.`,
+    );
+  }
+  // The renderer reports a size it cannot work with as a corrupt header, and it is not
+  // corrupt; the declared-size check above catches what it can, and this names the rest.
   if (why.includes("bad dimensions")) {
     throw new Error(
-      `${source} has no size to render at: give its root svg element a viewBox, or a width and a height. Nothing else in the file says how big the picture is.`,
+      `${source} has no size the renderer can work with. Give its root svg element a viewBox with a positive width and height.`,
+    );
+  }
+  // The XML parser's own ceilings, which it reports as a corrupt header too: a single run
+  // of text past ten million characters, which is what an embedded image of about 7 MB
+  // is, or entities expanding past what it allows.
+  if (/code 114|huge|amplification|resource limit/i.test(why)) {
+    throw new Error(
+      `${source} was refused by the XML parser for its size: a single run of text longer than ten million characters, which an embedded image of about 7 MB is, or entities expanding past its limit. Keep a large image as its own asset rather than embedding it, or export the artwork as a PNG.`,
     );
   }
   if (result.code !== 1) {

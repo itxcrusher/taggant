@@ -61,6 +61,52 @@ describe("the third-party licence inventory", () => {
     expect(wrong, `installed but not in the inventory as installed: ${wrong.join(", ")}`).toEqual([]);
   }, 120_000);
 
+  it("names nothing that is not installed, so a dependency taken out takes its row with it", async () => {
+    // The other direction, and the file claimed it for several rounds without it: the walk
+    // above requires every installed package to have a row, which catches one added or
+    // relicensed and cannot catch one removed. A row for a package nothing depends on any
+    // more is a document describing a tree that no longer exists, which is the failure this
+    // repository has paid for more than any other.
+    //
+    // The platform families are the exception, and they are exempt by their nature rather
+    // than by convenience: `sharp` declares one optional package per operating system and
+    // architecture and only the machine's own are installed, so those rows describe every
+    // platform deliberately. They are named here so the exemption is a list rather than a
+    // pattern that could quietly cover something else.
+    const { stdout } = await run("pnpm", ["licenses", "list", "--prod", "--json"], {
+      cwd: REPO,
+      shell: process.platform === "win32",
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    const byLicence = JSON.parse(stdout) as Record<
+      string,
+      Array<{ name: string; versions?: string[]; version?: string }>
+    >;
+    const installed = new Set<string>();
+    for (const packages of Object.values(byLicence)) {
+      for (const pkg of packages) {
+        for (const version of pkg.versions ?? (pkg.version ? [pkg.version] : [])) {
+          installed.add(`${pkg.name} ${version}`);
+          installed.add(`${familyOf(pkg.name)} ${version}`);
+        }
+      }
+    }
+
+    const inventory = await readFile(join(REPO, "THIRD-PARTY-LICENCES.md"), "utf8");
+    // Every row that names a package and a version: `| `name` 1.2.3 |` in the dependency
+    // tables, and `| `family` | 1.2.3 |` in the platform table.
+    const rows = [
+      ...inventory.matchAll(/\|\s*`([^`]+)`\s+(\d+\.\d+\.\d+)\s*\|/g),
+      ...inventory.matchAll(/\|\s*`([^`]+)`\s*\|\s*(\d+\.\d+\.\d+)\s*\|/g),
+    ];
+    const named = new Set(rows.map(([, name, version]) => `${name} ${version}`));
+    expect(named.size, "no rows were found in the inventory, so this checked nothing").toBeGreaterThan(5);
+
+    const platforms = /^@img\/sharp(?:-libvips)?-/;
+    const gone = [...named].filter((row) => !installed.has(row) && !platforms.test(row));
+    expect(gone, `named in the inventory and not installed: ${gone.join(", ")}`).toEqual([]);
+  }, 120_000);
+
   it("is declared in every package's own manifest, not only in the root file", async () => {
     // A registry or a scanner reads `package.json`, not `LICENSE`. Every one of these said
     // nothing for as long as the repository has existed.

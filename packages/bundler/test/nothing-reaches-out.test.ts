@@ -4,7 +4,7 @@ import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { afterAll, describe, expect, it } from "vitest";
-import { RENDER_TIMEOUT_MS } from "../src/assets.js";
+import { RENDER_TIMEOUT_MS, prepareAsset } from "../src/assets.js";
 import { bundle } from "../src/bundle.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -87,13 +87,30 @@ describe("a published bundle", () => {
     return { shipped: await readdir(join(outDir, "assets")), outDir };
   }
 
-  /** What a file's own bytes say it is: the check a browser makes before the extension. */
+  /**
+   * What a file's own bytes say it is: the check a browser makes before the extension.
+   *
+   * Written independently of the bundler's own `sniff`, because a test that shares the
+   * function under test proves nothing. It knew four formats and called the rest "other",
+   * which the loop below treats as a document, so a legitimate GIF or Ogg fixture would
+   * have failed as a document while a `.mov` shipping as `.mp4` passed as honest. Both
+   * halves of that were the same mistake: not reading the brand, and not knowing the
+   * formats.
+   */
   function signature(bytes: Buffer): string {
+    const at = (offset: number, text: string) =>
+      bytes.subarray(offset, offset + text.length).toString("latin1") === text;
     if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])))
       return "png";
     if (bytes[0] === 0xff && bytes[1] === 0xd8) return "jpg";
-    if (bytes.subarray(0, 4).toString("latin1") === "RIFF") return "riff";
-    if (bytes.subarray(4, 8).toString("latin1") === "ftyp") return "mp4";
+    if (at(0, "GIF87a") || at(0, "GIF89a")) return "gif";
+    if (at(0, "RIFF") && at(8, "WEBP")) return "webp";
+    if (at(0, "RIFF") && at(8, "WAVE")) return "wav";
+    if (at(4, "ftyp")) return bytes.subarray(8, 12).toString("latin1").trim().toLowerCase();
+    if (bytes[0] === 0x1a && bytes[1] === 0x45 && bytes[2] === 0xdf && bytes[3] === 0xa3) return "webm";
+    if (at(0, "ID3") || (bytes[0] === 0xff && ((bytes[1] ?? 0) & 0xe6) === 0xe2)) return "mp3";
+    if (at(0, "OggS")) return "ogg";
+    if (at(0, "glTF")) return "glb";
     const head = bytes.subarray(0, 64).toString("latin1");
     if (/^\s*</.test(head) || head.startsWith("\xff\xfe") || head.startsWith("\xfe\xff")) return "DOCUMENT";
     return "other";
@@ -241,8 +258,10 @@ describe("a published bundle", () => {
         const bytes = await readFile(join(result.outDir, "assets", file));
         const kind = signature(bytes);
         if (kind === "DOCUMENT" || kind === "other") documents.push(`${file} (${kind})`);
-        // And the name is honest: what the bytes are is what the extension says.
-        if (kind === "png") expect(extname(file), `${label}: a PNG shipped as ${file}`).toBe(".png");
+        // And the name is honest: what the bytes are is what the extension says. Checked
+        // for every kind rather than for PNG alone, because the hole that left was a
+        // QuickTime movie shipping as .mp4 and passing as honest.
+        else expect(extname(file), `${label}: ${kind} bytes shipped as ${file}`).toBe(`.${kind}`);
       }
       expect(documents, `${label}: a document reached the bundle: ${documents.join(", ")}`).toEqual([]);
       outcomes.push(`rendered  ${name.padEnd(14)} ${label}`);
@@ -317,16 +336,41 @@ describe("a published bundle", () => {
     expect(rightOpaque, "the drawn rectangle is missing").toBeGreaterThan((info.width * info.height) / 4);
   }, 60_000);
 
-  it("renders nothing where a local file would have been, by every route the renderer has", async () => {
+  it("draws nothing from a local file by any route found so far, and applies no local stylesheet", async () => {
     // The console publishes what it is handed with the file system rights of whoever runs
     // it, and a bundle is public. So the question is not only whether an SVG can run but
-    // whether it can make the renderer draw a local file into the picture, which would ship
-    // that file to the world as pixels. Each payload's only visible content is what its
-    // reference would bring in, drawn white on transparent, so one opaque pixel is a leak.
-    // The data: include is the control: it proves the include route and text rendering
-    // both work on this machine, so an empty render is the reference resolving to nothing
-    // rather than the renderer drawing nothing at all.
-    const file = `file:///${join(REPO, "examples/postcard/manifest.json").replace(/\\/g, "/")}`;
+    // whether it can make the renderer reach a local file, which would ship that file to
+    // the world as pixels. Two groups, because one measurement cannot see both:
+    //
+    // The first group would draw the file's own content. Each document's only visible
+    // content is what its reference would bring in, white on transparent, so one opaque
+    // pixel is a leak. Its control is a `data:` include, which must paint: without that,
+    // an empty render could mean the renderer draws nothing at all rather than that the
+    // reference resolved to nothing.
+    //
+    // The second group would apply a local stylesheet, which draws no file content and so
+    // cannot be seen by counting pixels at all. The first version of this test claimed a
+    // stylesheet route it did not have, and could not have observed one if it did, which
+    // an adversarial pass found. These documents draw a rectangle with `fill="none"` and
+    // the stylesheet sets a fill, so the paint itself is the measurement: the `data:`
+    // control paints, and a stylesheet on disk must not.
+    //
+    // `prepareAsset` rather than a whole publish: what is under test is the renderer, and
+    // twenty publishes cost a manifest, a target and a copy of the runtime each.
+    const dir = await mkdtemp(join(tmpdir(), "taggant-routes-"));
+    scratches.push(dir);
+    const secret = join(dir, "secret.json");
+    await writeFile(secret, `{"token":"${"SECRET".repeat(20)}"}`);
+    await writeFile(join(dir, "paint.css"), "rect{fill:#ffffff}");
+    const file = `file:///${secret.replace(/\\/g, "/")}`;
+    const localCss = `file:///${join(dir, "paint.css").replace(/\\/g, "/")}`;
+    // A real document type definition on disk, which declares an entity pointing at the
+    // file. Two stages, which is how this is written when somebody means it: the document
+    // names the definition, the definition names the file. A first draft of this route
+    // drew a literal letter instead and measured its own ink.
+    await writeFile(join(dir, "probe.dtd"), `<!ENTITY xxe SYSTEM "${file}">`);
+    const localDtd = `file:///${join(dir, "probe.dtd").replace(/\\/g, "/")}`;
+
     const ns =
       'xmlns="http://www.w3.org/2000/svg" xmlns:xi="http://www.w3.org/2001/XInclude" xmlns:xlink="http://www.w3.org/1999/xlink"';
     const open = `<svg ${ns} viewBox="0 0 400 100">`;
@@ -335,47 +379,101 @@ describe("a published bundle", () => {
     const nested = encodeURIComponent(
       `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xi="http://www.w3.org/2001/XInclude" viewBox="0 0 400 100"><text x="10" y="50" fill="#fff" font-size="12"><xi:include href="${file}" parse="text"/></text></svg>`,
     );
-    const routes: [string, string][] = [
+    const drawn: [string, string][] = [
       ["an XInclude of the file as text", text(`<xi:include href="${file}" parse="text"/>`)],
+      ["an XInclude by relative path", text('<xi:include href="secret.json" parse="text"/>')],
+      ["an XInclude with an xpointer", text(`<xi:include href="${file}" xpointer="/1"/>`)],
       [
-        "an XInclude by relative path",
-        text('<xi:include href="../../examples/postcard/manifest.json" parse="text"/>'),
+        "an XInclude whose fallback reads the file",
+        text(
+          `<xi:include href="does-not-exist"><xi:fallback><xi:include href="${file}" parse="text"/></xi:fallback></xi:include>`,
+        ),
       ],
       ["an XInclude of the file as XML", `${open}<xi:include href="${file}" parse="xml"/></svg>`],
       ["an external entity", `<!DOCTYPE svg [<!ENTITY xxe SYSTEM "${file}">]>${text("&xxe;")}`],
       ["a parameter entity", `<!DOCTYPE svg [<!ENTITY % p SYSTEM "${file}">%p;]>${text("")}`],
+      ["an external DTD declaring an entity", `<!DOCTYPE svg SYSTEM "${localDtd}">${text("&xxe;")}`],
       ["an image element", `${open}<image href="${file}" width="400" height="100"/></svg>`],
       ["an image element by xlink", `${open}<image xlink:href="${file}" width="400" height="100"/></svg>`],
       ["a use element", `${open}<use href="${file}#x"/></svg>`],
+      ["a use element by xlink", `${open}<use xlink:href="${file}#x"/></svg>`],
       [
         "a filter image",
         `${open}<filter id="f"><feImage href="${file}"/></filter><rect width="400" height="100" filter="url(#f)"/></svg>`,
       ],
       [
+        "a filter image by xlink",
+        `${open}<filter id="f"><feImage xlink:href="${file}"/></filter><rect width="400" height="100" filter="url(#f)"/></svg>`,
+      ],
+      [
+        "a pattern carrying the file",
+        `${open}<defs><pattern id="p" width="400" height="100" patternUnits="userSpaceOnUse"><image href="${file}" width="400" height="100"/></pattern></defs><rect width="400" height="100" fill="url(#p)"/></svg>`,
+      ],
+      [
+        "a marker carrying the file",
+        `${open}<defs><marker id="m" markerWidth="400" markerHeight="100"><image href="${file}" width="400" height="100"/></marker></defs><path d="M10 50H390" marker-end="url(#m)"/></svg>`,
+      ],
+      [
+        "a tref",
+        `${open}<text x="10" y="50" fill="#fff" font-size="12"><tref xlink:href="${file}#x"/></text></svg>`,
+      ],
+      [
+        "a foreignObject holding an XHTML image",
+        `${open}<foreignObject width="400" height="100"><img xmlns="http://www.w3.org/1999/xhtml" src="${file}" width="400" height="100"/></foreignObject></svg>`,
+      ],
+      [
         "an include inside a nested data: image",
         `${open}<image width="400" height="100" href="data:image/svg+xml;utf8,${nested}"/></svg>`,
       ],
+      // A font whose source is a local file is deliberately not here. It was driven twice,
+      // by me and by the adversarial pass, and the pixels it produces are the document's
+      // own letters rendered in a fallback face, not anything from the file: a font can
+      // only become the shapes of characters the document already chose to draw, so it
+      // cannot put a file's text in the picture and this instrument cannot see whether the
+      // file was opened at all. Measuring it would need a real font on disk and a
+      // comparison against the fallback. Recorded as not covered rather than covered by a
+      // route that measures its own ink, which is the mistake this test was found making.
+    ];
+    const styled: [string, string][] = [
+      [
+        "an xml-stylesheet processing instruction",
+        `<?xml-stylesheet type="text/css" href="${localCss}"?>${open}<rect width="400" height="100" fill="none"/></svg>`,
+      ],
+      [
+        "a CSS import",
+        `${open}<style>@import url("${localCss}");</style><rect width="400" height="100" fill="none"/></svg>`,
+      ],
     ];
 
-    /** Opaque pixels in what shipped; none when the publish was refused. */
-    const opaque = async (name: string, content: string): Promise<number> => {
-      const result = await publish(name, content);
-      if ("refused" in result) return 0;
-      const [shipped] = result.shipped.filter((entry) => entry.endsWith(".png"));
-      const { data, info } = await sharp(join(result.outDir, "assets", shipped ?? ""))
-        .raw()
-        .toBuffer({ resolveWithObject: true });
+    /** Opaque pixels in the render; none when the asset was refused. */
+    const opaque = async (label: string, content: string): Promise<number> => {
+      let png: Buffer;
+      try {
+        png = (await prepareAsset(`${label}.svg`, Buffer.from(content))).bytes;
+      } catch {
+        return 0;
+      }
+      const { data, info } = await sharp(png).raw().toBuffer({ resolveWithObject: true });
       let count = 0;
       for (let i = 3; i < data.length; i += info.channels) if ((data[i] ?? 0) > 32) count++;
       return count;
     };
 
     expect(
-      await opaque("control.svg", text('<xi:include href="data:text/plain,INCLUDED" parse="text"/>')),
-      "the control did not render, so an empty render would prove nothing",
+      await opaque("control-draw", text('<xi:include href="data:text/plain,INCLUDED" parse="text"/>')),
+      "the drawing control did not paint, so an empty render would prove nothing",
     ).toBeGreaterThan(0);
-    for (const [label, content] of routes) {
-      expect(await opaque("route.svg", content), `${label} put pixels where the file would be`).toBe(0);
+    for (const [label, content] of drawn) {
+      expect(await opaque(label, content), `${label} put pixels where the file would be`).toBe(0);
+    }
+
+    const dataCss = `<?xml-stylesheet type="text/css" href="data:text/css,${encodeURIComponent("rect{fill:#ffffff}")}"?>`;
+    expect(
+      await opaque("control-style", `${dataCss}${open}<rect width="400" height="100" fill="none"/></svg>`),
+      "the stylesheet control did not paint, so an unpainted render would prove nothing",
+    ).toBeGreaterThan(0);
+    for (const [label, content] of styled) {
+      expect(await opaque(label, content), `${label} applied a stylesheet from disk`).toBe(0);
     }
   }, 180_000);
 

@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { validateManifest } from "@taggant/manifest";
 import { fromTargetFile } from "@taggant/vision";
-import { type CopiedAsset, copyAsset } from "./assets.js";
+import { type CopiedAsset, RENDER_BUDGET_MS, copyAsset, within } from "./assets.js";
 import { entryPage } from "./page.js";
 
 export interface BundleOptions {
@@ -19,6 +19,11 @@ export interface BundleOptions {
    * Passed explicitly by the tests so they bundle a known copy.
    */
   runtimeDir?: string;
+  /**
+   * How long every SVG render in this publish may take together. Defaults to
+   * `RENDER_BUDGET_MS`; the tests pass a short one to prove the bound.
+   */
+  renderBudgetMs?: number;
 }
 
 export interface BundleResult {
@@ -158,16 +163,23 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   return result;
 
   async function write(into: string): Promise<void> {
+    // One clock over every render in the publish, on top of the one over each. Renders
+    // run one at a time and a manifest may name as many drawings as it likes, so without
+    // this a publish was bounded only at twenty seconds a drawing.
+    const deadline = Date.now() + (options.renderBudgetMs ?? RENDER_BUDGET_MS);
     const rewritten = structuredClone(manifest);
     for (const target of rewritten.targets) {
       for (const item of target.content) {
-        const already = seen.get(item.src);
+        // Keyed by where the path resolves, so that `o.svg` and `./o.svg` are one render
+        // and not two; content addressing already made them one file.
+        const key = within(options.sourceDir, item.src);
+        const already = seen.get(key);
         if (already !== undefined) {
           item.src = already;
           continue;
         }
-        const copied = await copyAsset(item.src, options.sourceDir, into);
-        seen.set(item.src, copied.to);
+        const copied = await copyAsset(item.src, options.sourceDir, into, { deadline });
+        seen.set(key, copied.to);
         item.src = copied.to;
         // Counted by where it landed, not by what it was called. The same bytes under two
         // paths are one file in the bundle, and reporting them as two made the count the

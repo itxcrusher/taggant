@@ -368,19 +368,56 @@ describe("what an SVG declares as its size", () => {
     expect(result.assets[0]?.to).toMatch(/\.png$/);
   });
 
-  it("is refused past what any renderer holds, and told so", async () => {
-    await expect(
-      publish(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000000 1000000"><rect width="10" height="10" /></svg>',
-      ),
-    ).rejects.toThrow(/too large/);
-  });
+  // What a size is refused for, and what an author is told, is in `what-ships.test.ts`,
+  // which drives the decision and the render without the cost of a publish each time.
+});
 
-  it("is refused when there is none, and told what would give it one", async () => {
-    // The renderer reports this as a corrupt header. The file is not corrupt: nothing in
-    // it says how big the picture is, and that is what the author is told.
-    await expect(publish('<svg xmlns="http://www.w3.org/2000/svg"></svg>')).rejects.toThrow(/viewBox/);
-  });
+describe("how long a publish may spend rendering", () => {
+  it("is bounded for the publish and not only for each drawing", async () => {
+    // The clock on a render bounds a drawing. Renders run one at a time and a manifest may
+    // name as many drawings as it likes, so before this a publish was bounded at twenty
+    // seconds multiplied by however many content items somebody wrote, and thirty ordinary
+    // drawings took three minutes. The console answers a publish over HTTP with no timeout
+    // of its own, so that number is how long an operator waits on a page.
+    const { sourceDir, outDir } = await scratch();
+    const many = structuredClone(MANIFEST) as typeof MANIFEST;
+    many.targets[0]?.content.push({ type: "image", src: "other.svg" });
+    await expect(
+      bundle({
+        manifest: many,
+        targets: { front: TARGET },
+        sourceDir,
+        outDir,
+        runtimeDir: RUNTIME_DIST,
+        renderBudgetMs: 1,
+      }),
+    ).rejects.toThrow(/render budget/);
+    // And nothing was published: the staging directory goes with the refusal.
+    await expect(readdir(outDir)).rejects.toThrow();
+  }, 60_000);
+
+  it("renders one drawing once, however many ways the manifest spells its path", async () => {
+    // Content addressing made two spellings one file, so this was invisible in the output
+    // and paid for twice in the render: the cache was keyed on the string in the manifest.
+    const { sourceDir, outDir } = await scratch();
+    const twice = structuredClone(MANIFEST) as typeof MANIFEST;
+    twice.targets[0]?.content.push({ type: "image", src: "./overlay.svg" });
+    const started = Date.now();
+    const result = await bundle({
+      manifest: twice,
+      targets: { front: TARGET },
+      sourceDir,
+      outDir,
+      runtimeDir: RUNTIME_DIST,
+      // Enough for one render on a loaded machine and not for two, which is what makes
+      // this a test of the count rather than of the folder.
+      renderBudgetMs: 15_000,
+    });
+    expect(result.assets).toHaveLength(1);
+    expect(Date.now() - started).toBeLessThan(15_000);
+    const written = JSON.parse(await readFile(join(outDir, "manifest.json"), "utf8"));
+    expect(written.targets[0].content[0].src).toBe(written.targets[0].content[1].src);
+  }, 60_000);
 });
 
 describe("a target the runtime could not read", () => {
