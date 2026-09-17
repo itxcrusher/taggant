@@ -8,7 +8,7 @@
 
 import { randomBytes } from "node:crypto";
 import { readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { bundle, realWithin } from "@taggant/bundler";
 import {
   type Report,
@@ -210,7 +210,50 @@ export async function publish(
  * boundary the continuity claim rests on: a table that can only be changed by asking a
  * service is a table the operator does not own.
  */
+/**
+ * One queue per link table, so a read and the write that follows it are not separated.
+ *
+ * Registering a code is read, change, write. Two registrations at the same moment both
+ * read the table before either wrote, so the second write was built on the table as it was
+ * before the first: measured, two codes registered together left one identifier in the
+ * table, and both operators were told theirs "points here". A printed code that points at
+ * nothing, and a person who was told it does not, which is the worst pairing available in
+ * this system.
+ *
+ * The workspace has the same queue for the same reason, keyed per experience, and it does
+ * not cover this: the link table is one shared file and this function never went through
+ * the workspace. Keyed on the resolved path so two spellings of one file share a queue.
+ * Like the workspace's, this is an in-process queue and not a lock file: two consoles
+ * pointed at one link table is a thing the documentation says not to do rather than a
+ * thing this pretends to survive.
+ */
+const tableQueues = new Map<string, Promise<void>>();
+
+function inTurnForTable<T>(tablePath: string, work: () => Promise<T>): Promise<T> {
+  const key = resolve(tablePath);
+  const previous = tableQueues.get(key) ?? Promise.resolve();
+  // Run on either outcome of the one before, so a failed registration does not wedge the
+  // queue behind it.
+  const result = previous.then(work, work);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  tableQueues.set(key, settled);
+  void settled.then(() => {
+    if (tableQueues.get(key) === settled) tableQueues.delete(key);
+  });
+  return result;
+}
+
 export async function registerCode(
+  tablePath: string,
+  entry: { path: string; href: string; title: string; linkType?: string; language?: string },
+): Promise<{ path: string; replaced: number; kept: number }> {
+  return await inTurnForTable(tablePath, () => writeCode(tablePath, entry));
+}
+
+async function writeCode(
   tablePath: string,
   entry: { path: string; href: string; title: string; linkType?: string; language?: string },
 ): Promise<{ path: string; replaced: number; kept: number }> {

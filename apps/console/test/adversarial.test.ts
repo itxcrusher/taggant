@@ -264,6 +264,30 @@ describe("H5: registering a code", () => {
     expect(written.replaced).toBe(0);
     expect(written.kept).toBe(0);
   });
+
+  it("keeps both codes when two are registered at the same moment", async () => {
+    // Registering a code is read, change, write, and the two were not serialised: both
+    // registrations read the table before either wrote, so the second wrote the table as it
+    // was before the first. Measured, two codes registered together left one identifier in
+    // the file and both operators were told theirs "points here", which is a printed code
+    // pointing at nothing and a person told that it does not. The workspace already had
+    // this queue, keyed per experience; the link table is one shared file and never went
+    // through it.
+    const table = join(root, "at-once.json");
+    const codes = ["/01/09520123456788", "/01/09520123456795", "/01/09520123456702", "/01/09520123456719"];
+    await Promise.all(
+      codes.map((path, index) =>
+        registerCode(table, { path, href: `https://example.com/${index}/`, title: `Page ${index}` }),
+      ),
+    );
+    const written = JSON.parse(await readFile(table, "utf8")) as { entries: Record<string, unknown[]> };
+    expect(Object.keys(written.entries).sort()).toEqual([...codes].sort());
+    // And each one kept its own destination rather than the last writer's.
+    for (const [index, path] of codes.entries()) {
+      const links = written.entries[path] as { href: string }[];
+      expect(links?.[0]?.href, `${path} lost its destination`).toBe(`https://example.com/${index}/`);
+    }
+  });
 });
 
 describe("H6: the Host header", () => {
