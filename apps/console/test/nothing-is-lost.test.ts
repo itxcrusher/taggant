@@ -533,30 +533,42 @@ describe("what it writes down, and how much it holds", () => {
     ).not.toContain('role="status"');
   });
 
-  // Skipped where the filesystem does not fold case, because there `case.json` and
-  // `CASE.JSON` are two files and one queue between them would be the opposite mistake.
-  it.skipIf(process.platform === "linux")("gives one queue to two spellings of one link table", async () => {
+  it("keeps both codes when one link table is registered under two spellings", async () => {
     // `resolve` normalises separators and relative segments and does not normalise case,
-    // and the comment on both queues said it did. On this filesystem `case.json` and
-    // `CASE.JSON` are one file: two concurrent registrations took two queues, ran together,
-    // and one of the two codes was gone.
+    // and the comment on both queues said it did. Where the filesystem folds case,
+    // `case.json` and `CASE.JSON` are one file: two concurrent registrations took two
+    // queues, ran together, and one of the two codes was gone.
+    //
+    // Asserted both ways rather than skipped, because the right answer differs and both
+    // are worth pinning: one file holding both codes where case is folded, and two files
+    // holding one each where it is not. It only bites on the first kind of filesystem, so
+    // the Linux runner cannot catch the fold being removed and says so here.
     const { root } = await drive();
     const { registerCode } = await import("../src/operations.js");
     const table = join(root, "case.json");
+    const shouting = table.toUpperCase();
     await Promise.all([
       registerCode(table, {
         path: "/01/09520123456788",
         href: "https://example.invalid/a",
         title: "A",
       }),
-      registerCode(table.toUpperCase(), {
+      registerCode(shouting, {
         path: "/01/09520123456795",
         href: "https://example.invalid/b",
         title: "B",
       }),
     ]);
-    const written = JSON.parse(await readFile(table, "utf8"));
-    expect(Object.keys(written.entries).sort()).toEqual(["/01/09520123456788", "/01/09520123456795"]);
+
+    const folds = process.platform === "win32" || process.platform === "darwin";
+    const codes = async (path: string) =>
+      Object.keys(JSON.parse(await readFile(path, "utf8")).entries).sort();
+    if (folds) {
+      expect(await codes(table)).toEqual(["/01/09520123456788", "/01/09520123456795"]);
+    } else {
+      expect(await codes(table)).toEqual(["/01/09520123456788"]);
+      expect(await codes(shouting)).toEqual(["/01/09520123456795"]);
+    }
   });
 
   it("names every flag it parses in the line it prints", async () => {
