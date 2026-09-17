@@ -115,6 +115,53 @@ describe("what counts as a scan", () => {
   });
 });
 
+describe("what a scan event may not carry", () => {
+  it("records the table's href, not the target the caller's query was appended to", async () => {
+    // The query string is carried on to the target because the standard asks for it, and it
+    // is also whatever a stranger wrote: `?email=alice@example.com&uid=99123&fbclid=...`
+    // went verbatim into the event, in a log the security policy promises holds "nothing
+    // that identifies a person". The `Location` still carries it, because a campaign
+    // parameter on a printed code is the point; the event records where the table sent the
+    // scan, which is what a report needs and is the operator's own data.
+    const response = await get("/01/09520123456788?email=alice%40example.com&uid=99123&fbclid=IwAR9x");
+    expect(response.headers.get("location")).toContain("email=alice%40example.com");
+    const scan = events.find((event) => event.type === "scan");
+    expect(scan, "no scan was recorded").toBeDefined();
+    const line = JSON.stringify(scan);
+    expect(line, `the event carried the caller's query: ${line}`).not.toMatch(/alice|99123|IwAR9x/);
+    expect(scan?.type === "scan" ? scan.target : "").toBe("https://example.com/product");
+  });
+
+  it("records the language that chose, and only when the language chose", async () => {
+    // The field was the raw `Accept-Language` header, recorded whenever more than one link
+    // of the type existed, without asking whether the header matched anything: a German
+    // header on a redirect to the English default recorded `language: "de"`, so a report
+    // attributed an English scan to a German speaker. `fr;q=0` was recorded as a language
+    // although q=0 means "not acceptable", and a four kilobyte header became a four
+    // kilobyte field.
+    const cases: [string, string, string | undefined][] = [
+      // header, where it goes, what is recorded
+      ["fr", "https://example.com/produit", "fr"],
+      ["fr-CA", "https://example.com/produit", "fr"],
+      ["de", "https://example.com/product", undefined],
+      ["fr;q=0", "https://example.com/product", undefined],
+      ["fr;q=0, de", "https://example.com/product", undefined],
+      ["*", "https://example.com/product", undefined],
+      // A private subtag truncates to `fr`, so the French link is right and the field is
+      // two characters where the header was four kilobytes, which was the point of it.
+      [`fr-x-${"a".repeat(4000)}`, "https://example.com/produit", "fr"],
+    ];
+    for (const [header, target, recorded] of cases) {
+      events.length = 0;
+      const response = await get("/01/09520123456788", { headers: { "accept-language": header } });
+      expect(response.headers.get("location"), `${header} went somewhere unexpected`).toBe(target);
+      const scan = events.find((event) => event.type === "scan");
+      const language = scan?.type === "scan" ? scan.language : undefined;
+      expect(language, `${header.slice(0, 40)} recorded ${String(language)}`).toBe(recorded);
+    }
+  });
+});
+
 describe("what an orchestrator can ask", () => {
   it("answers liveness as long as the process is up", async () => {
     const response = await get("/healthz");
@@ -203,26 +250,59 @@ describe("what an orchestrator can ask", () => {
       4,
     );
 
-    // And no counter is a second name for a number already published. Every counter's value
-    // is compared against the sum of the scan counter; one that equals it is either that
-    // sum again or a coincidence at these small numbers, and the assertion says which to
-    // look at rather than passing quietly.
-    const published = (await (await get("/metrics")).text())
+    // And no counter is a second name for a number already published. The first version of
+    // this filtered out every line containing a brace and then mapped the values away, so
+    // it pinned unlabelled names and nothing else: an adversarial pass reintroduced the
+    // deleted counter as `taggant_answered_total{kind="all"}` and as
+    // `resolver_answered_total` and this passed both times, while the comment above it
+    // claimed every value was compared against the scan sum. Both halves are real now.
+    const series = (await (await get("/metrics")).text())
       .split("\n")
-      .filter((line) => line.startsWith("taggant_") && !line.includes("{"))
-      .map((line) => line.split(" ")[0] ?? "");
-    expect(published).toEqual(["taggant_bad_requests_total", "taggant_resolve_seconds_total"]);
+      .filter((line) => line !== "" && !line.startsWith("#"))
+      .map((line) => {
+        const cut = line.lastIndexOf(" ");
+        return { series: line.slice(0, cut), value: Number(line.slice(cut + 1)) };
+      });
+
+    // Every series, labels and prefix included, so a name outside the taggant_ prefix or
+    // wearing a label cannot slip in.
+    expect(series.map((each) => each.series).sort()).toEqual([
+      "taggant_bad_requests_total",
+      "taggant_resolve_seconds_total",
+      'taggant_scans_total{outcome="linkset"}',
+      'taggant_scans_total{outcome="redirect"}',
+      'taggant_scans_total{outcome="unresolved"}',
+    ]);
+
+    // And by value: nothing outside the scan counter carries the scan sum. The counts above
+    // are chosen so that the sum is four while the bad requests are one and the seconds are
+    // a fraction, and a delta is compared rather than a total, so equality here means a
+    // duplicate rather than a coincidence.
+    const scanSum = redirects + linksets + unresolved;
+    const copies = series.filter(
+      (each) => !each.series.startsWith("taggant_scans_total") && each.value === scanSum,
+    );
+    expect(
+      copies.map((each) => each.series),
+      `these carry the scan sum: ${JSON.stringify(copies)}`,
+    ).toEqual([]);
   });
 });
 
 describe("what a stranger can put in a header", () => {
-  it("encodes the path prefix, which is the part the caller writes", async () => {
-    // The identifier parts were always encoded; the prefix in front of them was not, and
-    // it goes into a Link header and into the subject of every fact in a linkset.
-    const response = await get("/%22%3E%3Cscript%3E/01/09520123456788");
+  it("publishes nothing of the path the caller wrote in front of the identifier", async () => {
+    // This used to check that the prefix was encoded when it was published, which it was.
+    // An adversarial pass pointed out what encoding it does not fix: the prefix is the
+    // caller's, so `/attacker/chosen/stem/01/09520123456788` published
+    // `<origin>/attacker/chosen/stem/01/09520123456788` as that product's identity, under
+    // `owl:sameAs`, with an origin configured and doing nothing about it. It is not in the
+    // subject at all now, so the encoding question does not arise.
+    const response = await get("/%22%3E%3Cscript%3E/attacker/stem/01/09520123456788");
     const header = response.headers.get("link") ?? "";
     expect(header).not.toContain('"><script>');
-    expect(header).toContain("%22%3E%3Cscript%3E");
+    expect(header).not.toContain("%22%3E%3Cscript%3E");
+    expect(header).not.toContain("attacker");
+    expect(header).toContain("/01/09520123456788");
   });
 
   it("answers a path carrying a line break rather than failing on it", async () => {
@@ -231,6 +311,58 @@ describe("what a stranger can put in a header", () => {
     const response = await get("/a%0d%0aX-Injected:%20yes/01/09520123456788");
     expect(response.status).toBe(307);
     expect(response.headers.get("x-injected")).toBeNull();
+  });
+
+  it("publishes nothing a Host header says, over a raw socket that can actually send one", async () => {
+    // `fetch` silently replaces a caller-set `host`, which is why the test this replaces
+    // could not fail for its own reason: an adversarial pass proved the header never left
+    // the client, and then sent it raw and found `Host: evil.example` published as the
+    // linkset anchor, in all three `Link` references including `owl:sameAs`, and as
+    // `resolverRoot` in the description file. A socket, therefore, not `fetch`.
+    const raw = async (path: string, host: string): Promise<string> => {
+      const { connect } = await import("node:net");
+      const url = new URL(origin);
+      return await new Promise<string>((settle, fail) => {
+        const socket = connect(Number(url.port), url.hostname, () => {
+          socket.write(`GET ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+        });
+        const chunks: Buffer[] = [];
+        socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+        socket.on("error", fail);
+        socket.on("end", () => settle(Buffer.concat(chunks).toString("utf8")));
+      });
+    };
+
+    const linkset = await raw("/01/09520123456788?linkType=linkset", "evil.example");
+    expect(linkset).toContain("200 OK");
+    expect(linkset, "a Host header reached the subject").not.toContain("evil.example");
+    const described = await raw("/.well-known/gs1resolver", "evil.example");
+    expect(described, "a Host header reached the description file").not.toContain("evil.example");
+  });
+
+  it("answers a Host that is not a host with a refusal rather than a 500", async () => {
+    // The request target was parsed against `http://${request.headers.host}`, so a Host
+    // that `URL` rejects threw before anything was validated and became a 500, which also
+    // moved no counter and left readiness green. Nothing reads the host now.
+    const { connect } = await import("node:net");
+    const url = new URL(origin);
+    const statuses: string[] = [];
+    for (const host of ["::1", "[", "a b", "%", "@", "evil.example:99999"]) {
+      const answer = await new Promise<string>((settle, fail) => {
+        const socket = connect(Number(url.port), url.hostname, () => {
+          socket.write(`GET /01/09520123456788 HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+        });
+        const chunks: Buffer[] = [];
+        socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+        socket.on("error", fail);
+        socket.on("end", () => settle(Buffer.concat(chunks).toString("utf8").split("\r\n")[0] ?? ""));
+      });
+      statuses.push(answer);
+    }
+    expect(
+      statuses.filter((line) => line.includes("500")),
+      statuses.join(" | "),
+    ).toEqual([]);
   });
 
   it("never puts an internal error message in a response", async () => {

@@ -122,3 +122,43 @@ describe("key qualifier values", () => {
     expect(parseDigitalLink("/8018/012345678901234560/8019/12345").qualifiers[0]?.value).toBe("12345");
   });
 });
+
+describe("a GRAI, which is the identifier whose check digit was in the wrong place", () => {
+  it("accepts one built the way GS1 says and refuses a mistyped fourteenth digit", () => {
+    // GS1's barcode syntax dictionary gives 8003 as `N1,zero N13,csum`: fourteen digits,
+    // the first a mandatory zero, the check digit the last of the thirteen-digit second
+    // component, so position fourteen. This file said position thirteen, which refused
+    // every correctly printed GRAI with a 400 and accepted all ten values of the fourteenth
+    // digit as ten distinct identifiers: a mistyped GRAI became a different key rather than
+    // an error, which is the whole purpose of a check digit.
+    const body = "0952012345678";
+    const correct = `${body}${checkDigit(body)}`;
+    expect(() => parseDigitalLink(`/8003/${correct}`)).not.toThrow();
+
+    const wrong = [...correct];
+    wrong[13] = String((Number(wrong[13]) + 1) % 10);
+    expect(() => parseDigitalLink(`/8003/${wrong.join("")}`)).toThrow(/check digit/);
+
+    // And every other value of that digit is refused, rather than becoming its own key.
+    const accepted = [];
+    for (let digit = 0; digit <= 9; digit++) {
+      const candidate = `${body}${digit}`;
+      try {
+        parseDigitalLink(`/8003/${candidate}`);
+        accepted.push(candidate);
+      } catch {
+        // refused, which is the point
+      }
+    }
+    expect(accepted).toEqual([correct]);
+  });
+
+  it("requires the leading zero, because the check digit agrees with GS1 only when it is there", () => {
+    // GS1 computes the check over digits two to thirteen; this file computes it over
+    // everything before the check position, which includes digit one. Measured: the two
+    // agree for 2000 payloads with a zero in front and differ for all 2000 with a one. So
+    // the zero is what makes this arithmetic the standard's arithmetic, not a formality.
+    const body = "1952012345678";
+    expect(() => parseDigitalLink(`/8003/${body}${checkDigit(body)}`)).toThrow();
+  });
+});

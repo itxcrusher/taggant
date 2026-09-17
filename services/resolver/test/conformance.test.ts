@@ -54,11 +54,17 @@ const TABLE: LinkTable = parseTable({
   },
 });
 
+const ORIGIN = "https://id.example.com";
+
 let server: Server;
 let origin = "";
 
 beforeAll(async () => {
-  server = createResolver({ table: TABLE });
+  // An explicit origin, which is what a deployment sets and what the criteria are about:
+  // the subject of every fact this resolver presents. It used to be left unset here, so
+  // the subject came from the `Host` header of the test's own request, which meant these
+  // criteria were checked against a subject the caller had chosen.
+  server = createResolver({ table: TABLE, origin: ORIGIN });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address() as AddressInfo;
   origin = `http://127.0.0.1:${address.port}`;
@@ -163,15 +169,53 @@ describe("Links at each level up to the primary key SHALL be included in the lin
   it("includes the product's links when asked about a batch", async () => {
     const body = await linkset("/01/09520123456788/10/ABC?linkType=linkset");
     const anchors = body.linkset.map((entry) => entry.anchor);
-    expect(anchors).toContain(`${origin}/01/09520123456788/10/ABC`);
-    expect(anchors).toContain(`${origin}/01/09520123456788`);
+    expect(anchors).toContain(`${ORIGIN}/01/09520123456788/10/ABC`);
+    expect(anchors).toContain(`${ORIGIN}/01/09520123456788`);
+  });
+});
+
+describe("Links at each level are included even when two levels share an href", () => {
+  it("keeps the product's default when the lot points at the same page", async () => {
+    // The criterion above uses a different href at each level, so it passed while this was
+    // broken. Candidates were de-duplicated on link type and href across the whole
+    // ancestry, so attaching one landing page to a product and to its lot made them one
+    // candidate: the lot's was kept, the product's was dropped, and the product's
+    // `default: true` went with it. The same table with distinct hrefs answered 307; with
+    // a shared href it answered 404, "no default link is set for that identifier".
+    const shared = "https://example.com/shared-page";
+    const table = parseTable({
+      version: 1,
+      entries: {
+        "/01/09520123456788": [
+          { href: shared, linkType: "gs1:pip", title: "Product", hreflang: ["en"], default: true },
+        ],
+        "/01/09520123456788/10/LOT": [{ href: shared, linkType: "gs1:pip", title: "Lot", hreflang: ["fr"] }],
+      },
+    });
+    const server = createResolver({ table, origin: ORIGIN, events: () => {} });
+    await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+    const at = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const redirect = await fetch(`${at}/01/09520123456788/10/LOT`, { redirect: "manual" });
+      expect(redirect.status, "the lot lost the product's default").toBe(307);
+      expect(redirect.headers.get("location")).toBe(shared);
+
+      const linkset = (await (await fetch(`${at}/01/09520123456788/10/LOT?linkType=linkset`)).json()) as {
+        linkset: { anchor: string }[];
+      };
+      const anchors = linkset.linkset.map((entry) => entry.anchor);
+      expect(anchors).toContain(`${ORIGIN}/01/09520123456788/10/LOT`);
+      expect(anchors, "the product's own anchor vanished").toContain(`${ORIGIN}/01/09520123456788`);
+    } finally {
+      server.close();
+    }
   });
 });
 
 describe("The URI used as the subject of facts presented SHALL be the uncompressed version", () => {
   it("anchors on the canonical form even when asked in the alphabetic form", async () => {
     const body = await linkset("/gtin/09520123456788?linkType=linkset");
-    expect(body.linkset[0]?.anchor).toBe(`${origin}/01/09520123456788`);
+    expect(body.linkset[0]?.anchor).toBe(`${ORIGIN}/01/09520123456788`);
   });
 });
 
@@ -267,7 +311,12 @@ describe("SHALL provide a resolver description file at /.well-known/gs1resolver"
   it("declares the context file, and serves it as JSON-LD", async () => {
     const body = await description();
     expect(typeof body.contextFile).toBe("string");
-    const context = await fetch(String(body.contextFile));
+    // Declared at the configured origin, which is the address a client would use, and
+    // fetched from the address this test's server is actually listening on. The two are
+    // deliberately different now: the resolver publishes the name it was told it has, not
+    // the one in the request it happens to be answering.
+    expect(String(body.contextFile)).toBe(`${ORIGIN}/.well-known/gs1resolver-context.jsonld`);
+    const context = await get("/.well-known/gs1resolver-context.jsonld");
     expect(context.headers.get("content-type")).toBe("application/ld+json");
     const parsed = (await context.json()) as { "@context": Record<string, string> };
     expect(parsed["@context"]?.gs1).toBe("https://gs1.org/voc/");

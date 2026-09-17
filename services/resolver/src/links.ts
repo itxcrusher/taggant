@@ -71,6 +71,11 @@ export function parseTable(value: unknown): LinkTable {
     }
 
     if (!Array.isArray(links)) throw new TypeError(`the entry for ${path} is not a list of links`);
+    // One default per link type per anchor. Two were accepted, and then the resolver
+    // followed the first while the linkset published both as `gs1:defaultLink`, so a client
+    // reading the linkset and a client following a plain scan disagreed about the same
+    // code and the table said nothing was wrong.
+    const defaults = new Set<string>();
     for (const link of links) {
       for (const field of ["href", "linkType", "title"] as const) {
         if (typeof link?.[field] !== "string" || link[field].length === 0) {
@@ -101,9 +106,44 @@ export function parseTable(value: unknown): LinkTable {
       if (target.protocol !== "http:" && target.protocol !== "https:") {
         throw new TypeError(`the href ${JSON.stringify(link.href)} under ${path} is not http or https`);
       }
+
+      if (link.default === true) {
+        if (defaults.has(relation)) {
+          throw new TypeError(
+            `${path} has two default links of type ${JSON.stringify(link.linkType)}, and only one can be the default`,
+          );
+        }
+        defaults.add(relation);
+      }
+
+      // A title goes into a `Link` header, where a control character is at best a header
+      // Node refuses to write, which used to become a 500 for whoever scanned the code,
+      // and a line separator is invisible in every editor the author of the table has.
+      // Refused where the table is read rather than where it is served.
+      if (holdsControlCharacter(link.title)) {
+        throw new TypeError(
+          `the title under ${path} holds a control character, which cannot go in a Link header`,
+        );
+      }
     }
   }
   return table as LinkTable;
+}
+
+/**
+ * Whether a string holds a character that cannot go in a header, or cannot be seen.
+ *
+ * Code points rather than a regular expression, because a regular expression holding
+ * control characters is nearly always a mistake and the linter is right to refuse one;
+ * this is the single place where they are the subject rather than an accident. U+2028 and
+ * U+2029 are in with them: a parser treats them as line breaks and an editor shows nothing.
+ */
+function holdsControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code < 0x20 || code === 0x7f || code === 0x2028 || code === 0x2029) return true;
+  }
+  return false;
 }
 
 /** Turn a vocabulary term into the full URI a linkset has to use as a relation name. */
@@ -131,8 +171,17 @@ export interface Candidate extends StoredLink {
  */
 export function candidatesFor(table: LinkTable, link: DigitalLink): Candidate[] {
   const found: Candidate[] = [];
-  const seen = new Set<string>();
   for (const level of ancestry(link)) {
+    // Duplicates are dropped within a level and never across levels. The set used to be
+    // keyed on the link type and the href alone, for the whole ancestry, so attaching the
+    // same landing page to a product and to one of its lots made the two one candidate:
+    // the specific one was kept, the product's was dropped, and with it the product's
+    // `default: true`. A lot that shared its product's href answered 404, "no default link
+    // is set for that identifier", while the same table with a different href answered 307;
+    // the product's anchor also vanished from the linkset, which is the criterion that
+    // links at every level up to the primary key are included. The level belongs in the key
+    // because a link at two levels is two facts: one about the product, one about the lot.
+    const seen = new Set<string>();
     for (const stored of table.entries[level] ?? []) {
       const key = `${expandLinkType(stored.linkType)} ${stored.href}`;
       if (seen.has(key)) continue;
@@ -174,16 +223,40 @@ export function chooseLink(candidates: Candidate[], request: ChoiceRequest): Can
   return best(siblings, request.acceptLanguage) ?? fallback;
 }
 
+/**
+ * The tag on a link that answers a request for a language, if one does.
+ *
+ * Matching runs in both directions, and only one of them used to. A request for `fr` found
+ * a link tagged `fr-CA`, because the link's tag was tested with `startsWith`. A request for
+ * `fr-CA` did not find a link tagged `fr`, so a French-Canadian phone was served the
+ * English default while a French page sat in the table: RFC 4647 calls the fix lookup, and
+ * it is to truncate the request rather than the offer, most specific first. Tables are
+ * written with base languages (`fr`, `de`, `es`), which made the missing direction the
+ * common one rather than a corner.
+ *
+ * Exported because the resolver records which language decided a redirect, and a second
+ * implementation of this rule in that file is how the record and the choice come to
+ * disagree.
+ */
+export function languageMatch(hreflang: readonly string[] | undefined, wanted: string): string | undefined {
+  if (hreflang === undefined) return undefined;
+  const parts = wanted.split("-");
+  for (let length = parts.length; length > 0; length--) {
+    const range = parts.slice(0, length).join("-");
+    const found = hreflang.find(
+      (tag) => tag.toLowerCase() === range || tag.toLowerCase().startsWith(`${range}-`),
+    );
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
 /** The best of a set for the languages asked for, or the first when nothing matches. */
 function best(links: Candidate[], acceptLanguage: string | undefined): Candidate | undefined {
   if (links.length === 0) return undefined;
   if (links.length === 1) return links[0];
   for (const language of parseAcceptLanguage(acceptLanguage)) {
-    const match = links.find((candidate) =>
-      candidate.hreflang?.some(
-        (tag) => tag.toLowerCase() === language || tag.toLowerCase().startsWith(`${language}-`),
-      ),
-    );
+    const match = links.find((candidate) => languageMatch(candidate.hreflang, language) !== undefined);
     if (match) return match;
   }
   return links.find((candidate) => candidate.default === true) ?? links[0];

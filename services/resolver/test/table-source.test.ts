@@ -2,6 +2,7 @@ import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parseTable } from "../src/links.js";
 import { watchTable } from "../src/table-source.js";
 
 /**
@@ -166,5 +167,47 @@ describe("noticing that the table changed", () => {
     await writeFile(path, "2");
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(changes).toBe(0);
+  });
+});
+
+describe("what a table may not say", () => {
+  it("refuses two default links of one type under one identifier", () => {
+    // Both were accepted, the resolver followed the first, and the linkset published both
+    // as `gs1:defaultLink`, so a client reading the linkset and a client following a plain
+    // scan disagreed about the same printed code, with nothing saying so.
+    expect(() =>
+      parseTable({
+        version: 1,
+        entries: {
+          "/01/09520123456788": [
+            { href: "https://a.example/", linkType: "gs1:pip", title: "A", default: true },
+            { href: "https://b.example/", linkType: "gs1:pip", title: "B", default: true },
+          ],
+        },
+      }),
+    ).toThrow(/two default links/);
+  });
+
+  it("refuses a title holding a control character, because a title goes in a header", () => {
+    // A title is published in a `Link` header. Node refuses to write a header holding a
+    // carriage return, so this was a 500 for whoever scanned the code, and a line separator
+    // is invisible in the editor of whoever wrote the table.
+    // Built from code points rather than written as escapes. Written as escapes they have
+    // arrived in this file as the characters themselves twice, which the repository's own
+    // sweep for control characters in tracked files then refuses, correctly.
+    const cr = String.fromCharCode(13);
+    const lf = String.fromCharCode(10);
+    const nul = String.fromCharCode(0);
+    const lineSeparator = String.fromCharCode(0x2028);
+    for (const title of [`a${cr}${lf}X-Injected: yes`, `a${nul}b`, `a${lineSeparator}b`]) {
+      expect(() =>
+        parseTable({
+          version: 1,
+          entries: {
+            "/01/09520123456788": [{ href: "https://a.example/", linkType: "gs1:pip", title, default: true }],
+          },
+        }),
+      ).toThrow(/control character/);
+    }
   });
 });

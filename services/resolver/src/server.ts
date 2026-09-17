@@ -1,7 +1,14 @@
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { DigitalLinkError, SUPPORTED_PRIMARY_KEYS, parseDigitalLink } from "./digital-link.js";
 import { Counters, type EventSink, jsonLines } from "./events.js";
-import { type LinkTable, candidatesFor, chooseLink } from "./links.js";
+import {
+  type LinkTable,
+  candidatesFor,
+  chooseLink,
+  languageMatch,
+  parseAcceptLanguage,
+  sameLinkType,
+} from "./links.js";
 import { CONTEXT, buildLinkset } from "./linkset.js";
 
 export interface ResolverOptions {
@@ -25,6 +32,30 @@ export interface ResolverOptions {
    */
   origin?: string;
 }
+
+/**
+ * The base the request target is parsed against, and nothing more.
+ *
+ * A name that cannot resolve, on a reserved top-level domain, so that anything which
+ * escaped into a response would be unmistakable rather than plausible. Only the path and
+ * the query are ever read from the result.
+ */
+const PARSE_BASE = "http://request.invalid";
+
+/**
+ * The origin used when a deployment configured none.
+ *
+ * It was the `Host` header, guarded by a pattern that admitted any plain host name, so
+ * `Host: evil.example` published that host as the subject of every answer: the linkset
+ * anchor, all three `Link` references including `owl:sameAs`, and `resolverRoot` in the
+ * description file. The guard's own comment named that case and did not stop it, and the
+ * test written for it could not fail, because `fetch` silently replaces a caller-set
+ * `host`. So no header decides this now. A resolver that does not know its own name
+ * publishes an obviously local one, and the command line refuses to start without being
+ * told; an operator behind a proxy sets the origin rather than the resolver reading
+ * `X-Forwarded-*`, which would hand the decision back to whoever sends the request.
+ */
+const LOCAL_ORIGIN = "http://localhost";
 
 const LINKSET_TYPE = "application/linkset+json";
 const CONTEXT_PATH = "/.well-known/gs1resolver-context.jsonld";
@@ -82,8 +113,12 @@ function handle(
   const started = performance.now();
   const table = currentTable(options);
   const method = request.method ?? "GET";
-  const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
-  const origin = options.origin ?? `http://${safeHost(request.headers.host)}`;
+  // A fixed base, because the only things read from this are the path and the query.
+  // It was `http://${request.headers.host}`, which put a caller's header into the
+  // subject of every fact below and answered 500 for any Host that is not a URL
+  // authority, since parsing threw before anything was validated.
+  const url = new URL(request.url ?? "/", PARSE_BASE);
+  const origin = options.origin ?? LOCAL_ORIGIN;
 
   // Every response carries these. A resolver that cannot be read from a browser page is
   // not much use to the browsers that scan the codes.
@@ -166,7 +201,13 @@ function handle(
   }
 
   const candidates = candidatesFor(table, link);
-  const subject = `${origin}${link.stem}${link.canonicalPath}`;
+  // The subject is the origin and the identifier, and nothing else. It used to carry
+  // `link.stem`, the part of the path the caller wrote in front of the identifier, so a
+  // request for `/anything/i/like/01/09520123456788` published
+  // `<origin>/anything/i/like/01/09520123456788` as that product's identity under
+  // `owl:sameAs`, with `--origin` set and doing nothing about it. A resolver hosted
+  // under a path prefix puts the prefix in its origin, where the operator writes it.
+  const subject = `${origin}${link.canonicalPath}`;
   const linksetUrl = `${subject}?linkType=linkset`;
   const headers: Record<string, string> = {
     ...cors,
@@ -182,9 +223,12 @@ function handle(
     url.searchParams.get("linkType") === "linkset" || accepts(request.headers.accept, LINKSET_TYPE);
   const took = (): number => Math.round((performance.now() - started) * 10) / 10;
   const language = request.headers["accept-language"];
+  // The tags the header actually asks for, ranked, with `q=0` dropped: the same list the
+  // choice is made from, so what is recorded cannot disagree with what decided.
+  const acceptedTags = parseAcceptLanguage(language).map((tag) => tag.toLowerCase());
 
   if (wantsLinkset) {
-    const body = JSON.stringify(buildLinkset(candidates, `${origin}${link.stem}`), null, 2);
+    const body = JSON.stringify(buildLinkset(candidates, origin), null, 2);
     emit({
       type: "scan",
       at: new Date().toISOString(),
@@ -239,10 +283,25 @@ function handle(
     return;
   }
 
-  // Whether the language actually chose: it did if there was more than one link it could
-  // have gone to.
-  const sameType = candidates.filter((candidate) => candidate.linkType === chosen.linkType);
-  const decidedByLanguage = sameType.length > 1;
+  // The tag that chose, if one did. This was the raw `Accept-Language` header, recorded
+  // whenever more than one link of the type existed, without ever asking whether the header
+  // matched: `Accept-Language: de` against an English default and a French alternative
+  // recorded `language: "de"` on a redirect to the English link, so a report attributed an
+  // English scan to a German speaker. `fr;q=0, de` was recorded as a language although
+  // `q=0` means "not acceptable", `*` was recorded as a language, and a four kilobyte
+  // header became a four kilobyte field on that line of the operator's log. What is
+  // recorded now is the matched tag off the chosen link, which is the only thing that can
+  // have decided anything, and nothing is recorded when the choice was not the language's.
+  const decided = acceptedTags.reduce<string | undefined>(
+    (found, wanted) => found ?? languageMatch(chosen.hreflang, wanted),
+    undefined,
+  );
+  const sameType = candidates.filter((candidate) => sameLinkType(candidate.linkType, chosen.linkType));
+  // The table's own href, not the target. The target carries the caller's query string
+  // through, which is what the standard asks for and is also whatever a stranger wrote:
+  // `?email=alice@example.com&uid=99123` went verbatim into the event, in a log the
+  // documents promise holds "nothing that identifies a person". Where a scan was sent, as
+  // a report needs it, is the link the table chose.
   const target = withPassedThroughQuery(chosen.href, url);
   emit({
     type: "scan",
@@ -250,10 +309,8 @@ function handle(
     identifier: link.canonicalPath,
     outcome: "redirect",
     ...(requested === undefined ? {} : { requested }),
-    target,
-    // Recorded only when it chose between links, because a language that decided nothing
-    // in a report of why a redirect went where it did is noise that reads as a reason.
-    ...(language !== undefined && decidedByLanguage ? { language } : {}),
+    target: chosen.href,
+    ...(decided !== undefined && sameType.length > 1 ? { language: decided } : {}),
     tookMs: took(),
   });
   send(response, 307, { ...headers, location: target }, "", method === "HEAD");
@@ -301,19 +358,6 @@ function send(
   response.writeHead(status, { ...headers, "content-length": String(bytes.length) });
   // A HEAD carries the headers a GET would, and no body.
   response.end(headOnly ? undefined : bytes);
-}
-
-/**
- * A Host header, if it looks like one, and localhost otherwise.
- *
- * The origin is the subject of every fact this resolver presents, and with none configured
- * it comes from a header the caller sets. `Host: evil.example` anchored a whole linkset
- * there. A deployment should pass `--origin`; this is what stops the default being worse
- * than useless, by refusing anything that is not a plain host and port.
- */
-function safeHost(host: string | undefined): string {
-  if (host && /^[A-Za-z0-9.-]{1,253}(:\d{1,5})?$/.test(host)) return host;
-  return "localhost";
 }
 
 /**

@@ -16,6 +16,7 @@ export {
   chooseLink,
   emptyTable,
   expandLinkType,
+  languageMatch,
   parseAcceptLanguage,
   parseTable,
   sameLinkType,

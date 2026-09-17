@@ -31,6 +31,13 @@ import { basename, dirname } from "node:path";
 export const DEFAULT_POLL_MS = 2000;
 
 export interface TableSourceOptions {
+  /**
+   * The stamp of the file as it was before the caller read it, from `stampFor`.
+   *
+   * Pass it whenever the caller has already read the file, so that a save in between is
+   * noticed rather than adopted as the starting point.
+   */
+  since?: string | null;
   pollMs?: number;
   /** Called whenever the file on disk is not the one last seen. */
   onChange: () => void | Promise<void>;
@@ -59,6 +66,10 @@ export interface TableSource {
  * to land on the same size and timestamp, which a rename can. Absent is a state too: a
  * table that is deleted and put back is a change.
  */
+export async function stampFor(path: string): Promise<string | null> {
+  return stampOf(path);
+}
+
 async function stampOf(path: string): Promise<string | null> {
   try {
     const found = await stat(path);
@@ -73,7 +84,12 @@ async function stampOf(path: string): Promise<string | null> {
 }
 
 export async function watchTable(path: string, options: TableSourceOptions): Promise<TableSource> {
-  let stamp = await stampOf(path);
+  // The stamp the caller took before it read the file, when it passes one. Without it the
+  // first stamp is taken here, after the caller's own read, and a save landing between the
+  // two is invisible for good: the resolver serves the older table, the stamp matches the
+  // newer file, readiness says ready, and a forced check reports no change. That window is
+  // small and it is a window in the one mechanism this module exists to close.
+  let stamp = options.since ?? (await stampOf(path));
   let stopped = false;
   let running = false;
 
