@@ -546,7 +546,10 @@ describe("what it writes down, and how much it holds", () => {
     const { root } = await drive();
     const { registerCode } = await import("../src/operations.js");
     const table = join(root, "case.json");
-    const shouting = table.toUpperCase();
+    // Only the name shouts. Upper-casing the whole path took the temporary directory with
+    // it, and on Linux that is a path nothing may create: the run failed with EACCES on
+    // `/TMP` rather than measuring anything.
+    const shouting = join(root, "CASE.JSON");
     await Promise.all([
       registerCode(table, {
         path: "/01/09520123456788",
