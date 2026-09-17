@@ -7,8 +7,9 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import process from "node:process";
 import { bundle, realWithin } from "@taggant/bundler";
 import {
   type Report,
@@ -74,8 +75,23 @@ export async function compile(
   // Resolved the way the bundler resolves it, so artwork that compiles here is artwork
   // that publishes. `realWithin` refuses a path that leaves the experience even through
   // a link.
-  const artworkPath = await realWithin(experience.directory, target.source);
-  const compiled = await compileTarget(await readFile(artworkPath), {
+  // The artwork can be gone: renamed, tidied away, or on a drive that is not mounted.
+  // Both `realWithin` and `readFile` report that as an errno with a path in it, and the
+  // server turns anything that is not a `WorkspaceError` into a 500 with a stack trace in
+  // the log. Publishing already wrapped its own rebuild in a sentence, so the same moved
+  // file was a sentence on one route and a crash on the other, which is the worse of the
+  // two for the person who moved it.
+  let artwork: Buffer;
+  try {
+    artwork = await readFile(await realWithin(experience.directory, target.source));
+  } catch (error) {
+    throw new WorkspaceError(
+      `${targetId} points at ${target.source} and it could not be read: ${
+        error instanceof Error ? error.message : String(error)
+      }. Upload the artwork again, or put the file back where the manifest says it is.`,
+    );
+  }
+  const compiled = await compileTarget(artwork, {
     id: targetId,
     scanDistanceMm,
   });
@@ -91,28 +107,95 @@ export interface PublishOutcome {
 }
 
 /**
+ * One queue per destination, so two publishes of one experience happen one after the other.
+ *
+ * The bundler builds each publish in its own staging directory and swaps it in with a
+ * rename, and that is not enough on its own: the swap removes the destination and renames
+ * over it, so two publishes doing that at once collide there instead. Measured over
+ * fourteen pairs each way, publishing into a destination that already held a bundle:
+ *
+ *   one staging path for all publishes, no queue      8 of 14 pairs failed
+ *   a staging path per publish, no queue             14 of 14 pairs failed
+ *   a staging path per publish and this queue         0 of 14
+ *
+ * The failures are a raw ENOENT or EPERM naming a path that is ours, reaching an operator
+ * who was told how many files had been written; one round of the middle row left the
+ * destination empty with nothing published at all. So serialising is what makes the
+ * sentence true, and the unique staging path is what makes the loser's work discarded
+ * whole rather than half of it surviving.
+ *
+ * Keyed on the destination rather than the experience id, because that is the thing being
+ * written and two ids cannot share it, and through `queueKey` for the same reason the
+ * table's queue is.
+ */
+const publishQueues = new Map<string, Promise<void>>();
+
+/**
+ * The key a path takes in a queue.
+ *
+ * `resolve` alone was not enough, and the comment that said it was is the finding. It
+ * normalises separators and relative segments and does not normalise case, which is the
+ * spelling difference that matters on the filesystem this is developed on: two calls
+ * spelled `case.json` and `CASE.JSON` took two queues, ran together, and one of the two
+ * codes was gone. Case is folded where the platform folds it and left alone where it does
+ * not, because on Linux those two names are two files and sharing a queue between them
+ * would be the opposite mistake.
+ */
+function queueKey(path: string): string {
+  const resolved = resolve(path);
+  const caseInsensitive = process.platform === "win32" || process.platform === "darwin";
+  return caseInsensitive ? resolved.toLowerCase() : resolved;
+}
+
+function inTurnForPublish<T>(outDir: string, work: () => Promise<T>): Promise<T> {
+  const key = queueKey(outDir);
+  const previous = publishQueues.get(key) ?? Promise.resolve();
+  const result = previous.then(work, work);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  publishQueues.set(key, settled);
+  void settled.then(() => {
+    if (publishQueues.get(key) === settled) publishQueues.delete(key);
+  });
+  return result;
+}
+
+export interface PublishOptions {
+  runtimeDir?: string;
+  scanDistanceMm?: number;
+  /**
+   * Called as each target is rebuilt, before anything is published.
+   *
+   * A rebuild writes to the workspace, and the publish can still fail afterwards at the
+   * bundler, so what was rebuilt has to be reportable on the failure path too. Reading it
+   * off the returned outcome only worked when there was a returned outcome.
+   */
+  onRebuild?: (targetId: string, atDistanceMm: number) => void;
+}
+
+/**
  * Publish an experience as a static folder.
  *
  * Anything not compiled yet is compiled first, because publishing an experience whose
  * artwork was changed after its last compile would ship a bundle that recognises the old
  * artwork, and nothing downstream could tell.
  */
-export async function publish(
+export function publish(
   workspace: Workspace,
   experience: Experience,
   outDir: string,
-  options: {
-    runtimeDir?: string;
-    scanDistanceMm?: number;
-    /**
-     * Called as each target is rebuilt, before anything is published.
-     *
-     * A rebuild writes to the workspace, and the publish can still fail afterwards at the
-     * bundler, so what was rebuilt has to be reportable on the failure path too. Reading it
-     * off the returned outcome only worked when there was a returned outcome.
-     */
-    onRebuild?: (targetId: string, atDistanceMm: number) => void;
-  } = {},
+  options: PublishOptions = {},
+): Promise<PublishOutcome> {
+  return inTurnForPublish(outDir, () => publishOnce(workspace, experience, outDir, options));
+}
+
+async function publishOnce(
+  workspace: Workspace,
+  experience: Experience,
+  outDir: string,
+  options: PublishOptions,
 ): Promise<PublishOutcome> {
   // Refused here rather than half way through writing a folder. `publishable` is where
   // the schema stops being advice and becomes a gate: a bundle is what the world sees, and
@@ -222,15 +305,18 @@ export async function publish(
  *
  * The workspace has the same queue for the same reason, keyed per experience, and it does
  * not cover this: the link table is one shared file and this function never went through
- * the workspace. Keyed on the resolved path so two spellings of one file share a queue.
- * Like the workspace's, this is an in-process queue and not a lock file: two consoles
- * pointed at one link table is a thing the documentation says not to do rather than a
- * thing this pretends to survive.
+ * the workspace. Keyed through `queueKey`, so two spellings of one file share a queue.
+ * Like the workspace's, this is an in-process queue and not a lock file, so it orders
+ * this console's writes and knows nothing about another console's. That arrangement is
+ * one console per link table: `claim` in `one-console.ts` takes a lock beside the table
+ * at startup and refuses to open a table another live console holds, and the README says
+ * so in the words an operator would use. Until that check existed this comment cited a
+ * document that said nothing of the kind.
  */
 const tableQueues = new Map<string, Promise<void>>();
 
 function inTurnForTable<T>(tablePath: string, work: () => Promise<T>): Promise<T> {
-  const key = resolve(tablePath);
+  const key = queueKey(tablePath);
   const previous = tableQueues.get(key) ?? Promise.resolve();
   // Run on either outcome of the one before, so a failed registration does not wedge the
   // queue behind it.
@@ -339,11 +425,20 @@ async function writeCode(
 
   const staging = `${tablePath}.writing-${randomBytes(4).toString("hex")}`;
   try {
+    // The folder the table lives in need not exist yet. The console is told where to put
+    // the table and nothing creates that folder on the way, so on a fresh checkout the
+    // first code anyone registered came back as an ENOENT naming an internal staging
+    // path: a 500, a stack trace in the log, and nothing said about the folder.
+    await mkdir(dirname(tablePath), { recursive: true });
     await writeFile(staging, `${JSON.stringify(next, null, 2)}\n`);
     await rename(staging, tablePath);
   } catch (error) {
     await rm(staging, { force: true });
-    throw error;
+    throw new WorkspaceError(
+      `the link table at ${tablePath} could not be written, so the code was not registered: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
   return { path: canonical, replaced, kept: adjusted.length };
 }

@@ -41,6 +41,15 @@ infra/workspace/*
 infra/bundles/*
 !infra/bundles/.gitkeep
 
+# The console's lock files, written while it runs and removed when it stops properly.
+# One sits inside the workspace and one beside the link table, so both spellings.
+.console-lock
+*.console-lock
+
+# Written by a run of the compiler's command line from the repository root, the way the
+# stack job does before it publishes a bundle into the containers.
+front.target.json
+
 # Written by the CI test step so a failed run can be read without log access.
 test-output.txt
 

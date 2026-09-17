@@ -288,8 +288,9 @@ export function createWorkspace(root: string): Workspace {
    *
    * This is a self-hosted tool for the people who own the artwork, so the process is the
    * boundary and an in-process queue is the right size of answer. It is not a lock file
-   * and it does not defend against two consoles pointed at one directory, which is a thing
-   * the documentation says not to do rather than a thing this pretends to survive.
+   * and it orders this console's writes only. One console per workspace is what makes
+   * that enough, and `claim` in `one-console.ts` is what checks it: a lock beside the
+   * workspace, taken at startup, refusing a workspace another live console holds.
    */
   const queues = new Map<string, Promise<void>>();
   const inTurn = <T>(id: string, work: () => Promise<T>): Promise<T> => {
@@ -457,19 +458,25 @@ export function createWorkspace(root: string): Workspace {
     exists,
 
     async create(id: string, title: string): Promise<Experience> {
-      const directory = directoryFor(id);
-      if (await exists(id)) {
-        throw new WorkspaceError(`${id} already exists`);
-      }
-      // Through `realFolder`, so a link left in the workspace cannot put the manifest and
-      // its folders somewhere else. That check was written for uploads and guarded only
-      // those, so a junction named after an experience took the manifest write with it.
-      await realFolder(id, "artwork");
-      await realFolder(id, "media");
-      await realFolder(id, "targets");
-      const draft: DraftManifest = { schemaVersion: "1.0.0", id, title, targets: [] };
-      await writeAtomic(join(directory, "manifest.json"), `${JSON.stringify(draft, null, 2)}\n`);
-      return interpret(id, draft);
+      // In the queue, which it was alone among the writers in not being. It asks whether
+      // the experience exists and then writes the manifest, so two creates of one id
+      // arriving together both found it absent and both wrote: two operators were told
+      // they had created an experience, one existed, and it carried the other's title.
+      return await inTurn(id, async () => {
+        const directory = directoryFor(id);
+        if (await exists(id)) {
+          throw new WorkspaceError(`${id} already exists`);
+        }
+        // Through `realFolder`, so a link left in the workspace cannot put the manifest and
+        // its folders somewhere else. That check was written for uploads and guarded only
+        // those, so a junction named after an experience took the manifest write with it.
+        await realFolder(id, "artwork");
+        await realFolder(id, "media");
+        await realFolder(id, "targets");
+        const draft: DraftManifest = { schemaVersion: "1.0.0", id, title, targets: [] };
+        await writeAtomic(join(directory, "manifest.json"), `${JSON.stringify(draft, null, 2)}\n`);
+        return interpret(id, draft);
+      });
     },
 
     async save(id: string, manifest: DraftManifest): Promise<Experience> {
@@ -489,14 +496,24 @@ export function createWorkspace(root: string): Workspace {
       name: string,
       bytes: Uint8Array,
     ): Promise<string> {
-      const directory = await realFolder(id, folder);
-      // Two names that reduce to one is the ordinary case, not a corner: `logo.png` and
-      // `LOGO.PNG`, or `photo one.png` and `photo-one.png`. Writing the safe name blind
-      // deleted the first file and left the first target's manifest entry pointing at the
-      // second target's image, with nothing saying so.
-      const filename = await freeName(directory, safeFilename(name));
-      await writeAtomic(join(directory, filename), bytes);
-      return `${folder}/${filename}`;
+      // In the queue, because choosing a free name and writing it are two steps and the
+      // gap between them is the whole defect. `freeName` asks whether a name is taken and
+      // `storeFile` then takes it; two uploads arriving together both saw the same name
+      // free, both wrote it, and the second won the file while both manifest entries named
+      // it. Measured: two add-target forms posted in one `Promise.all` with the same
+      // filename left one file and two targets pointing at it, both operators told theirs
+      // was added. The sequential case `freeName` was written for is the case its test
+      // drives, which is why this survived a round.
+      return await inTurn(id, async () => {
+        const directory = await realFolder(id, folder);
+        // Two names that reduce to one is the ordinary case, not a corner: `logo.png` and
+        // `LOGO.PNG`, or `photo one.png` and `photo-one.png`. Writing the safe name blind
+        // deleted the first file and left the first target's manifest entry pointing at the
+        // second target's image, with nothing saying so.
+        const filename = await freeName(directory, safeFilename(name));
+        await writeAtomic(join(directory, filename), bytes);
+        return `${folder}/${filename}`;
+      });
     },
 
     async forgetFile(id: string, path: string): Promise<void> {
@@ -505,7 +522,25 @@ export function createWorkspace(root: string): Workspace {
       // Rebuilt from the folder and the basename rather than joined from the path given,
       // so nothing here can be walked out of the experience's own directory.
       if (name === "" || name.includes("/") || name.includes("\\")) return;
-      await rm(join(directoryFor(id), folder, name), { force: true }).catch(() => undefined);
+      // In the queue, and refusing to remove anything the manifest names. This deleted by
+      // name: when two concurrent uploads had been handed the same name, the refused one's
+      // cleanup took the accepted one's artwork, and that operator was told their target
+      // was added while the manifest named a file that was not there. The first defect is
+      // closed where names are chosen, and this is the second lock, because a cleanup that
+      // can delete a named file is one rename away from doing it again.
+      await inTurn(id, async () => {
+        const named = await read(id)
+          .then((experience) => {
+            const sources = experience.manifest.targets.map((target) => target.source);
+            const content = experience.manifest.targets.flatMap((target) =>
+              target.content.map((item) => item.src),
+            );
+            return new Set([...sources, ...content]);
+          })
+          .catch(() => new Set<string>());
+        if (named.has(`${folder}/${name}`)) return;
+        await rm(join(directoryFor(id), folder, name), { force: true }).catch(() => undefined);
+      });
     },
 
     async writeTarget(id: string, targetId: string, target: unknown): Promise<string> {

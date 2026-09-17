@@ -63,7 +63,9 @@ Then point a link at it, in `infra/links/links.json`:
 
 The resolver runs as a user that is not root, read only, with no new privileges and every capability dropped. It carries no package manager, no build tooling and no source: the build stage has the workspace and the runtime stage has the output. Its link table is mounted rather than baked in.
 
-The console runs as a user that is not root, with no new privileges and every capability dropped, and as the uid the command line gives it rather than the image's own. It is not read only, because writing is its job: the workspace it authors into, the folder it publishes to and the link table are all mounted, and none of them is in the image. It is larger than the resolver because it compiles artwork, and that means a native image library.
+The console runs as a user that is not root, read only, with no new privileges and every capability dropped, and as the uid the command line gives it rather than the image's own. Read only and writing is its job, which is not a contradiction: everything it writes is in a mount, so nothing it writes is in the image. The workspace it authors into, the folder it publishes to and the link table are all mounted, and `/tmp` is a tmpfs. That is worth knowing before adding anything that writes: a file next to a mount rather than inside it cannot be written at all, which is where the console's own lock file goes, and it goes inside the workspace for exactly this reason. It is larger than the resolver because it compiles artwork, and that means a native image library.
+
+One console at a time per workspace and per link table, which the console checks when it starts rather than trusting: it takes a lock in the workspace and beside the link table, and refuses to open either one another running console holds. If a console is killed rather than stopped, the next one on this machine takes the lock over and says so; a lock left by a container that no longer exists names a host this machine cannot ask about, so that one is refused and the message names the file to delete. `docker compose ... down` stops it properly and leaves nothing behind.
 
 ## Checking it
 

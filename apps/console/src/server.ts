@@ -77,6 +77,14 @@ export interface ConsoleOptions {
  * experience that was never published. It is escaped either way, and it should still not
  * be possible to say.
  */
+/**
+ * How many unread notices are held at once.
+ *
+ * One per operator action that redirects, held for five minutes or until the redirect is
+ * followed. A thousand is far more than a person generates and far less than a heap.
+ */
+const MOST_NOTICES = 1000;
+
 class Notices {
   private readonly held = new Map<string, { notice: Notice; at: number }>();
 
@@ -84,6 +92,18 @@ class Notices {
     this.sweep();
     const token = randomUUID();
     this.held.set(token, { notice, at: Date.now() });
+    // A ceiling, because this was the one quantity in this file without one while every
+    // other bound here is commented. A notice is held until its redirect is followed or
+    // five minutes pass, and a client that never follows its redirects holds every one:
+    // measured at about 1.4 KB per refusal, 4000 of them took the heap from 9.8 to 15.2
+    // MB. Small, and only reachable from the same origin, which is local. Dropped oldest
+    // first, which is insertion order for a Map, so the notice most likely to still be
+    // wanted is the one kept.
+    while (this.held.size > MOST_NOTICES) {
+      const oldest = this.held.keys().next();
+      if (oldest.done) break;
+      this.held.delete(oldest.value);
+    }
     return token;
   }
 
@@ -166,13 +186,33 @@ async function readBody(request: IncomingMessage, limit: number): Promise<Buffer
   }
   const chunks: Buffer[] = [];
   let total = 0;
-  for await (const chunk of request) {
-    const buffer = chunk as Buffer;
-    total += buffer.length;
-    if (total > limit) {
-      throw new WorkspaceError(`that is larger than the ${describeSize(limit)} limit`);
+  try {
+    for await (const chunk of request) {
+      const buffer = chunk as Buffer;
+      total += buffer.length;
+      if (total > limit) {
+        throw new WorkspaceError(`that is larger than the ${describeSize(limit)} limit`);
+      }
+      chunks.push(buffer);
     }
-    chunks.push(buffer);
+  } catch (error) {
+    if (error instanceof WorkspaceError) throw error;
+    // A browser that navigated away, a cancelled upload, a laptop that closed. Anything
+    // raised while reading a body is the client's circumstance rather than a fault, and
+    // arrived as five lines of Node stack in the operator's terminal because it is not a
+    // `WorkspaceError` and took the outer path. Nothing can be answered either way, since
+    // there is nobody on the socket; what this changes is what gets written down.
+    //
+    // Unverified, and said so rather than counted. On Node 22 here a client that destroys
+    // its socket leaves a request stream that simply ends, so nothing raises and the
+    // sentence an operator sees comes from the multipart parser instead. Three shapes were
+    // tried and none reached this branch, so it is a net under a path that exists in
+    // somebody else's measurement and not in mine.
+    throw new WorkspaceError(
+      `that upload stopped before it finished, after ${describeSize(total)}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
   return Buffer.concat(chunks);
 }
@@ -188,10 +228,20 @@ function describeSize(bytes: number): string {
  * attack surface here and the platform's parser is a better one than any written for the
  * occasion.
  */
-async function readForm(request: IncomingMessage): Promise<FormData> {
+async function readForm(
+  request: IncomingMessage,
+  carries: "fields" | "a file" = "fields",
+): Promise<FormData> {
   const type = request.headers["content-type"] ?? "";
   const multipart = type.startsWith("multipart/form-data");
-  const body = await readBody(request, multipart ? MAX_BODY_BYTES : MAX_FORM_BYTES);
+  // The limit comes from the route, not from the request. It used to be picked by the
+  // client's own Content-Type: anything that declared multipart was allowed 256 MB, so a
+  // request to create an experience, which has two short fields in it, could hand this
+  // process a quarter of a gigabyte to hold in memory by saying multipart and sending
+  // form fields. Two routes take a file and say so; every other route is 64 KB whatever
+  // the request calls itself. Multipart is still parsed either way, because a form with
+  // no file in it may legally be posted that way.
+  const body = await readBody(request, carries === "a file" ? MAX_BODY_BYTES : MAX_FORM_BYTES);
   if (multipart) {
     try {
       return await new Request("http://console.invalid/", {
@@ -353,7 +403,7 @@ export function createConsole(options: ConsoleOptions): Server {
     if (added?.[1]) {
       const id = assertId(decode(added[1], "that experience"));
       const experience = await workspace.read(id);
-      const form = await readForm(request);
+      const form = await readForm(request, "a file");
       const targetId = assertTargetId(field(form, "targetId"));
       const width = Number(field(form, "physicalWidthMm"));
       // A floor of one millimetre rather than of zero. 0.001 was accepted, and a printed
@@ -438,7 +488,7 @@ export function createConsole(options: ConsoleOptions): Server {
       if (!experience.manifest.targets.some((target) => target.id === targetId)) {
         throw new WorkspaceError(`${id} has no target called ${targetId}`);
       }
-      const form = await readForm(request);
+      const form = await readForm(request, "a file");
       const type = field(form, "type");
       if (!["image", "video", "model", "audio"].includes(type)) {
         throw new WorkspaceError(`${type} is not a content type the manifest allows`);
