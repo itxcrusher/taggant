@@ -71,7 +71,6 @@ export class Counters {
   private readonly scans = new Map<string, number>();
   private problems = 0;
   private totalMs = 0;
-  private answered = 0;
 
   record(event: Event): void {
     if (event.type === "problem") {
@@ -80,7 +79,6 @@ export class Counters {
     }
     this.scans.set(event.outcome, (this.scans.get(event.outcome) ?? 0) + 1);
     this.totalMs += event.tookMs;
-    this.answered++;
   }
 
   render(): string {
@@ -95,12 +93,16 @@ export class Counters {
       "# HELP taggant_bad_requests_total Requests that could not be read as a Digital Link.",
       "# TYPE taggant_bad_requests_total counter",
       `taggant_bad_requests_total ${this.problems}`,
-      "# HELP taggant_resolve_seconds_total Time spent resolving, in seconds.",
+      // There was a `taggant_answered_total` here as the denominator for the line above,
+      // and it is gone. It counted one per scan, so it was exactly the sum of the scan
+      // counter under a name that claimed more: the resolver answers health checks,
+      // readiness checks, metrics scrapes and bad requests as well, and none of those were
+      // in it, so a dashboard reading it as a request rate read low by however often an
+      // orchestrator polls. Two numbers that must stay equal are two numbers that can
+      // drift, and the sum is one expression away.
+      "# HELP taggant_resolve_seconds_total Time spent resolving, in seconds. Divide by sum(taggant_scans_total) for the mean.",
       "# TYPE taggant_resolve_seconds_total counter",
       `taggant_resolve_seconds_total ${(this.totalMs / 1000).toFixed(6)}`,
-      "# HELP taggant_answered_total Answers given, for averaging the line above.",
-      "# TYPE taggant_answered_total counter",
-      `taggant_answered_total ${this.answered}`,
     );
     return `${lines.join("\n")}\n`;
   }

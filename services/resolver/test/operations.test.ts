@@ -152,6 +152,67 @@ describe("what an orchestrator can ask", () => {
     await get("/healthz");
     expect(events).toEqual([]);
   });
+
+  it("publishes every counter against what actually happened, and no counter that is a copy", async () => {
+    // Nothing asserted the set of counters or their values, so a counter could carry a name
+    // that claimed more than it counted and no test would mind. One did:
+    // `taggant_answered_total` incremented once per scan, which made it exactly the sum of
+    // the scan counter, under a name suggesting every answer this resolver gives. Health
+    // checks, readiness checks, metrics scrapes and bad requests are all answers and none
+    // were in it, so a dashboard reading it as a request rate read low by however often an
+    // orchestrator polls. It is gone, and this is what keeps the rest honest.
+    // Deltas, not totals: every test in this file shares one server, so the counters carry
+    // whatever ran before. Reading them twice is safe because a metrics scrape is not a
+    // scan, which the test above this one is what keeps true.
+    const read = async (): Promise<(name: string) => number> => {
+      const body = await (await get("/metrics")).text();
+      return (name: string): number => {
+        const line = body.split("\n").find((each) => each.startsWith(name));
+        expect(line, `${name} is not published`).toBeDefined();
+        return Number((line ?? "").slice(name.length).trim());
+      };
+    };
+    const before = await read();
+
+    const redirects = 2;
+    const linksets = 1;
+    const unresolved = 1;
+    const bad = 1;
+    for (let i = 0; i < redirects; i++) await get("/01/09520123456788");
+    for (let i = 0; i < linksets; i++) await get("/01/09520123456788?linkType=linkset");
+    for (let i = 0; i < unresolved; i++) await get("/01/09520123456702");
+    for (let i = 0; i < bad; i++) await get("/nothing/here");
+    // Answered too, and deliberately counted nowhere.
+    await get("/healthz");
+    await get("/readyz");
+
+    const after = await read();
+    const rose = (name: string): number => after(name) - before(name);
+
+    expect(rose('taggant_scans_total{outcome="redirect"}')).toBe(redirects);
+    expect(rose('taggant_scans_total{outcome="linkset"}')).toBe(linksets);
+    expect(rose('taggant_scans_total{outcome="unresolved"}')).toBe(unresolved);
+    expect(rose("taggant_bad_requests_total")).toBe(bad);
+
+    // Each counter against the events, which are the other record of the same requests.
+    // `events` is emptied before each test, so these are this test's own.
+    const scans = events.filter((event) => event.type === "scan");
+    expect(redirects + linksets + unresolved).toBe(scans.length);
+    expect(rose("taggant_resolve_seconds_total")).toBeCloseTo(
+      scans.reduce((total, event) => total + (event.type === "scan" ? event.tookMs : 0), 0) / 1000,
+      4,
+    );
+
+    // And no counter is a second name for a number already published. Every counter's value
+    // is compared against the sum of the scan counter; one that equals it is either that
+    // sum again or a coincidence at these small numbers, and the assertion says which to
+    // look at rather than passing quietly.
+    const published = (await (await get("/metrics")).text())
+      .split("\n")
+      .filter((line) => line.startsWith("taggant_") && !line.includes("{"))
+      .map((line) => line.split(" ")[0] ?? "");
+    expect(published).toEqual(["taggant_bad_requests_total", "taggant_resolve_seconds_total"]);
+  });
 });
 
 describe("what a stranger can put in a header", () => {
