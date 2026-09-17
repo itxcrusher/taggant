@@ -131,13 +131,16 @@ export async function prepareAsset(
       return { bytes, extension: `.${kind}` };
     case "svg": {
       if (bytes.length > LARGEST_SVG_BYTES) {
+        // Bytes rather than megabytes, because rounding made the smallest file this
+        // refuses read as exactly the size it allows: "is 8 MB of SVG, and the most this
+        // bundler will parse is 8 MB", which an operator cannot act on.
         throw new Error(
-          `${source} is ${Math.round(bytes.length / (1024 * 1024))} MB of SVG, and the most this bundler will parse is ${LARGEST_SVG_BYTES / (1024 * 1024)} MB. A drawing that large is a photograph embedded in it; put the photograph in the bundle as its own asset, where it is copied rather than parsed.`,
+          `${source} is ${bytes.length.toLocaleString("en-GB")} bytes of SVG, and the most this bundler will parse is ${LARGEST_SVG_BYTES.toLocaleString("en-GB")}. A drawing that large is a photograph embedded in it; put the photograph in the bundle as its own asset, where it is copied rather than parsed.`,
         );
       }
       // The clock on one render, or what is left of the publish's budget, whichever is
-      // shorter. Renders run one at a time and a manifest may name as many drawings as it
-      // likes, so a publish is bounded as a whole and not only a drawing at a time.
+      // shorter. Renders run one at a time and a manifest may name up to 32 drawings per
+      // target, so a publish is bounded as a whole and not only a drawing at a time.
       const own = options.renderTimeoutMs ?? RENDER_TIMEOUT_MS;
       const left = options.deadline === undefined ? own : options.deadline - Date.now();
       if (left <= 0) {
@@ -284,24 +287,28 @@ export const RENDER_TIMEOUT_MS = 20_000;
 /**
  * How long all the SVG renders of one publish may take together.
  *
- * Renders run one at a time and a manifest may name as many drawings as it likes, so the
- * clock above bounds a drawing and not a publish: thirty ordinary drawings took three
- * minutes on a loaded laptop, and thirty built to hold the renderer would have taken ten.
- * This is the most a publish waits for its drawings altogether.
+ * Renders run one at a time and one manifest may name up to 32 drawings per target and 64
+ * targets, so the clock above bounds a drawing and not a publish: thirty ordinary drawings
+ * took three minutes on a loaded laptop, and thirty built to hold the renderer would have
+ * taken ten. This is the most a publish waits for its drawings altogether.
  */
 export const RENDER_BUDGET_MS = 120_000;
 
 /**
  * The largest SVG this bundler will parse.
  *
- * Every other asset passes through: it is read and written, so a publish holds roughly the
- * file and no more. An SVG is parsed, and the parse is the one place where a small input
- * can cost a large amount of work. Measured, the read and the pipe together cost about
- * three times the file (a 64 MB document took the publishing process from 54 to 194 MB of
- * resident memory, linearly, with no blowup), and the XML parser refuses a single run of
- * text past ten million characters anyway. Eight megabytes of text is not a drawing: it is
- * a photograph somebody embedded, and that belongs in the bundle as its own asset, where
- * it is copied rather than parsed.
+ * This bounds the parse and not the read: `copyAsset` has the whole file in memory before
+ * this is consulted, and a 200 MB video costs a 200 MB read either way. Measured, the read
+ * and the pipe together cost about three times the file (a 64 MB document took the
+ * publishing process from 54 to 194 MB of resident memory, linearly, with no blowup).
+ *
+ * It is also not where this path fails first, and an adversarial pass measured that: a
+ * single run of text inside one `text` element exhausts the twenty-second render clock at
+ * 16 KB, and at every size tried from there to 7.9 MB, while 6 MB of base64 in an `image`
+ * element renders in ten seconds. So for text the clock bites four orders of magnitude
+ * below this number, and what this number is actually for is the case it names: eight
+ * megabytes of document is a photograph somebody embedded, and that belongs in the bundle
+ * as its own asset, where it is copied rather than parsed.
  */
 export const LARGEST_SVG_BYTES = 8 * 1024 * 1024;
 
@@ -380,7 +387,7 @@ async function rasterise(
     throw new Error(
       budgeted
         ? `${source} was stopped: this publish's render budget ran out while it was being rendered. Fewer or simpler SVGs, or export them as PNGs.`
-        : `${source} took longer than ${timeoutMs / 1000} s to render and was stopped. A drawing that slow carries a filter or a size no phone would show; simplify it, or export the artwork as a PNG.`,
+        : `${source} did not finish rendering within ${timeoutMs / 1000} s and was stopped. Measured causes, in the order they are likely: a long run of text in one element, which costs more the larger the drawing is rendered; a filter with a radius in the hundreds; a great many shapes. Simplify it, or export the artwork as a PNG.`,
     );
   }
   if (result.code === 0) return result.stdout;

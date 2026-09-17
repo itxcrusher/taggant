@@ -265,6 +265,16 @@ export interface Workspace {
   update(id: string, change: (manifest: DraftManifest) => DraftManifest): Promise<Experience>;
   /** Store an upload under `artwork/` or `media/` and return its manifest-relative path. */
   storeFile(id: string, folder: "artwork" | "media", name: string, bytes: Uint8Array): Promise<string>;
+  /**
+   * Take a stored upload away again, by the path `storeFile` returned.
+   *
+   * An upload has to be on disk before the manifest can name it, and the write that names
+   * it can still be refused: a target id that turns out to be taken, a ceiling reached by
+   * another request in between. Without this the file stays, named by nothing, and the
+   * operator is told the opposite of what happened. Silent when the file is already gone,
+   * because this is a cleanup path and a failure in it must not replace the real reason.
+   */
+  forgetFile(id: string, path: string): Promise<void>;
   writeTarget(id: string, targetId: string, target: unknown): Promise<string>;
   readTarget(id: string, targetId: string): Promise<unknown>;
   hasTarget(id: string, targetId: string): Promise<boolean>;
@@ -487,6 +497,15 @@ export function createWorkspace(root: string): Workspace {
       const filename = await freeName(directory, safeFilename(name));
       await writeAtomic(join(directory, filename), bytes);
       return `${folder}/${filename}`;
+    },
+
+    async forgetFile(id: string, path: string): Promise<void> {
+      const folder = path.startsWith("media/") ? "media" : "artwork";
+      const name = path.slice(folder.length + 1);
+      // Rebuilt from the folder and the basename rather than joined from the path given,
+      // so nothing here can be walked out of the experience's own directory.
+      if (name === "" || name.includes("/") || name.includes("\\")) return;
+      await rm(join(directoryFor(id), folder, name), { force: true }).catch(() => undefined);
     },
 
     async writeTarget(id: string, targetId: string, target: unknown): Promise<string> {

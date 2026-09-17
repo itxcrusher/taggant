@@ -120,3 +120,5 @@ Two things about that call. **Defaults are applied to the value it returns**, so
 ## Versions
 
 `schemaVersion` is a value, not a range. A file says which version it was written to, and a reader that does not know that version refuses it. When there is a second version there will be a migration path between them and this document will describe it. There is one version today, so there is nothing to migrate.
+
+While that stays true, `1.0.0` is still moving, and this is where such a move is recorded. On 2026-09-15 it gained the two ceilings above, at 64 targets and 32 pieces of content, so a document that validated as `1.0.0` the day before and sits past one of them does not now. Nothing published regresses: the widest manifest anywhere in this repository holds one target and two pieces of content. The project states plainly that nothing is tagged and interfaces change without notice, and this is one of those changes; once a version is tagged, a narrowing like this one takes a new version number instead.

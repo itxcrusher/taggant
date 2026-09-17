@@ -375,7 +375,7 @@ describe("what an SVG declares as its size", () => {
 describe("how long a publish may spend rendering", () => {
   it("is bounded for the publish and not only for each drawing", async () => {
     // The clock on a render bounds a drawing. Renders run one at a time and a manifest may
-    // name as many drawings as it likes, so before this a publish was bounded at twenty
+    // name up to 32 drawings per target, so before this a publish was bounded at twenty
     // seconds multiplied by however many content items somebody wrote, and thirty ordinary
     // drawings took three minutes. The console answers a publish over HTTP with no timeout
     // of its own, so that number is how long an operator waits on a page.

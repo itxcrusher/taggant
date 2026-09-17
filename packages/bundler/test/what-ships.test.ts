@@ -144,9 +144,15 @@ describe("what an SVG says about its own size", () => {
     // parsed, which is the one place a small input buys a lot of work, and the read and the
     // pipe together cost about three times the file. Eight megabytes of text is not a
     // drawing; it is an embedded photograph, which belongs in the bundle as its own asset.
-    const bulk = SVG(`<!--${"x".repeat(LARGEST_SVG_BYTES)}--><rect width="400" height="100" fill="#c33"/>`);
-    expect(bulk.length).toBeGreaterThan(LARGEST_SVG_BYTES);
-    await expect(prepareAsset("overlay.svg", bulk)).rejects.toThrow(/the most this bundler will parse/);
+    // One byte over, which is the case that read as "is 8 MB of SVG, and the most this
+    // bundler will parse is 8 MB" while the test passed, because the message rounded and
+    // the assertion did not read the number. Both numbers are checked here.
+    const wrapper = SVG("<!---->").length;
+    const bulk = SVG(`<!--${"x".repeat(LARGEST_SVG_BYTES + 1 - wrapper)}-->`);
+    expect(bulk.length).toBe(LARGEST_SVG_BYTES + 1);
+    await expect(prepareAsset("overlay.svg", bulk)).rejects.toThrow(
+      `overlay.svg is ${(LARGEST_SVG_BYTES + 1).toLocaleString("en-GB")} bytes of SVG, and the most this bundler will parse is ${LARGEST_SVG_BYTES.toLocaleString("en-GB")}.`,
+    );
   }, 60_000);
 
   /** Where the drawing lands in the raster: the box of pixels that are not transparent. */

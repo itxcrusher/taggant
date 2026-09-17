@@ -16,7 +16,15 @@ import { carriesItsDistance } from "@taggant/compiler";
 import { manifestSchema } from "@taggant/manifest";
 import { DEFAULT_SCAN_DISTANCE_MM, bundleDirFor, compile, publish, registerCode } from "./operations.js";
 import { STYLESHEET } from "./style.js";
-import { type Notice, type TargetView, errorPage, experiencePage, indexPage, page } from "./views.js";
+import {
+  type Notice,
+  type TargetView,
+  describeProblem,
+  errorPage,
+  experiencePage,
+  indexPage,
+  page,
+} from "./views.js";
 import { type Experience, type Workspace, WorkspaceError, assertId, assertTargetId } from "./workspace.js";
 
 /**
@@ -357,43 +365,47 @@ export function createConsole(options: ConsoleOptions): Server {
       }
       const file = form.get("artwork");
       if (!(file instanceof File) || file.size === 0) throw new WorkspaceError("no artwork was uploaded");
-      // Checked before the upload is stored, so a refusal does not leave a file on disk
-      // that nothing in the manifest names, and read out of the schema rather than written
-      // here twice. Without this the operator meets the ceiling as a validation error at
-      // the next save, which is a correct refusal in an unreadable form.
-      const existing = await workspace.read(id);
-      if (existing.manifest.targets.length >= MOST_TARGETS) {
-        throw new WorkspaceError(
-          `${id} already has ${existing.manifest.targets.length} targets, which is as many as the manifest format allows`,
-        );
-      }
       const source = await workspace.storeFile(
         id,
         "artwork",
         file.name,
         new Uint8Array(await file.arrayBuffer()),
       );
-      // Read, change and write in one turn. Read and save as separate calls lost three of
-      // four targets added at the same moment, because each request had read the manifest
-      // before any of the others wrote theirs.
-      await workspace.update(id, (manifest) => {
-        if (manifest.targets.some((target) => target.id === targetId)) {
-          throw new WorkspaceError(`${id} already has a target called ${targetId}`);
-        }
-        // Again, inside the turn that writes. The check above reads before storing the
-        // upload so that a refusal leaves nothing behind; this one is the correct place,
-        // because two forms submitted at the same moment both read a manifest below the
-        // ceiling and only this runs with the write.
-        if (manifest.targets.length >= MOST_TARGETS) {
-          throw new WorkspaceError(
-            `${id} already has ${manifest.targets.length} targets, which is as many as the manifest format allows`,
-          );
-        }
-        return {
-          ...manifest,
-          targets: [...manifest.targets, { id: targetId, source, physicalWidthMm: width, content: [] }],
-        };
-      });
+      // Everything from here either names the upload in the manifest or takes it away
+      // again. A refusal inside the write is the case this exists for: two forms submitted
+      // at the same moment both read a manifest with room, and the one that loses had
+      // already stored its file. It left `artwork/<name>.png` named by nothing, while the
+      // operator was told the ceiling had been reached, which is the opposite of the
+      // property this handler claims. The duplicate-target-id refusal below had the same
+      // hole and it is the older of the two.
+      try {
+        // Read, change and write in one turn. Read and save as separate calls lost three of
+        // four targets added at the same moment, because each request had read the manifest
+        // before any of the others wrote theirs.
+        await workspace.update(id, (manifest) => {
+          if (manifest.targets.some((target) => target.id === targetId)) {
+            throw new WorkspaceError(`${id} already has a target called ${targetId}`);
+          }
+          // Inside the turn that writes, which is the only place a count can be trusted:
+          // two forms submitted at the same moment both read a manifest with room, and
+          // only this runs with the write. There was a second check before the upload was
+          // stored, refusing the same thing a moment earlier, and it is gone: it made the
+          // two indistinguishable to a test, and the cleanup around this is what actually
+          // keeps the promise that a refusal leaves nothing on disk.
+          if (manifest.targets.length >= MOST_TARGETS) {
+            throw new WorkspaceError(
+              `${id} already has ${manifest.targets.length} targets, which is as many as the manifest format allows`,
+            );
+          }
+          return {
+            ...manifest,
+            targets: [...manifest.targets, { id: targetId, source, physicalWidthMm: width, content: [] }],
+          };
+        });
+      } catch (error) {
+        await workspace.forgetFile(id, source);
+        throw error;
+      }
       redirect(response, `/e/${encodeURIComponent(id)}`, {
         tone: "good",
         message: `${targetId} added. Compile it to find out whether it will track at ${width} mm.`,
@@ -433,27 +445,38 @@ export function createConsole(options: ConsoleOptions): Server {
       }
       const file = form.get("file");
       if (!(file instanceof File) || file.size === 0) throw new WorkspaceError("no file was uploaded");
-      const holding = (await workspace.read(id)).manifest.targets.find(
-        (candidate) => candidate.id === targetId,
-      );
-      if (holding !== undefined && holding.content.length >= MOST_CONTENT) {
-        throw new WorkspaceError(
-          `${targetId} already shows ${holding.content.length} pieces of content, which is as many as the manifest format allows`,
-        );
-      }
       const src = await workspace.storeFile(id, "media", file.name, new Uint8Array(await file.arrayBuffer()));
-      await workspace.update(id, (manifest) => ({
-        ...manifest,
-        targets: manifest.targets.map((target) => {
-          if (target.id !== targetId) return target;
-          if (target.content.length >= MOST_CONTENT) {
+      try {
+        await workspace.update(id, (manifest) => {
+          // Inside the turn that writes, which is the only place a count can be trusted:
+          // two forms submitted at the same moment both read a manifest with room, and
+          // only this runs with the write. The refusal takes the upload back below.
+          const holding = manifest.targets.find((candidate) => candidate.id === targetId);
+          if (holding === undefined) {
+            // The target existed when the request was checked and does not now. Saying so
+            // is the point: the same manifest was rewritten by something else in between,
+            // and the alternative, which this had, was to rewrite the manifest unchanged
+            // and tell the operator their file was added.
+            throw new WorkspaceError(`${id} no longer has a target called ${targetId}`);
+          }
+          if (holding.content.length >= MOST_CONTENT) {
             throw new WorkspaceError(
-              `${targetId} already shows ${target.content.length} pieces of content, which is as many as the manifest format allows`,
+              `${targetId} already shows ${holding.content.length} pieces of content, which is as many as the manifest format allows`,
             );
           }
-          return { ...target, content: [...target.content, { type: type as "image", src }] };
-        }),
-      }));
+          return {
+            ...manifest,
+            targets: manifest.targets.map((target) =>
+              target.id === targetId
+                ? { ...target, content: [...target.content, { type: type as "image", src }] }
+                : target,
+            ),
+          };
+        });
+      } catch (error) {
+        await workspace.forgetFile(id, src);
+        throw error;
+      }
       redirect(response, `/e/${encodeURIComponent(id)}`, {
         tone: "good",
         message: `${file.name} added to ${targetId}.`,
@@ -465,6 +488,16 @@ export function createConsole(options: ConsoleOptions): Server {
     if (publishing?.[1]) {
       const id = assertId(decode(publishing[1], "that experience"));
       const experience = await workspace.read(id);
+      // Said the way the page says it, rather than as the validator's JSON pointers.
+      // `publishable` in the workspace refuses with the raw wording, which is right for a
+      // caller that is not a browser, and this is the browser.
+      if (experience.problems.length > 0) {
+        throw new WorkspaceError(
+          `${id} cannot be published yet: ${experience.problems
+            .map((problem) => describeProblem(problem, experience.manifest))
+            .join(" ")}`,
+        );
+      }
       const outDir = bundleDirFor(publishRoot, id);
       // Which targets the publish rebuilt, filled in as it goes, because a publish that
       // fails at the bundler has already written any rebuild it did and the operator is

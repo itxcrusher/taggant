@@ -164,8 +164,8 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
 
   async function write(into: string): Promise<void> {
     // One clock over every render in the publish, on top of the one over each. Renders
-    // run one at a time and a manifest may name as many drawings as it likes, so without
-    // this a publish was bounded only at twenty seconds a drawing.
+    // run one at a time and a manifest may name up to 32 drawings per target across up to
+    // 64 targets, so without this a publish was bounded only at twenty seconds a drawing.
     const deadline = Date.now() + (options.renderBudgetMs ?? RENDER_BUDGET_MS);
     const rewritten = structuredClone(manifest);
     for (const target of rewritten.targets) {

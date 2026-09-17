@@ -355,6 +355,18 @@ export function describeProblem(problem: { path: string; message: string }, mani
   if (named !== undefined && problem.path.endsWith("/content") && problem.message.includes("fewer than 1")) {
     return `${named} has nothing to show. Add content to it.`;
   }
+  // The ceilings. A manifest can be past one without any form having been used: hand
+  // edited in the store, copied in from elsewhere, or written by a console built before
+  // the ceilings existed. Without these the operator reads "must NOT have more than 64
+  // items" against a JSON pointer, which is the form the console's own checks exist to
+  // avoid, so leaving it here would have meant refusing politely at the door and rudely
+  // through the window.
+  if (problem.path === "/targets" && problem.message.includes("more than")) {
+    return `There are more than ${MOST_TARGETS} targets, which is as many as the manifest format allows. Remove some, or split the experience in two.`;
+  }
+  if (problem.path.endsWith("/content") && problem.message.includes("more than")) {
+    return `${named ?? "a target"} shows more than ${MOST_CONTENT} pieces of content, which is as many as the manifest format allows. Remove some.`;
+  }
   return named === undefined
     ? `${problem.path} ${problem.message}`
     : `${named}: ${problem.path.replace(/^\/targets\/\d+/, "")} ${problem.message}`.trim();

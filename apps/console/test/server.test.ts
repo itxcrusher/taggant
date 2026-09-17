@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -309,6 +309,143 @@ not finished`;
     expect(await pageAt("/e/hostile-art")).toContain("front");
   }, 120_000);
 
+  it("holds both ceilings under two requests at once, and orphans neither upload", async () => {
+    // The check that matters is the one inside the turn that writes, and it had no test:
+    // an adversarial pass deleted it and the suite stayed green, then submitted two forms
+    // at once at one below each ceiling and got both accepted, with the loser's upload
+    // left on disk named by nothing while its operator was told the ceiling was reached.
+    // Two requests, no timing work, because the read and the store both sit outside the
+    // per-experience queue.
+    const { manifestSchema } = await import("@taggant/manifest");
+    const mostTargets = manifestSchema.properties.targets.maxItems;
+    const mostContent = manifestSchema.$defs.target.properties.content.maxItems;
+    const png = await artwork();
+
+    await post("/experiences", new URLSearchParams({ id: "at-the-edge", title: "At the edge" }));
+    const room = await workspace.read("at-the-edge");
+    const lastIndex = mostTargets - 2;
+    await workspace.save("at-the-edge", {
+      ...room.manifest,
+      // One short of the target ceiling, and the last target one short of its own.
+      targets: Array.from({ length: mostTargets - 1 }, (_, index) => ({
+        id: `t-${String(index).padStart(3, "0")}`,
+        source: "artwork/a.png",
+        physicalWidthMm: 120,
+        content: Array.from({ length: index === lastIndex ? mostContent - 1 : 1 }, () => ({
+          type: "image" as const,
+          src: "media/o.png",
+        })),
+      })),
+    });
+
+    const addTarget = (name: string) => {
+      const form = new FormData();
+      form.append("targetId", name);
+      form.append("physicalWidthMm", "120");
+      form.append("artwork", new Blob([png], { type: "image/png" }), `${name}.png`);
+      return post("/e/at-the-edge/targets", form);
+    };
+    await Promise.all([addTarget("race-one"), addTarget("race-two")]);
+
+    const afterTargets = await workspace.read("at-the-edge");
+    expect(afterTargets.manifest.targets).toHaveLength(mostTargets);
+    // Whichever won, the loser's artwork is not left on disk under a name nothing names.
+    const named = new Set(afterTargets.manifest.targets.map((target) => target.source));
+    const stored = await readdir(join(afterTargets.directory, "artwork"));
+    const orphans = stored.filter((file) => !named.has(`artwork/${file}`));
+    expect(orphans, `artwork nothing names: ${orphans.join(", ")}`).toEqual([]);
+
+    // The same for content, on the target that was left one short.
+    const full = `t-${String(lastIndex).padStart(3, "0")}`;
+    const addContent = (name: string) => {
+      const form = new FormData();
+      form.append("type", "image");
+      form.append("file", new Blob([png], { type: "image/png" }), `${name}.png`);
+      return post(`/e/at-the-edge/targets/${full}/content`, form);
+    };
+    await Promise.all([addContent("media-one"), addContent("media-two")]);
+
+    const afterContent = await workspace.read("at-the-edge");
+    const target = afterContent.manifest.targets.find((candidate) => candidate.id === full);
+    expect(target?.content).toHaveLength(mostContent);
+    const sources = new Set(
+      afterContent.manifest.targets.flatMap((each) => each.content.map((item) => item.src)),
+    );
+    const media = await readdir(join(afterContent.directory, "media"));
+    const spare = media.filter((file) => !sources.has(`media/${file}`));
+    expect(spare, `media nothing names: ${spare.join(", ")}`).toEqual([]);
+  }, 120_000);
+
+  it("refuses content past the ceiling, does not offer the form, and stores nothing", async () => {
+    // The content ceiling had no test at all, in any of its places.
+    const { manifestSchema } = await import("@taggant/manifest");
+    const most = manifestSchema.$defs.target.properties.content.maxItems;
+    await post("/experiences", new URLSearchParams({ id: "content-full", title: "Content full" }));
+    const saved = await workspace.read("content-full");
+    await workspace.save("content-full", {
+      ...saved.manifest,
+      targets: [
+        {
+          id: "front",
+          source: "artwork/a.png",
+          physicalWidthMm: 120,
+          content: Array.from({ length: most }, () => ({ type: "image" as const, src: "media/o.png" })),
+        },
+      ],
+    });
+
+    const shown = await pageAt("/e/content-full");
+    expect(shown).toContain(`shows ${most} pieces of content`);
+    expect(shown).not.toContain('action="/e/content-full/targets/front/content"');
+
+    const form = new FormData();
+    form.append("type", "image");
+    form.append("file", new Blob([await artwork()], { type: "image/png" }), "one-more.png");
+    const response = await post("/e/content-full/targets/front/content", form);
+    const said = await fetch(`${origin}${response.headers.get("location")}`);
+    expect(await said.text()).toContain(`already shows ${most} pieces of content`);
+
+    const after = await workspace.read("content-full");
+    expect(after.manifest.targets[0]?.content).toHaveLength(most);
+    const media = await readdir(join(after.directory, "media")).catch(() => [] as string[]);
+    expect(media).not.toContain("one-more.png");
+  }, 60_000);
+
+  it("says a ceiling in a manifest already on disk as a sentence, on the page and at publish", async () => {
+    // A manifest can be past a ceiling without any form having been used: hand edited,
+    // copied in, or written by a console built before the ceilings existed. That reached
+    // the operator as "/targets must NOT have more than 64 items" and, from the publish
+    // route, as "/targets/64/content", which is the form these checks exist to replace.
+    const { manifestSchema } = await import("@taggant/manifest");
+    const mostTargets = manifestSchema.properties.targets.maxItems;
+    const mostContent = manifestSchema.$defs.target.properties.content.maxItems;
+    await post("/experiences", new URLSearchParams({ id: "over-the-top", title: "Over the top" }));
+    const saved = await workspace.read("over-the-top");
+    await workspace.save("over-the-top", {
+      ...saved.manifest,
+      targets: Array.from({ length: mostTargets + 1 }, (_, index) => ({
+        id: `t-${String(index).padStart(3, "0")}`,
+        source: "artwork/a.png",
+        physicalWidthMm: 120,
+        content: Array.from({ length: index === 0 ? mostContent + 1 : 1 }, () => ({
+          type: "image" as const,
+          src: "media/o.png",
+        })),
+      })),
+    });
+
+    const shown = await pageAt("/e/over-the-top");
+    expect(shown).toContain(`more than ${mostTargets} targets`);
+    expect(shown).toContain(`shows more than ${mostContent} pieces of content`);
+    expect(shown).not.toContain("must NOT have more than");
+
+    const response = await post("/e/over-the-top/publish", new URLSearchParams());
+    const said = await fetch(`${origin}${response.headers.get("location")}`);
+    const text = await said.text();
+    expect(text).toContain(`more than ${mostTargets} targets`);
+    expect(text).not.toContain("must NOT have more than");
+  }, 60_000);
+
   it("says the ceiling in a sentence rather than as a validation error, and stores nothing", async () => {
     // The manifest format caps an experience at 64 targets and a target at 32 pieces of
     // content, because every one is compiled, published and held in a browser at once, and
@@ -348,7 +485,6 @@ not finished`;
     // no manifest names.
     const after = await workspace.read("full-up");
     expect(after.manifest.targets).toHaveLength(most);
-    const { readdir } = await import("node:fs/promises");
     const artworkFolder = await readdir(join(after.directory, "artwork")).catch(() => [] as string[]);
     expect(artworkFolder).not.toContain("extra.png");
   }, 60_000);
