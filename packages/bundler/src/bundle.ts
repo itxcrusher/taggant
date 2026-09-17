@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { copyFile, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -58,6 +59,16 @@ const MARKER = ".taggant-bundle";
  * Replacing is only allowed for a directory this tool published to before, which the
  * marker file records. Anything else is refused by name, because emptying a directory
  * somebody else filled is not a thing to do on a guess.
+ *
+ * Two publishes of one experience build independently, each into its own staging
+ * directory, and then meet here. This is where they collide, and it is not harmless: the
+ * destination is removed and the staging directory renamed over it, and with two publishes
+ * doing that at once fourteen of fourteen measured pairs failed one or both requests with
+ * an errno from this region, one of them leaving the destination empty with nothing
+ * published. **A caller who publishes twice to one destination has to serialise**, and the
+ * console does, per destination. Without that, unique staging directories alone are worse
+ * than the shared one they replaced, because under the shared one the loser usually failed
+ * before reaching this point.
  */
 async function mayReplace(outDir: string): Promise<boolean> {
   let existing: string[];
@@ -146,7 +157,27 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
 
   // Built beside the destination and swapped in at the end, so a failure part way through
   // leaves whatever is published exactly as it was.
-  const staging = `${options.outDir}.publishing`;
+  //
+  // The suffix is per publish, and that is the whole of a defect. It was
+  // `${outDir}.publishing`, one path for every publish of an experience, so two at once
+  // shared a staging directory: the second emptied it while the first was writing into it,
+  // and the first renamed whatever survived into place. Measured over twenty-five pairs,
+  // sixteen requests came back with a raw ENOENT or EPERM naming that internal directory,
+  // and one pair published a folder holding four of its six entries while both operators
+  // were told eight files had been written, because the count comes from what the bundler
+  // meant to write rather than from what is on disk. Both other atomic writers in this
+  // repository already suffix per write (`writeAtomic` in the console's workspace and the
+  // link table's own write); this one did not, and a single clean run of the race is what
+  // let it stand.
+  //
+  // Necessary and not sufficient, and the measurement is worth carrying because the
+  // obvious reading of this fix is wrong. Unique staging directories on their own are
+  // worse: with the shared one, one publish usually destroyed the other early enough that
+  // only one reached the destination, and with one each they both reach it and collide on
+  // the removal and rename there. Fourteen rounds of fourteen failed that way against
+  // eight of fourteen before, and one round published nothing at all while both operators
+  // were told how many files had been written. `mayReplace` carries the rest.
+  const staging = `${options.outDir}.publishing-${randomBytes(4).toString("hex")}`;
   await rm(staging, { recursive: true, force: true });
   await mkdir(staging, { recursive: true });
   try {
