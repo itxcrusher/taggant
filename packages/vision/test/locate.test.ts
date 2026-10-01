@@ -143,4 +143,30 @@ describe("locate", () => {
     const frame = warp(source, transform({ translateX: 100, translateY: 80 }), 640, 480);
     expect(locate(frame, empty).found).toBe(false);
   });
+
+  it("hands out a fresh not-found result, so writing to one cannot change the next", () => {
+    // One object was shared by every not-found call. A caller that set `found` on it made
+    // every later miss report found, with a null pose, past the inlier floor entirely.
+    const blank: GrayscaleImage = { width: 640, height: 480, data: new Uint8Array(640 * 480).fill(128) };
+    const first = locate(blank, target);
+    first.found = true;
+    first.inliers = 99;
+    const second = locate(blank, target);
+    expect(second.found).toBe(false);
+    expect(second.inliers).toBe(0);
+    expect(second).not.toBe(first);
+  });
+
+  it("finds the same pose on the second frame as the first, now the target's tables are kept", () => {
+    // The target's packed descriptors and shared-spot table are worked out once per target and
+    // reused. Reuse must not change an answer: the same frame twice gives the same result.
+    const frame = warp(source, transform({ translateX: 140, translateY: 90, rotationDeg: 12 }), 640, 480);
+    const fresh = compile(source);
+    const once = locate(frame, fresh);
+    const twice = locate(frame, fresh);
+    expect(once.found).toBe(true);
+    expect(twice.inliers).toBe(once.inliers);
+    expect(twice.matches).toBe(once.matches);
+    expect(Array.from(twice.homography ?? [])).toEqual(Array.from(once.homography ?? []));
+  });
 });

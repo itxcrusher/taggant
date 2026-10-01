@@ -8,23 +8,32 @@ export interface Distinctiveness {
   measured: number;
   /** The share of them that are ambiguous, from 0 to 1. */
   share: number;
-  /** How far apart two features must be before they count as being somewhere else. */
+  /**
+   * How far apart two features must be before they count as being somewhere else on the
+   * artwork. Twenty-four pixels, a different question from the matcher's six, which is about
+   * one corner described at two sizes.
+   */
   apartPx: number;
 }
 
 /**
- * How well the artwork's features can be told apart from each other.
+ * How many of the artwork's features have one look-alike elsewhere that stands out.
  *
- * This is the property that decides whether a pose lands on the right part of the print,
- * and neither a feature count nor a spread says anything about it. Artwork that repeats,
- * which is most packaging, has plenty of features spread over the whole piece and no way
- * to know which copy of the pattern is being looked at. Measured: the same artwork printed
- * twice side by side scored a hundred out of a hundred and then placed content a whole
- * tile away, with enough agreeing matches to look certain about it.
+ * For every feature, the closest looking feature somewhere else on the artwork is found, and
+ * the feature counts when that one is near enough to be confused with it and clearly closer
+ * than the rest. That is the case a matcher's ratio test accepts wrongly.
  *
- * So for every feature, find the closest looking feature that is somewhere else on the
- * artwork, and count it as ambiguous when the two are near enough that a matcher would
- * accept either.
+ * What it does not measure is repetition, though it was named and used as if it did. A feature
+ * with several identical rivals has none that stands out, so it is not counted: two copies of a
+ * design read 1.0 and three read 0, and the figure falls as a design repeats. It decided "ready
+ * for press" until a sheet of sixteen identical postcards passed at 0.31 and was not found at
+ * the width it was given. The compiler now decides readiness by putting the artwork in front of
+ * the recogniser, and this is reported beside that as a diagnostic.
+ *
+ * Its comment also said the same artwork printed twice "placed content a whole tile away". That
+ * did not reproduce: over 21 poses at the printed width, with the error against the known
+ * mapping, the two-up design was placed correctly every time, worst 2.7 pixels. What repeating
+ * a design costs is the number of points that agree, not where the pose lands.
  */
 export function measureDistinctiveness(
   features: DescribedCorner[],

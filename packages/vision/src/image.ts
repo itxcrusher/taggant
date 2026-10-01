@@ -15,8 +15,11 @@ export interface GrayscaleImage {
 export function sample(image: GrayscaleImage, x: number, y: number): number {
   const { width, height, data } = image;
   if (width < 1 || height < 1) return 0;
-  const cx = Math.min(width - 1, Math.max(0, x));
-  const cy = Math.min(height - 1, Math.max(0, y));
+  // A coordinate that is not a number has no edge to be clamped to, and passed through it came
+  // back as NaN, which a descriptor's comparison then read as false and left a bit clear without
+  // saying so. Taken as the first edge, so the value is at least a pixel of the image.
+  const cx = Math.min(width - 1, Math.max(0, Number.isNaN(x) ? 0 : x));
+  const cy = Math.min(height - 1, Math.max(0, Number.isNaN(y) ? 0 : y));
   const x0 = Math.floor(cx);
   const y0 = Math.floor(cy);
   const x1 = Math.min(width - 1, x0 + 1);
@@ -41,7 +44,8 @@ export function sample(image: GrayscaleImage, x: number, y: number): number {
  */
 export function smooth(image: GrayscaleImage): GrayscaleImage {
   const { width, height, data } = image;
-  if (width < 3 || height < 3) return image;
+  // A copy rather than the caller's own image, so writing to the result never writes to it.
+  if (width < 3 || height < 3) return { width, height, data: new Uint8Array(data) };
   const horizontal = new Uint8Array(width * height);
   for (let y = 0; y < height; y++) {
     const row = y * width;
@@ -74,7 +78,17 @@ export function smooth(image: GrayscaleImage): GrayscaleImage {
  */
 export function resample(image: GrayscaleImage, scale: number): GrayscaleImage {
   if (!(scale > 0)) throw new RangeError(`scale must be a positive number, got ${scale}`);
-  if (scale === 1) return image;
+  // Bounded below a pixel. The smoothing below runs ceil(1 / scale) - 1 passes, so a tiny scale
+  // ran a loop that never ended: a 64 by 48 image at the smallest positive number did not come
+  // back, and 1e-9 was about fifty days. A scale that takes the image under one pixel has no
+  // image to return anyway.
+  if (scale * Math.max(image.width, image.height) < 1) {
+    throw new RangeError(
+      `a scale of ${scale} takes a ${image.width} by ${image.height} image below one pixel`,
+    );
+  }
+  // A copy rather than the caller's own image, so writing to the result never writes to it.
+  if (scale === 1) return { width: image.width, height: image.height, data: new Uint8Array(image.data) };
   let source = image;
   // Rounded up, not to nearest. Rounding to nearest gives no blur at all for any scale
   // above two thirds, which included 0.79, one of the four sizes a target is described at

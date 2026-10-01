@@ -14,7 +14,16 @@ export interface Corner {
 
 export interface DetectOptions {
   maxCorners?: number;
-  /** Minimum pixels between two accepted corners, so features are spread out. */
+  /**
+   * Minimum pixels between two accepted corners as they are detected, so features are spread
+   * out.
+   *
+   * Enforced on whole pixel positions, before each corner is moved to the peak of its response,
+   * which shifts it by at most a pixel along each axis. So two corners returned can be as close
+   * as this less two and a bit pixels, and on real artwork they are: at 8, the closest returned
+   * pair on the example postcard is 7.27 apart. Said here because it was stated as a guarantee
+   * and tested on a square where refinement barely moves anything.
+   */
   minDistance?: number;
   /**
    * Fraction of a high percentile of the responses below which a corner counts as

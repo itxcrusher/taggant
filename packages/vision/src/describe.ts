@@ -139,8 +139,17 @@ export function describeCorners(image: GrayscaleImage, corners: Corner[]): Descr
   return described;
 }
 
-/** Bits that differ between two descriptors. The only distance that means anything here. */
+/**
+ * Bits that differ between two descriptors. The only distance that means anything here.
+ *
+ * Refused for two descriptors of different lengths, which have no distance. It read the first
+ * argument's length only, so a truncated descriptor was identical to everything one way round
+ * and maximally different the other.
+ */
 export function hamming(a: Uint32Array, b: Uint32Array): number {
+  if (a.length !== b.length) {
+    throw new RangeError(`descriptors of ${a.length} and ${b.length} words have no distance between them`);
+  }
   let total = 0;
   for (let i = 0; i < a.length; i++) {
     let v = ((a[i] ?? 0) ^ (b[i] ?? 0)) >>> 0;

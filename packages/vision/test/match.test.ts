@@ -81,4 +81,28 @@ describe("matchDescriptors", () => {
     });
     expect(matches).toEqual([]);
   });
+
+  it("refuses a descriptor of the wrong length rather than padding it", () => {
+    // A short descriptor was copied as far as it went and the rest left zero, which is a real
+    // descriptor the matcher then compared in good faith.
+    const whole = descriptor(7);
+    expect(() => matchDescriptors([whole.subarray(0, 3)], [whole])).toThrow(RangeError);
+    expect(() => matchDescriptors([whole], [whole.subarray(0, 3)])).toThrow(RangeError);
+  });
+
+  it("gives the same matches when the same target arrays come back frame after frame", () => {
+    const targets = [descriptor(1), descriptor(2), descriptor(3), descriptor(4)];
+    const positions = [
+      { x: 0, y: 0 },
+      { x: 2, y: 1 },
+      { x: 90, y: 40 },
+      { x: 200, y: 150 },
+    ];
+    const queries = [nudge(targets[0] ?? descriptor(1), 3), nudge(targets[2] ?? descriptor(3), 4)];
+    const first = matchDescriptors(queries, targets, { targetPositions: positions });
+    const second = matchDescriptors(queries, targets, { targetPositions: positions });
+    const fresh = matchDescriptors(queries, [...targets], { targetPositions: [...positions] });
+    expect(second).toEqual(first);
+    expect(fresh).toEqual(first);
+  });
 });

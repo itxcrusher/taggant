@@ -38,7 +38,51 @@ export interface LocateResult {
   matches: number;
 }
 
-const NOT_FOUND: LocateResult = { found: false, homography: null, inliers: 0, matches: 0 };
+/**
+ * A fresh result each time.
+ *
+ * It was one object shared by every call, and nothing about the result type says not to write
+ * to it: a caller that set `found` on one not-found result made every later one report found,
+ * with a null pose, which is the hallucination the inlier floor exists to prevent arriving by
+ * a route that skips the floor entirely.
+ */
+function notFound(): LocateResult {
+  return { found: false, homography: null, inliers: 0, matches: 0 };
+}
+
+/**
+ * What matching needs from a target, worked out once per target rather than once per frame.
+ *
+ * The descriptors and positions were mapped out of the target on every call, so the matcher
+ * saw new arrays every frame and could not keep the table of which features share a spot,
+ * which is quadratic in the target's size. Measured on one harness with and without this: no
+ * difference at the sizes the compiler writes (53 ms either way at 749 features, 69 against 59
+ * at 1111), and a third of each frame at 12 000 features (463 ms against 308 after the first),
+ * which a target file can hold because nothing caps its feature count. So this bounds what a
+ * large target costs per frame rather than speeding up an ordinary one.
+ *
+ * Keyed on the target object, so a target is treated as unchanging once it has been located
+ * against, which is how the runtime and the compiler both use one.
+ */
+const prepared = new WeakMap<
+  TrackingTarget,
+  { descriptors: Uint32Array[]; positions: { x: number; y: number }[] }
+>();
+
+function preparedFor(target: TrackingTarget): {
+  descriptors: Uint32Array[];
+  positions: { x: number; y: number }[];
+} {
+  let held = prepared.get(target);
+  if (held === undefined) {
+    held = {
+      descriptors: target.features.map((c) => c.descriptor),
+      positions: target.features.map((c) => ({ x: c.x, y: c.y })),
+    };
+    prepared.set(target, held);
+  }
+  return held;
+}
 
 /**
  * Sizes a frame is described at, in the order they are tried.
@@ -62,7 +106,7 @@ export function locate(
 ): LocateResult {
   const minInliers = options.minInliers ?? 10;
   const perScale = options.maxCorners ?? 400;
-  if (frame.width < 1 || frame.height < 1 || target.features.length === 0) return NOT_FOUND;
+  if (frame.width < 1 || frame.height < 1 || target.features.length === 0) return notFound();
 
   const scales = options.scales ?? DEFAULT_FRAME_SCALES;
   // The first size is tried on its own before the rest are paid for. Describing a frame is
@@ -86,13 +130,14 @@ function attemptAt(
   minInliers: number,
 ): LocateResult {
   const described = buildTrackingFeatures(frame, { scales, perScale });
-  if (described.length < 4) return NOT_FOUND;
+  if (described.length < 4) return notFound();
 
+  const side = preparedFor(target);
   const matches = matchDescriptors(
     described.map((c) => c.descriptor),
-    target.features.map((c) => c.descriptor),
+    side.descriptors,
     {
-      targetPositions: target.features.map((c) => ({ x: c.x, y: c.y })),
+      targetPositions: side.positions,
       queryPositions: described.map((c) => ({ x: c.x, y: c.y })),
     },
   );

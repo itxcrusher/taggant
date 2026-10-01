@@ -57,13 +57,25 @@ export function fromTargetFile(value: unknown): TrackingTarget {
   if (typeof value !== "object" || value === null) throw new TypeError("target file must be an object");
   const file = value as Partial<TargetFile>;
   if (file.formatVersion !== 2) {
-    throw new TypeError(`target file format ${String(file.formatVersion)} is not supported, expected 2`);
+    // Written as JSON, so a version of the wrong type reads as one: the string "2" came out as
+    // "format 2 is not supported, expected 2", which contradicts itself.
+    throw new TypeError(
+      `target file format ${JSON.stringify(file.formatVersion)} is not supported, expected 2`,
+    );
   }
-  if (typeof file.id !== "string" || !Array.isArray(file.features)) {
+  if (typeof file.id !== "string" || file.id === "" || !Array.isArray(file.features)) {
     throw new TypeError("target file is missing an id or its features");
   }
   const width = size(file.width, "width");
   const height = size(file.height, "height");
+  // The raster the features are measured in, which the size above declares and nothing then
+  // used. A feature outside it is a pose fitted to a point the artwork does not have.
+  const within = (value: number, limit: number, index: number, name: string): number => {
+    if (value < 0 || value > limit) {
+      throw new TypeError(`feature ${index} has ${name} ${value}, outside the ${width} by ${height} artwork`);
+    }
+    return value;
+  };
 
   return {
     id: file.id,
@@ -84,8 +96,8 @@ export function fromTargetFile(value: unknown): TrackingTarget {
         descriptor[word] = value;
       }
       return {
-        x: finite(feature.x, index, "x"),
-        y: finite(feature.y, index, "y"),
+        x: within(finite(feature.x, index, "x"), width, index, "x"),
+        y: within(finite(feature.y, index, "y"), height, index, "y"),
         scale: positiveFinite(feature.scale, index, "scale"),
         angle: finite(feature.angle, index, "angle"),
         strength: finite(feature.strength, index, "strength"),

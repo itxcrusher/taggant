@@ -144,4 +144,44 @@ describe("detectCorners input checking", () => {
   it("finds nothing in a flat field even with the quality level at zero", () => {
     expect(detectCorners(blank(120, 120), { qualityLevel: 0 }).length).toBe(0);
   });
+
+  it("keeps refined corners within a pixel along each axis of the spacing they were chosen at", () => {
+    // The square above barely moves under refinement, which is why the stated guarantee passed
+    // there and not on artwork. On dense artwork refinement shifts corners by up to a pixel in
+    // each axis, so the honest bound is the spacing less two and a bit pixels.
+    const width = 320;
+    const height = 240;
+    const data = new Uint8Array(width * height).fill(210);
+    let seed = 4242;
+    for (let i = 0; i < 260; i++) {
+      seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
+      const cx = seed % width;
+      seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
+      const cy = seed % height;
+      seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
+      const r = 3 + (seed % 7);
+      const value = seed % 2 === 0 ? 25 : 120;
+      for (let y = Math.max(0, cy - r); y < Math.min(height, cy + r); y++) {
+        for (let x = Math.max(0, cx - r); x < Math.min(width, cx + r); x++) {
+          if ((x - cx) ** 2 + (y - cy) ** 2 <= r * r && x >= cx - r / 2) data[y * width + x] = value;
+        }
+      }
+    }
+    const minDistance = 8;
+    const corners = detectCorners({ width, height, data }, { minDistance, maxCorners: 2000 });
+    const bound = minDistance - 2 * Math.SQRT2;
+    let pairs = 0;
+    let closest = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < corners.length; i++) {
+      for (let j = i + 1; j < corners.length; j++) {
+        const a = corners[i];
+        const b = corners[j];
+        if (!a || !b) continue;
+        pairs++;
+        closest = Math.min(closest, Math.hypot(a.x - b.x, a.y - b.y));
+      }
+    }
+    expect(pairs, "too few corners for a spacing check to mean anything").toBeGreaterThan(1000);
+    expect(closest).toBeGreaterThanOrEqual(bound);
+  });
 });

@@ -28,7 +28,16 @@ export interface MatchOptions {
   targetPositions?: Position[];
   /** Positions of the query descriptors, for the same reason on the other side. */
   queryPositions?: Position[];
-  /** How far apart two features must be before they count as different places. */
+  /**
+   * How far apart two features must be before they count as different places, for the ratio
+   * test.
+   *
+   * Six pixels, because this is about one corner described at two sizes: a multi scale target
+   * holds the same corner more than once, a pixel or two apart, and counting a feature's own
+   * copy as its rival rejects exactly the matches most certainly right. The report's
+   * distinctiveness figure uses 24 for a different question, whether a look-alike is somewhere
+   * else on the artwork, and the two sentences read alike while asking different things.
+   */
   distinctRadius?: number;
 }
 
@@ -44,9 +53,44 @@ function pack(descriptors: Uint32Array[]): Uint32Array {
   const flat = new Uint32Array(descriptors.length * WORDS);
   for (let i = 0; i < descriptors.length; i++) {
     const descriptor = descriptors[i];
-    if (descriptor) flat.set(descriptor.subarray(0, WORDS), i * WORDS);
+    if (!descriptor) continue;
+    // Refused rather than padded. A short descriptor was copied as far as it went and the rest
+    // left zero, which is a real descriptor the matcher then compares in good faith.
+    if (descriptor.length !== WORDS) {
+      throw new RangeError(`descriptor ${i} is ${descriptor.length} words long, and every one is ${WORDS}`);
+    }
+    flat.set(descriptor, i * WORDS);
   }
   return flat;
+}
+
+/**
+ * The packed target and its shared-spot table, kept for as long as the arrays they came from.
+ *
+ * Both are properties of the target and were rebuilt on every call, which is every camera
+ * frame; the shared-spot table is a pairwise sweep, so a frame's cost grew with the square of
+ * the target. Keyed on the arrays themselves, so a caller passing the same target arrays frame
+ * after frame pays once, and one passing new arrays each time gets exactly what it got before.
+ */
+const packedTargets = new WeakMap<Uint32Array[], Uint32Array>();
+const sharedTargets = new WeakMap<Position[], { radiusSquared: number; shared: Uint8Array | undefined }>();
+
+function packedOnce(descriptors: Uint32Array[]): Uint32Array {
+  let packed = packedTargets.get(descriptors);
+  if (packed === undefined) {
+    packed = pack(descriptors);
+    packedTargets.set(descriptors, packed);
+  }
+  return packed;
+}
+
+function sharedOnce(positions: Position[] | undefined, radiusSquared: number): Uint8Array | undefined {
+  if (!positions) return undefined;
+  const held = sharedTargets.get(positions);
+  if (held !== undefined && held.radiusSquared === radiusSquared) return held.shared;
+  const shared = sharedPositions(positions, radiusSquared);
+  sharedTargets.set(positions, { radiusSquared, shared });
+  return shared;
 }
 
 /** Bits that differ between two descriptors held in flat buffers. */
@@ -163,8 +207,8 @@ export function matchDescriptors(
   if (query.length === 0 || target.length === 0) return [];
 
   const queries = pack(query);
-  const targets = pack(target);
-  const targetShared = sharedPositions(positions, radiusSquared);
+  const targets = packedOnce(target);
+  const targetShared = sharedOnce(positions, radiusSquared);
   const queryShared = sharedPositions(options.queryPositions, radiusSquared);
 
   const forward: Match[] = [];
