@@ -68,13 +68,12 @@ describe("the postcard example", () => {
     });
     const report = target.report;
     const across = Math.round(report.smallestUsableScale * report.analysisWidth);
-    const repetition = Math.round((report.repetition ?? 0) * 100);
     for (const line of [
       `size                  ${target.width} x ${target.height} px`,
       `tracking quality      ${report.score} / 100`,
       `features              ${report.featureCount}, reaching ${report.areasWithFeatures} of ${report.areas} areas`,
-      `minimum print width   ${report.minimumWidthMm} mm to be read from 190 mm away, being ${across} px across the artwork`,
-      `repeated detail       ${repetition}% of features have a look-alike`,
+      `minimum print width   ${report.minimumWidthMm} mm to be read from 190 mm away, being ${across} px across the artwork from left to right`,
+      `recognised            at that width, ${report.recognition?.inliers} points agree in the worst of four turns, where ${report.recognition?.needed} are needed`,
     ]) {
       expect(readme, `the README does not say: ${line}`).toContain(line);
     }
@@ -96,7 +95,7 @@ describe("the postcard example", () => {
       `tracking quality ${report.score} / 100`,
       `${report.featureCount} features, ${report.areasWithFeatures} of ${report.areas} areas`,
       `min width ${report.minimumWidthMm} mm to read at 190 mm`,
-      `${Math.round((report.repetition ?? 0) * 100)}% of features have a look-alike`,
+      `recognised: ${report.recognition?.inliers} points agree, ${report.recognition?.needed} needed`,
       report.pass ? "VERDICT READY FOR PRESS" : "VERDICT NOT READY",
     ]) {
       expect(page, `the project page does not say: ${claim}`).toContain(claim);
@@ -194,13 +193,12 @@ describe("the postcard example", () => {
     });
     const report = target.report;
     expect(report.pass, "the artwork the README shows being refused now passes").toBe(false);
-    const repetition = Math.round((report.repetition ?? 0) * 100);
     for (const line of [
       `size                  ${target.width} x ${target.height} px`,
       `tracking quality      ${report.score} / 100`,
       `features              ${report.featureCount}, reaching ${report.areasWithFeatures} of ${report.areas} areas`,
       "minimum print width   not printable until the artwork passes",
-      `repeated detail       ${repetition}% of features have a look-alike elsewhere on the artwork`,
+      "recognised            not asked, because the artwork did not get that far",
       "verdict               not ready",
       `      ${report.reasons[0]}`,
     ]) {

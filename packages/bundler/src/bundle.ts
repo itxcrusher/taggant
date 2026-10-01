@@ -109,7 +109,12 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   for (const target of manifest.targets) {
     const compiled = options.targets[target.id] as {
       features?: unknown[];
-      report?: { minimumWidthMm?: number | null; scanDistanceMm?: number; pass?: boolean };
+      report?: {
+        minimumWidthMm?: number | null;
+        scanDistanceMm?: number;
+        pass?: boolean;
+        recognition?: { found?: unknown; inliers?: unknown; needed?: unknown } | null;
+      };
     };
     // Nothing to recognise with. The parser accepts an empty list, because an array of zero
     // is a legal array, so a target truncated in a copy or built from artwork that produced
@@ -131,6 +136,15 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
         `${target.id} was compiled by an older build, whose minimum print width was too small to trust. Compile it again before publishing.`,
       );
     }
+    // A report that never asked the recogniser is from the build whose readiness was inferred
+    // from how often features had look-alikes, a figure that fell as a design repeated: it
+    // called a sheet of sixteen identical postcards ready for press at a width where it is not
+    // found. Its pass is not a pass this gate can stand behind.
+    if (report !== undefined && report.recognition === undefined) {
+      throw new Error(
+        `${target.id} was compiled before readiness was checked against the recogniser, and its verdict cannot be trusted. Compile it again before publishing.`,
+      );
+    }
     // Refused before the width is looked at, because a failing report has no width: it is
     // null, and comparing against null compares nothing. The gate read the width alone, so
     // the artwork it had most to say about was the artwork it said nothing about, and the
@@ -138,6 +152,14 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     if (report?.pass === false) {
       throw new Error(
         `${target.id} did not pass its print readiness check, so it cannot be published. Compile it again and read what it says about the artwork.`,
+      );
+    }
+    // A passing report with no width has nothing for the comparison below to compare, and
+    // was how a NaN width got through: written to JSON it is null, and a gate that only
+    // compares numbers read that as nothing to say.
+    if (report?.pass === true && !(typeof report.minimumWidthMm === "number" && report.minimumWidthMm > 0)) {
+      throw new Error(
+        `${target.id} claims to be ready for press and carries no print width, so nothing says how small it can be printed. Compile it again.`,
       );
     }
     const needs = report?.minimumWidthMm;

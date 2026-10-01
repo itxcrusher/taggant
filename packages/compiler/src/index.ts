@@ -9,5 +9,6 @@ export {
   buildReport,
   carriesItsDistance,
   distanceBehind,
+  isCurrentReport,
 } from "./report.js";
-export type { Report, ReportInput } from "./report.js";
+export type { Recognition, Report, ReportInput } from "./report.js";

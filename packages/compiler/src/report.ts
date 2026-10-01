@@ -17,6 +17,25 @@ export interface ReportInput {
   described?: DescribedCorner[];
   /** Distance in millimetres at which a person is expected to hold the camera. */
   scanDistanceMm: number;
+  /**
+   * Show the recogniser the artwork with this many pixels across it, and say what it found.
+   *
+   * Supplied by whoever has the pixels, which is the compiler; this module has corners and
+   * nothing else. Without it a report cannot pass, because every way of deciding readiness
+   * from the corners alone has been measured wrong.
+   */
+  recognises?: (pixelsAcross: number) => { found: boolean; inliers: number };
+}
+
+/** What the recogniser made of the artwork at the width a report gives. */
+export interface Recognition {
+  /** Pixels across the artwork that the stated width puts in front of the recogniser. */
+  pixelsAcross: number;
+  found: boolean;
+  /** Matches that agreed with the pose it fitted. */
+  inliers: number;
+  /** How many have to agree before the width is called enough. */
+  needed: number;
 }
 
 export interface Report {
@@ -27,11 +46,27 @@ export interface Report {
   /** Areas of a 4 by 4 grid over the artwork that hold at least one feature. */
   areasWithFeatures: number;
   /**
-   * Share of features that have a look-alike somewhere else on the artwork, from 0 to 1.
-   * Null when there were no descriptions to judge. High means the artwork repeats, and a
-   * pose can land on the wrong copy.
+   * Share of features with one look-alike elsewhere on the artwork that stands out from the
+   * rest, from 0 to 1. Null when there was nothing to judge.
+   *
+   * A diagnostic, not a gate, and its name promises more than it measures. It counts the case
+   * a matcher accepts wrongly, one rival clearly closer than the others, and by construction
+   * it leaves out a feature with several identical rivals, because there none stands out. So
+   * it reads lower the more times a design repeats: two copies of a label read 1.0 and three
+   * read 0. It decided "ready for press" until a sheet of sixteen identical postcards passed
+   * at 0.31 and was not found at the width it was given. Readiness is decided by `recognition`
+   * now, which is what this was standing in for.
    */
   repetition: number | null;
+  /**
+   * The artwork put in front of the recogniser at exactly the width this report gives, and
+   * what came back. This is what decides readiness: the width is a claim about what a camera
+   * at the scan distance will see, and the only check of that claim is to show it to the
+   * thing that has to see it.
+   *
+   * Null when nothing drove it, and a report like that does not pass.
+   */
+  recognition: Recognition | null;
   /** How many areas there are, so the count above reads without knowing the grid. */
   areas: number;
   /** Pixels across the artwork as it was analysed. The width below is derived from it. */
@@ -135,6 +170,46 @@ export function carriesItsDistance(report: unknown): report is Report {
 }
 
 /**
+ * Is a report read back off disk one this build would stand behind?
+ *
+ * The fields a reader acts on, each checked rather than assumed. `carriesItsDistance` looked at
+ * one of them and was typed as though it checked them all, so a hand-edited file holding a
+ * plausible distance and no usable width was trusted as a whole report. And a report with no
+ * `recognition` is from the build that inferred readiness from a repetition figure that fell as
+ * a design repeated: it called a sheet of sixteen identical postcards ready for press. Its
+ * verdict is not one to show a printer or to publish behind.
+ */
+export function isCurrentReport(report: unknown): report is Report {
+  if (!carriesItsDistance(report)) return false;
+  const fields = report as unknown as Record<string, unknown>;
+  if (typeof fields.pass !== "boolean" || typeof fields.score !== "number") return false;
+  const width = fields.minimumWidthMm;
+  if (width !== null && !(typeof width === "number" && Number.isFinite(width) && width > 0)) return false;
+  // A passing report names a width; a failing one names none. Anything else is not a report
+  // this build writes.
+  if ((fields.pass === true) !== (width !== null)) return false;
+  const seen = fields.recognition as Record<string, unknown> | null | undefined;
+  if (seen === undefined) return false;
+  if (seen !== null) {
+    if (
+      typeof seen.inliers !== "number" ||
+      typeof seen.needed !== "number" ||
+      typeof seen.found !== "boolean"
+    ) {
+      return false;
+    }
+  }
+  // Passing means the recogniser was asked and agreed.
+  if (
+    fields.pass === true &&
+    (seen === null || seen.found !== true || (seen.inliers as number) < (seen.needed as number))
+  ) {
+    return false;
+  }
+  return true;
+}
+
+/**
  * The distance an older report was computed for, worked back out of it.
  *
  * The build that wrote these files divided by a sensor figure of 1.6 pixels per millimetre
@@ -152,6 +227,11 @@ export function carriesItsDistance(report: unknown): report is Report {
  * caller then has to say so rather than guess.
  */
 export function distanceBehind(report: unknown): number | null {
+  // A report that carries its distance was computed for it, and working one back out of the
+  // width with the old build's arithmetic gives a confident wrong answer instead: 735 mm for a
+  // report computed at 190, which is four times out because the arithmetic below is the old
+  // model's and the width is the new one's.
+  if (carriesItsDistance(report)) return report.scanDistanceMm;
   const fields = report as {
     minimumWidthMm?: unknown;
     smallestUsableScale?: unknown;
@@ -188,26 +268,49 @@ const MIN_AREAS = 8;
 const GRID = 4;
 
 /**
- * How much of the artwork may look like the rest of it.
+ * Points that must agree, in the worst of four turns of the print, before a width is called
+ * enough.
  *
- * Above this a matcher has no way to know which copy of a repeated pattern it is looking
- * at, and the pose it produces can be a whole tile out while reporting plenty of agreeing
- * matches, so the runtime shows content confidently in the wrong place.
+ * Twice the recogniser's own floor of ten. At the floor a pose is believed and no more, and the
+ * frame this is measured on is the best case a phone will ever see: no lighting, no focus, no
+ * angle, no paper. Four turns, because the count moves by a fifth as the print turns and a check
+ * made only in the easiest pose passes artwork whose margin is gone at another.
  *
- * Set from measurement rather than taste. Five pieces of artwork, each located in sixty
- * poses from zero to ninety degrees, with the error measured against the known mapping:
+ * Measured: the worst of four turns at each size the compiled target covers, with the mark that
+ * many pixels across in a 480 pixel frame.
  *
- *   artwork                    repetition   poses placed more than 50 px out
- *   postcard                     0.361                0 of 60
- *   medium, 200 marks            0.398                0 of 60
- *   fine, 900 marks              0.463                0 of 60
- *   medium, printed twice        0.743                2 of 60
- *   postcard, printed twice      0.752                7 of 60
+ *   piece                              320 px    400 px    500 px    640 px
+ *   the example postcard                  58        85        83        15
+ *   the same, softened                    60        77        89        42
+ *   generated, 900 fine marks             97       105       103        36
+ *   generated, 200 medium marks          115        74        49        13
+ *   generated, 40 bold marks              24        28        21        11
+ *   200 medium marks, printed twice       19        49        45        22
+ *   the postcard printed 2 by 2            0         0        10        13
+ *   the postcard printed 3 by 3            0         0         0         0
+ *   the postcard printed 4 by 4                      0         0         0
+ *   the postcard printed 5 by 5                                0         0
  *
- * Everything that places correctly sits at or below 0.46 and everything that mislocates
- * sits above 0.74, so the line goes between them with room on both sides.
+ * No repeated sheet reaches more than 13 at any size. Everything else is found in every turn
+ * and reaches at least 19 wherever the mark fits in the frame; at 640 pixels it does not, and
+ * the counts fall for everything. The line sits above everything a sheet reaches and at or
+ * below what every other piece reaches at the size it is accepted at.
+ *
+ * There is no empty gap above it, and that is worth knowing before moving it. Artwork with few
+ * distinct marks lands a few points over the line, so whether it is confirmed at the first size
+ * or the next can turn on a few points. That moves its width, which is the honest place for the
+ * uncertainty, and not its verdict. The sheets are refused at every size by a wide margin.
+ *
+ * Calibrated on generated artwork and one example, in a simulation that is the best case; what
+ * a real camera needs above the floor is what the print corpus and the field measurement are
+ * for, and until they exist this is the line the measurements above support.
+ *
+ * This replaced a ceiling on `repetition`, which had a table of its own. Its first row read the
+ * example postcard at 0.361, which the compiler does not produce: it reads 0.290. And the measure
+ * fell as copies were added, so the 4 by 4 and 5 by 5 sheets passed under it and were not found
+ * at the widths they were given.
  */
-const MAX_REPETITION = 0.6;
+const AGREEING_POINTS_NEEDED = 20;
 
 /**
  * Turn the features found at each size into the verdict a printer needs.
@@ -234,20 +337,32 @@ export function buildReport(input: ReportInput): Report {
   if (!(image.width > 0) || !(image.height > 0)) {
     throw new RangeError(`image must have a positive width and height, got ${image.width} x ${image.height}`);
   }
+  for (const level of levels) {
+    // Refused like the distance and the image are. A scale of zero, below zero or not a
+    // number went straight into the width: zero printed "0 mm", minus one printed a negative
+    // width, and NaN was written to the target file as `null`, which every gate in the
+    // bundler then read as "nothing to compare" and let through.
+    if (!(Number.isFinite(level.scale) && level.scale > 0 && level.scale <= 1)) {
+      throw new RangeError(
+        `a level's scale is a fraction of the analysed artwork, above 0 and at most 1, and this is ${level.scale}`,
+      );
+    }
+  }
 
   const base = levels.find((level) => level.scale === 1)?.corners ?? levels[0]?.corners ?? [];
   const featureCount = base.length;
   const areasWithFeatures = areasTouched(base, image);
 
-  const distinctiveness = input.described ? measureDistinctiveness(input.described) : null;
+  // Null when there is nothing to judge, which is what the field says and what both places
+  // that render it have a branch for. An empty list read as 0, so a checkerboard with no
+  // usable features printed "0% of features have a look-alike, which is normal".
+  const distinctiveness =
+    input.described && input.described.length > 0 ? measureDistinctiveness(input.described) : null;
   const repetition = distinctiveness?.share ?? null;
 
   const reasons: string[] = [];
   if (featureCount < MIN_FEATURES) reasons.push("too few features to track reliably");
   else if (areasWithFeatures < MIN_AREAS) reasons.push("features are concentrated in part of the artwork");
-  if (repetition !== null && repetition > MAX_REPETITION) {
-    reasons.push("the artwork repeats itself, so content could be placed on the wrong copy");
-  }
   let pass = reasons.length === 0;
 
   // The smallest size that still holds up. A camera further away than this puts fewer
@@ -293,6 +408,67 @@ export function buildReport(input: ReportInput): Report {
     );
   }
 
+  // Readiness is decided by showing the artwork to the recogniser, not by inferring it from
+  // the corners. The corners say which sizes the target covers; only the recogniser says
+  // whether a mark of a given width is found. Every proxy for that has been measured wrong in
+  // turn, the last a repetition figure that called a sheet of sixteen identical postcards
+  // ready for press at a width where it is not found at all.
+  //
+  // So the width printed is the smallest the recogniser confirms. It starts where the corners
+  // say, and when the recogniser does not agree there it moves up through the sizes the target
+  // covers. Artwork the recogniser confirms at no size is not ready, whatever its corners say.
+  let recognition: Recognition | null = null;
+  if (pass && minimumWidthMm !== null) {
+    if (input.recognises === undefined) {
+      pass = false;
+      reasons.push(
+        "it was never put in front of the recogniser at the width it would be printed, so nothing says that width is enough",
+      );
+    } else {
+      const sizes = [...new Set(levels.map((level) => level.scale))]
+        .filter((scale) => scale >= smallestUsableScale)
+        .sort((a, b) => a - b);
+      let best: { recognition: Recognition; widthMm: number } | null = null;
+      let confirmed: { scale: number; widthMm: number } | null = null;
+      for (const scale of sizes) {
+        const widthMm = Math.ceil((scale * image.width) / pixelsPerMm);
+        // A width no manifest can declare is not one to confirm. Checked before the
+        // recogniser runs, because a larger size is only ever wider.
+        if (widthMm > WIDEST_DECLARABLE_MM) break;
+        // The pixels this width puts across the mark, rounded the way the width was, so what
+        // is checked is the number a printer acts on and not the one before rounding.
+        const pixelsAcross = Math.round(widthMm * pixelsPerMm);
+        const seen = input.recognises(pixelsAcross);
+        const attempt: Recognition = {
+          pixelsAcross,
+          found: seen.found,
+          inliers: seen.found ? seen.inliers : 0,
+          needed: AGREEING_POINTS_NEEDED,
+        };
+        if (best === null || attempt.inliers > best.recognition.inliers)
+          best = { recognition: attempt, widthMm };
+        if (attempt.found && attempt.inliers >= AGREEING_POINTS_NEEDED) {
+          recognition = attempt;
+          confirmed = { scale, widthMm };
+          break;
+        }
+      }
+      if (confirmed !== null) {
+        smallestUsableScale = confirmed.scale;
+        minimumWidthMm = confirmed.widthMm;
+      } else {
+        pass = false;
+        recognition = best?.recognition ?? null;
+        reasons.push(
+          best === null
+            ? `no size the target covers can be printed narrower than ${WIDEST_DECLARABLE_MM} mm at this distance, so the recogniser could not be asked`
+            : `the recogniser did not find it with ${AGREEING_POINTS_NEEDED} points agreeing at any size the target covers, and the most it found was ${best.recognition.inliers}, printed ${best.widthMm} mm wide and read from ${scanDistanceMm} mm. Artwork that repeats itself does this: the same detail in several places leaves the recogniser unable to settle on one`,
+        );
+      }
+    }
+    if (!pass) minimumWidthMm = null;
+  }
+
   return {
     score: scoreOf(featureCount / MIN_FEATURES, areasWithFeatures / MIN_AREAS, pass),
     pass,
@@ -301,6 +477,7 @@ export function buildReport(input: ReportInput): Report {
     areasWithFeatures,
     areas: GRID * GRID,
     repetition,
+    recognition,
     analysisWidth: image.width,
     smallestUsableScale,
     minimumWidthMm,
@@ -311,6 +488,11 @@ export function buildReport(input: ReportInput): Report {
 /**
  * The line that goes next to the number, so nobody reads it as a measurement of the design.
  *
+ * It names the edge. The width is the artwork's extent from left to right as its file is
+ * oriented, and the same postcard exported upright is 104 mm where on its side it is 147, so a
+ * width with no edge invited a manifest declaring the other one: every gate passed and the
+ * print came out 30 per cent under.
+ *
  * The distance comes out of the report rather than in as an argument, for the same reason
  * it does in the console: a caller holding a width and a distance separately is a caller
  * who can pair a width with a distance it was never computed for, and one already had.
@@ -318,7 +500,7 @@ export function buildReport(input: ReportInput): Report {
 export function describeWidth(report: Report): string {
   if (report.minimumWidthMm === null) return "not printable until the artwork passes";
   const pixels = Math.round(report.smallestUsableScale * report.analysisWidth);
-  return `${report.minimumWidthMm} mm to be read from ${report.scanDistanceMm} mm away, being ${pixels} px across the artwork`;
+  return `${report.minimumWidthMm} mm to be read from ${report.scanDistanceMm} mm away, being ${pixels} px across the artwork from left to right`;
 }
 
 function areasTouched(corners: Corner[], image: { width: number; height: number }): number {

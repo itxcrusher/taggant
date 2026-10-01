@@ -172,7 +172,16 @@ describe("bundle", () => {
         manifest: tooSmall,
         // The compiler says this artwork needs 70 mm; the manifest says it will be printed
         // at 20. Nothing else in the system sees both numbers.
-        targets: { front: { ...TARGET, report: { minimumWidthMm: 70, scanDistanceMm: 150 } } },
+        targets: {
+          front: {
+            ...TARGET,
+            report: {
+              minimumWidthMm: 70,
+              scanDistanceMm: 150,
+              recognition: { pixelsAcross: 320, found: true, inliers: 58, needed: 20 },
+            },
+          },
+        },
         sourceDir,
         outDir,
         runtimeDir: RUNTIME_DIST,
@@ -185,7 +194,16 @@ describe("bundle", () => {
     await expect(
       bundle({
         manifest: MANIFEST,
-        targets: { front: { ...TARGET, report: { minimumWidthMm: 70, scanDistanceMm: 150 } } },
+        targets: {
+          front: {
+            ...TARGET,
+            report: {
+              minimumWidthMm: 70,
+              scanDistanceMm: 150,
+              recognition: { pixelsAcross: 320, found: true, inliers: 58, needed: 20 },
+            },
+          },
+        },
         sourceDir,
         outDir,
         runtimeDir: RUNTIME_DIST,

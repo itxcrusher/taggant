@@ -67,7 +67,7 @@ A manifest must name at least one target, and a target must show at least one th
 |---|---|---|
 | `id` | required | Identifies the target within the experience. A compiled target file is matched to it by this name, so it is the one thing the compiler's output and this manifest have to agree on. Same shape as the experience id. |
 | `source` | required | Path to the artwork this target was compiled from, relative to the manifest. Carried so the target can be built again from the thing it was made from, rather than from whoever remembers which file it was. |
-| `physicalWidthMm` | required | How wide the artwork is on the finished piece, in millimetres. **This is the number the print readiness report is measured against.** The compiler says the smallest width the artwork can still be read at from a stated distance; a piece printed narrower than that will not be recognised, whatever else is right about it. |
+| `physicalWidthMm` | required | How wide the artwork is on the finished piece, in millimetres, measured left to right as its file is oriented: the edge the compiler's minimum print width is for, which is not the long edge of the piece when the file is turned. **This is the number the print readiness report is measured against.** The compiler says the smallest width the artwork can still be read at from a stated distance; a piece printed narrower than that will not be recognised, whatever else is right about it. |
 | `content` | required | What is shown when the target is found. At least one, and at most 32: each piece is fetched and placed when the target is found, and every SVG among them costs a render when the bundle is published. |
 
 ### A piece of content

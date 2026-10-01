@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { readFile, writeFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { randomBytes } from "node:crypto";
+import { readFile, rename, rm, writeFile } from "node:fs/promises";
+import { basename, resolve } from "node:path";
 import process, { argv, stderr, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import { type CompiledTarget, compileTarget, toTargetJson } from "./compile.js";
@@ -52,6 +53,11 @@ export function parseArguments(args: string[]): { arguments: Arguments } | { err
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
     if (token === undefined) continue;
+    // A single dash is an option somebody meant, not a file. `-h` was taken as the artwork, its
+    // name became the id, and the answer was a rule about ids.
+    if (token.startsWith("-") && !token.startsWith("--")) {
+      return { error: `unknown option ${token}; the options are ${[...FLAGS].join(", ")} and --help` };
+    }
     if (!token.startsWith("--")) {
       if (source !== undefined) return { error: `unexpected extra argument ${token}` };
       source = token;
@@ -91,12 +97,26 @@ export function parseArguments(args: string[]): { arguments: Arguments } | { err
   }
 
   const out = values.get("--out");
+  // Writing the target over the artwork it was compiled from destroyed the artwork, printed
+  // "written" and exited 0, so the one file nobody can regenerate was the one that went. The
+  // comparison folds case where the filesystem does, because there `Art.png` and `art.png`
+  // are one file.
+  if (out !== undefined && samePath(out, source)) {
+    return { error: `--out ${out} is the artwork being compiled, and writing there would destroy it` };
+  }
   return {
     arguments: out === undefined ? { source, id, scanDistanceMm } : { source, id, scanDistanceMm, out },
   };
 }
 
-export function formatReportLines(source: string, target: CompiledTarget, scanDistanceMm: number): string[] {
+/**
+ * The report as a person reads it in a terminal.
+ *
+ * Two arguments. It took the scan distance as a third and never read it, which is the shape of
+ * the defect the report carries its own distance to prevent: a caller holding a width and a
+ * distance separately can pair them wrongly, and the linter does not notice an unread parameter.
+ */
+export function formatReportLines(source: string, target: CompiledTarget): string[] {
   const { report } = target;
   const lines = [
     "",
@@ -110,7 +130,10 @@ export function formatReportLines(source: string, target: CompiledTarget, scanDi
     // requirement set by the camera and the target, not a measurement of the design, and
     // a bare millimetre figure under a filename reads as the latter.
     `  minimum print width   ${describeWidth(report)}`,
-    `  repeated detail       ${describeRepetition(report)}`,
+    // What the verdict is made of, beside it. The line here before was a repetition figure
+    // under a judgement it could not support: it fell as a design repeated, so a sheet of
+    // sixteen identical postcards read "31%, which is normal" above "ready for press".
+    `  recognised            ${describeRecognition(report)}`,
     `  verdict               ${report.pass ? "ready for press" : "not ready"}`,
   ];
   for (const reason of report.reasons) lines.push(`      ${reason}`);
@@ -119,8 +142,10 @@ export function formatReportLines(source: string, target: CompiledTarget, scanDi
 }
 
 export async function main(args: string[]): Promise<number> {
-  if (args.length === 0 || args[0] === "--help") {
-    const asked = args[0] === "--help";
+  // Help anywhere on the line, not only first: `taggant-compile art.png --help` was refused as an
+  // unknown option, which is the one flag every command line is expected to know.
+  if (args.length === 0 || args.includes("--help")) {
+    const asked = args.includes("--help");
     (asked ? stdout : stderr).write(USAGE);
     return asked ? EXIT.ok : EXIT.usage;
   }
@@ -142,11 +167,11 @@ export async function main(args: string[]): Promise<number> {
     return EXIT.cannotRead;
   }
 
-  stdout.write(`${formatReportLines(source, target, scanDistanceMm).join("\n")}\n`);
+  stdout.write(`${formatReportLines(source, target).join("\n")}\n`);
 
   if (out !== undefined) {
     try {
-      await writeFile(out, JSON.stringify(toTargetJson(target)));
+      await writeTarget(out, JSON.stringify(toTargetJson(target)));
     } catch (error) {
       stderr.write(`could not write ${out}: ${error instanceof Error ? error.message : String(error)}\n`);
       return EXIT.cannotWrite;
@@ -167,10 +192,37 @@ if (invokedDirectly) {
   });
 }
 
-/** How much of the artwork looks like the rest of it, in words rather than a bare fraction. */
-function describeRepetition(report: Report): string {
-  if (report.repetition === null) return "not measured";
-  const percent = Math.round(report.repetition * 100);
-  if (percent <= 40) return `${percent}% of features have a look-alike, which is normal`;
-  return `${percent}% of features have a look-alike elsewhere on the artwork`;
+/** What the recogniser made of the artwork, in the sentence a printer can check. */
+function describeRecognition(report: Report): string {
+  const seen = report.recognition;
+  if (seen === null) return "not asked, because the artwork did not get that far";
+  if (report.pass) {
+    return `at that width, ${seen.inliers} points agree in the worst of four turns, where ${seen.needed} are needed`;
+  }
+  return `at most ${seen.inliers} points agree at any size, where ${seen.needed} are needed`;
+}
+
+function samePath(a: string, b: string): boolean {
+  const caseFolds = process.platform === "win32" || process.platform === "darwin";
+  const fold = (path: string) => (caseFolds ? resolve(path).toLowerCase() : resolve(path));
+  return fold(a) === fold(b);
+}
+
+/**
+ * Write the target beside its destination and rename it into place.
+ *
+ * It was the one file in the repository written in place, and it is the one the console and
+ * the bundler both read: a write interrupted part way left half a file under the right name,
+ * which surfaced later as a JSON parse error with a byte offset and nothing about where it
+ * came from.
+ */
+async function writeTarget(out: string, text: string): Promise<void> {
+  const staging = `${out}.writing-${randomBytes(4).toString("hex")}`;
+  try {
+    await writeFile(staging, text);
+    await rename(staging, out);
+  } catch (error) {
+    await rm(staging, { force: true });
+    throw error;
+  }
 }

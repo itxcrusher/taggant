@@ -24,8 +24,8 @@ Then point it at the artwork. Print `artwork.png` at 148 mm wide, or show it on 
   size                  640 x 454 px
   tracking quality      100 / 100
   features              248, reaching 16 of 16 areas
-  minimum print width   147 mm to be read from 190 mm away, being 320 px across the artwork
-  repeated detail       29% of features have a look-alike, which is normal
+  minimum print width   147 mm to be read from 190 mm away, being 320 px across the artwork from left to right
+  recognised            at that width, 58 points agree in the worst of four turns, where 20 are needed
   verdict               ready for press
 ```
 
@@ -35,7 +35,7 @@ That width is a resolution requirement, not a judgement of the artwork. It is th
 
 The size line reads 640 by 454 where the file is 592 by 420, because every piece of artwork is analysed at the same raster whatever size it was exported at. Otherwise the same design sent as a bigger file would be measured differently and told to print larger, which rewards exporting small.
 
-`repeated detail` is the share of features that have a look-alike somewhere else on the piece. It matters because nothing else in the report notices a design that repeats, and a repeated design gives a tracker no way to know which copy it is looking at: the same artwork printed twice scores full marks on features and spread, and then places content a whole tile away.
+`recognised` is what decides the verdict. The compiler puts the artwork in front of the recogniser at the width above, turned four ways, and the width stands only if twenty points agree on where it is in the worst turn. For this postcard the fewest is 58. A design that repeats is the case it exists for: four copies of this postcard on one sheet have plenty of features spread over the whole piece, and in the worst turn the recogniser never gets more than 13 to agree at any size, because a feature with a twin that matches as well as it does is one a matcher has to discard.
 
 ## The files
 
@@ -47,7 +47,7 @@ The size line reads 640 by 454 where the file is 592 by 420, because every piece
 | `index.html` | the page that runs it |
 | `front.target.json` | produced by the compile step above, not checked in |
 
-`physicalWidthMm` in the manifest is the real width of the printed piece. It is what turns a pose in pixels into a pose in millimetres, so it is worth measuring rather than guessing.
+`physicalWidthMm` in the manifest is the real width of the printed artwork, measured left to right as its file is oriented: the same edge the compiler's minimum width is for. It is what turns a pose in pixels into a pose in millimetres, so it is worth measuring rather than guessing.
 
 ## If the camera will not open
 

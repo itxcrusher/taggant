@@ -132,7 +132,15 @@ function reportRecord(report: Report): string {
     ["areas reached", `${report.areasWithFeatures} of ${report.areas}`],
     ["analysed at", `${report.analysisWidth} px across`],
     ["smallest usable size", `${Math.round(report.smallestUsableScale * 100)}% of that`],
-    ["repetition", report.repetition === null ? "not measured" : report.repetition.toFixed(2)],
+    // What decided the verdict, in place of the repetition figure that used to sit here: it
+    // fell as a design repeated, so it was a measurement of the wrong thing beside the
+    // sentence it did not decide.
+    [
+      "recognised",
+      report.recognition === null
+        ? "not asked, the artwork did not get that far"
+        : `${report.recognition.inliers} points agree in the worst of four turns, ${report.recognition.needed} needed`,
+    ],
     ["score", `${report.score} of 100, passing at 60`],
   ];
   return `<details class="record">
@@ -161,7 +169,7 @@ export function verdict(report: Report): string {
       ? "No print width would fix this. The artwork has to change."
       : `Print it at least ${report.minimumWidthMm} mm wide to be read from ${
           report.scanDistanceMm
-        } mm away, being ${Math.round(report.smallestUsableScale * report.analysisWidth)} px across the artwork.`;
+        } mm away, being ${Math.round(report.smallestUsableScale * report.analysisWidth)} px across the artwork from left to right.`;
   return `<div class="verdict ${report.pass ? "pass" : "fail"}">
   <span class="state">${report.pass ? "Ready for press" : "Not ready"}</span>
   <span class="score mono">${esc(report.score)} / 100</span>

@@ -38,7 +38,12 @@ describe("a published bundle", () => {
     width: 640,
     height: 452,
     features: [{ x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] }],
-    report: { minimumWidthMm: 100, pass: true, scanDistanceMm: 190 },
+    report: {
+      minimumWidthMm: 100,
+      pass: true,
+      scanDistanceMm: 190,
+      recognition: { pixelsAcross: 320, found: true, inliers: 58, needed: 20 },
+    },
   };
 
   const manifestFor = (src: string) => ({

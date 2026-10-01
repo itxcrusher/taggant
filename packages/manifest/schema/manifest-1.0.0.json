@@ -69,7 +69,7 @@
           "maxLength": 300
         },
         "physicalWidthMm": {
-          "description": "How wide the artwork is on the finished piece, in millimetres. This is the number the print readiness report is measured against: the compiler says the smallest width the artwork can still be read at, and a piece printed narrower than that will not be recognised, whatever else is right.",
+          "description": "How wide the artwork is on the finished piece, in millimetres, measured left to right as its file is oriented: the edge the compiler's minimum print width is for, which is not the long edge of the piece when the file is turned. This is the number the print readiness report is measured against: the compiler says the smallest width the artwork can still be read at, and a piece printed narrower than that will not be recognised, whatever else is right.",
           "type": "number",
           "exclusiveMinimum": 0,
           "maximum": 5000

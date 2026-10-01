@@ -1,6 +1,10 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { compileTarget } from "../src/compile.js";
+
+const EXAMPLE_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../../examples/postcard");
 
 /**
  * Generated artwork, so the property under test is the only thing that changes.
@@ -53,9 +57,15 @@ describe("the report against real artwork", { timeout: 30_000 }, () => {
     });
     expect(bold.report.pass).toBe(true);
     expect(fine.report.pass).toBe(true);
-    // Both are the same raster and both hold up all the way down, so they should agree.
-    // The failure this guards against is the number moving with something that is not a
-    // resolution property at all, in either direction.
+    // Both are the same raster and both hold up all the way down, so the corners give them the
+    // same width; the failure this guards against is the number moving with something that is
+    // not a resolution property, which one earlier formula did, backwards.
+    //
+    // The width is now the smallest the recogniser confirms, and for these two that is still
+    // the first size: the fine artwork with 97 points in its worst turn and the bold with 24,
+    // against a line of 20. Forty identical marks give the recogniser less to agree on, so the
+    // bold margin is four points. If it ever loses them, its width moving up a size is the
+    // recogniser saying so, and the line is not the thing to move.
     expect(bold.report.minimumWidthMm).toBe(fine.report.minimumWidthMm);
   });
 
@@ -103,11 +113,11 @@ describe("the report against real artwork", { timeout: 30_000 }, () => {
     expect(after.report.featureCount).toBeGreaterThan(before.report.featureCount * 0.7);
   });
 
-  it("refuses artwork that repeats, because a pose can land on the wrong copy", async () => {
+  it("asks a design printed twice for a larger print, and confirms it there", async () => {
     const once = await artwork({ blobs: 200, radius: 18, size: 600 });
     const raw = await sharp(once).grayscale().raw().toBuffer({ resolveWithObject: true });
     const { width, height } = raw.info;
-    // The same design printed twice side by side, which is what a sheet of labels is.
+    // The same design printed twice side by side.
     const tiled = Buffer.alloc(width * 2 * height);
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
@@ -123,16 +133,65 @@ describe("the report against real artwork", { timeout: 30_000 }, () => {
     const single = await compileTarget(once, { id: "once", scanDistanceMm: 350 });
     const repeated = await compileTarget(twice, { id: "twice", scanDistanceMm: 350 });
 
-    // The single piece is fine and has to stay fine: a gate that fails everything is not a
-    // gate. The repeated one has plenty of features, spread over the whole piece, and no
-    // way to tell which copy is being looked at.
+    // This used to assert a refusal, "because a pose can land on the wrong copy". Measured at
+    // the printed width over 21 poses, seven turns and three offsets, the pose landed on the
+    // right copy every time, worst error 2.7 pixels. What repetition does cost is agreement:
+    // 19 to 33 points against 115 to 143 for the design once, because a matcher discards a
+    // feature whose twin is as good a match. So a piece that is found and placed is not
+    // refused; it is confirmed where the recogniser agrees, which for this one is a size above
+    // the single design's, by one point at the first size. That margin is too fine to assert,
+    // so what is asserted is what is robust: far less agreement, and still confirmed.
     expect(single.report.pass).toBe(true);
-    expect(repeated.report.featureCount).toBeGreaterThan(60);
-    expect(repeated.report.areasWithFeatures).toBeGreaterThan(8);
-    expect(repeated.report.pass).toBe(false);
-    expect(repeated.report.reasons).toContain(
-      "the artwork repeats itself, so content could be placed on the wrong copy",
-    );
-    expect(repeated.report.repetition ?? 0).toBeGreaterThan(single.report.repetition ?? 0);
+    expect(repeated.report.pass).toBe(true);
+    const seen = repeated.report.recognition;
+    expect(seen?.found).toBe(true);
+    expect(seen?.inliers ?? 0).toBeGreaterThanOrEqual(seen?.needed ?? Number.POSITIVE_INFINITY);
+    expect(seen?.inliers ?? 0).toBeLessThan(single.report.recognition?.inliers ?? 0);
+  });
+
+  it("refuses a sheet of identical labels at every size, which the old repetition gate passed", async () => {
+    // Sixteen copies of the example postcard. The repetition figure that decided readiness
+    // read 0.31 for this, under its line of 0.6, because it falls as copies are added; the
+    // report said ready for press at 185 mm, and at 185 mm the recogniser does not find it.
+    const sheet = await sheetOf(4);
+    const compiled = await compileTarget(sheet, { id: "sheet", scanDistanceMm: 190 });
+    expect(compiled.report.featureCount).toBeGreaterThan(60);
+    expect(compiled.report.repetition ?? 1).toBeLessThan(0.6);
+    expect(compiled.report.pass).toBe(false);
+    expect(compiled.report.minimumWidthMm).toBeNull();
+    expect(compiled.report.score).toBeLessThan(60);
+    expect(compiled.report.recognition?.inliers ?? 0).toBeLessThan(compiled.report.recognition?.needed ?? 0);
+  });
+
+  it("gives a sheet the same verdict whichever size it was exported at", async () => {
+    // The export dialogue decided this. Four copies of the postcard read ready for press when
+    // exported 4400 or 5300 pixels wide and not ready at 4700, 5000, 5600 and 9600, because the
+    // repetition figure moved by more than the gate's whole margin with the export size.
+    const sheet = await sheetOf(2);
+    for (const edge of [4400, 4700, 5300]) {
+      const exported = await sharp(sheet).resize({ width: edge }).png().toBuffer();
+      const compiled = await compileTarget(exported, { id: "sheet", scanDistanceMm: 190 });
+      expect(compiled.report.pass, `exported ${edge} pixels wide`).toBe(false);
+    }
   });
 });
+
+/** N by N copies of the example postcard, laid out edge to edge as a sheet of labels is. */
+async function sheetOf(n: number): Promise<Buffer> {
+  const one = await sharp(join(EXAMPLE_DIR, "artwork.png"))
+    .grayscale()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const { width, height } = one.info;
+  const out = Buffer.alloc(width * n * height * n);
+  for (let ty = 0; ty < n; ty++) {
+    for (let tx = 0; tx < n; tx++) {
+      for (let y = 0; y < height; y++) {
+        one.data.copy(out, (ty * height + y) * width * n + tx * width, y * width, y * width + width);
+      }
+    }
+  }
+  return sharp(out, { raw: { width: width * n, height: height * n, channels: 1 } })
+    .png()
+    .toBuffer();
+}

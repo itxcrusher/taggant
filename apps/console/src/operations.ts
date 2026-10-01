@@ -16,6 +16,7 @@ import {
   carriesItsDistance,
   compileTarget,
   distanceBehind,
+  isCurrentReport,
   toTargetJson,
 } from "@taggant/compiler";
 import {
@@ -223,14 +224,20 @@ async function publishOnce(
         // bundler compares the declared print width against exactly that number. Left
         // alone it publishes with a gate that is four times too lenient.
         const report = (stored as { report?: unknown }).report;
-        if (report !== undefined && !carriesItsDistance(report)) {
+        if (report !== undefined && !isCurrentReport(report)) {
           stored = undefined;
           // Rebuilt at the distance that report was computed for, which the old model's
           // own arithmetic gives back exactly. Falling back to the default instead was
           // silently moving an operator who chose 350 mm to 150, where the same artwork
           // needs less than half the width, so a piece the gate had to refuse published
           // clean and the choice they made was gone from disk with it.
-          rebuildAt = distanceBehind(report) ?? options.scanDistanceMm;
+          //
+          // A report that carries its own distance was computed for that distance, and only
+          // its verdict is in doubt, so it is rebuilt there; the arithmetic below is for the
+          // older build that did not carry one.
+          rebuildAt = carriesItsDistance(report)
+            ? report.scanDistanceMm
+            : (distanceBehind(report) ?? options.scanDistanceMm);
         }
       } catch {
         stored = undefined;

@@ -19,8 +19,8 @@ $ node packages/compiler/dist/cli.js examples/postcard/artwork.png --scan-distan
   size                  640 x 454 px
   tracking quality      100 / 100
   features              248, reaching 16 of 16 areas
-  minimum print width   147 mm to be read from 190 mm away, being 320 px across the artwork
-  repeated detail       29% of features have a look-alike, which is normal
+  minimum print width   147 mm to be read from 190 mm away, being 320 px across the artwork from left to right
+  recognised            at that width, 58 points agree in the worst of four turns, where 20 are needed
   verdict               ready for press
 
 $ echo $?
@@ -37,7 +37,7 @@ $ node packages/compiler/dist/cli.js examples/wordmark.png --scan-distance 190
   tracking quality      54 / 100
   features              55, reaching 8 of 16 areas
   minimum print width   not printable until the artwork passes
-  repeated detail       44% of features have a look-alike elsewhere on the artwork
+  recognised            not asked, because the artwork did not get that far
   verdict               not ready
       too few features to track reliably
 
@@ -45,9 +45,11 @@ $ echo $?
 2
 ```
 
-Two things in there are worth reading carefully.
+Three things in there are worth reading carefully.
 
-**Minimum print width says what it is derived from.** It is a resolution requirement, not a judgement of the design: the print has to fill enough of the picture, at that distance, to put the pixels across the mark that the smallest size in the compiled target needs. Artwork that holds up all the way down that range asks for less; the postcard in `examples/postcard` needs 320 px across and so 147 mm at 190 mm. Artwork that does not pass gets no width at all, because no width would fix it. Artwork that holds up only near its own size gets a large width rather than a refusal: the recogniser does not need the whole mark in view, and a piece printed larger than the picture is read from further back, which puts the same pixels across the same mark.
+**Minimum print width says what it is derived from.** It starts as a resolution requirement, not a judgement of the design: the print has to fill enough of the picture, at that distance, to put the pixels across the mark that the smallest size in the compiled target needs. Artwork that holds up all the way down that range asks for less; the postcard in `examples/postcard` needs 320 px across and so 147 mm at 190 mm. Artwork that does not pass gets no width at all, because no width would fix it. Artwork that holds up only near its own size gets a large width rather than a refusal: the recogniser does not need the whole mark in view, and a piece printed larger than the picture is read from further back, which puts the same pixels across the same mark.
+
+**The width is only printed once the recogniser agrees with it.** The compiler puts the artwork in front of the recogniser at exactly that width, turned four ways, and counts the points that agree on where it is. Twenty have to agree in the worst turn, twice what the recogniser needs before it believes a pose at all. When they do not, the width moves up to the first size the compiled target covers where they do, and artwork confirmed at no size is not ready, whatever its features and spread say. This is here because the report used to infer readiness from how often features had look-alikes, and that figure fell as a design repeated: a sheet of sixteen identical postcards was called ready for press at 185 mm, and at 185 mm the recogniser does not find it. The simulation is the geometry and nothing else, with no lighting, focus, angle or paper, so it is the best case a phone will see, which is why the line is twice the floor rather than the floor.
 
 The line is written out in full rather than as a bare figure in millimetres, because a bare figure under a filename reads as a measurement of the design and gets carried into a press setup as one.
 
@@ -133,7 +135,7 @@ $ node packages/bundler/dist/cli.js examples/postcard/manifest.json     --target
   Serve that folder over HTTPS or from localhost. It needs nothing else.
 ```
 
-What comes out is a folder: an entry page, the manifest rewritten to point at what was copied, the compiled targets, the assets under names taken from their own content, the runtime carried in rather than linked, and one marker file. The runtime is about 45 KB across three files that share one chunk, which matters because the person fetching it has just scanned something printed and is probably on a phone. The marker is what makes republishing safe: publishing empties a folder only when this tool wrote it, so pointing `--out` at the wrong directory is refused by name rather than acted on. Nothing in it fetches anything from the network. The one absolute address a bundle may hold is the `fallback` the manifest declares, which is a place to send a reader whose camera will not open rather than a resource the page loads, and it is there because the author wrote it.
+What comes out is a folder: an entry page, the manifest rewritten to point at what was copied, the compiled targets, the assets under names taken from their own content, the runtime carried in rather than linked, and one marker file. The runtime is about 48 KB across three files that share one chunk, which matters because the person fetching it has just scanned something printed and is probably on a phone. The marker is what makes republishing safe: publishing empties a folder only when this tool wrote it, so pointing `--out` at the wrong directory is refused by name rather than acted on. Nothing in it fetches anything from the network. The one absolute address a bundle may hold is the `fallback` the manifest declares, which is a place to send a reader whose camera will not open rather than a resource the page loads, and it is there because the author wrote it.
 
 That is a claim, so it is tested as one. A test serves the folder from a plain static server with nothing else running, drives it in a real browser against a synthetic camera, and waits for it to find the artwork. It fails on any request that leaves the origin and on any request the folder cannot answer. A second test reads every file the bundle ships and refuses an absolute address in any of them.
 
@@ -256,7 +258,7 @@ These hold for every release and are the reason the project exists in this shape
 
 ## What has and has not been verified
 
-The seven workspace projects are exercised by 450 tests, which is the number CI runs; a machine that cannot start all three browser engines runs fewer, and says which it skipped. One of them asserts a different thing depending on whether the filesystem folds letter case, because the right answer differs, which is worth knowing if a figure here is ever checked on two machines. The whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all. It is not a fast gate: `pnpm test` was 21 minutes on the laptop this was written on, and the bundler's package alone was 9 of those. Where it goes, measured rather than guessed: three browser engines opening a published bundle and the measurement page, about 5 minutes; sixty or so SVG renders at two to three seconds each, because every one is a separate process; the recognition bench, 74 seconds, run because the README quotes its output; and half a minute per package of the test runner's own startup. Each of those is a property chosen on purpose rather than an accident to be tuned away. `pnpm --filter @taggant/<name> test` runs one package while you work.
+The seven workspace projects are exercised by 481 tests, which is the number CI runs; a machine that cannot start all three browser engines runs fewer, and says which it skipped. One of them asserts a different thing depending on whether the filesystem folds letter case, because the right answer differs, which is worth knowing if a figure here is ever checked on two machines. The whole gate runs on every push, alongside a second job that stands the containers up and drives the path through them: once against a bundle published before they started, and once through the console from nothing at all. It is not a fast gate: `pnpm test` was 21 minutes on the laptop this was written on, and the bundler's package alone was 9 of those. Where it goes, measured rather than guessed: three browser engines opening a published bundle and the measurement page, about 5 minutes; sixty or so SVG renders at two to three seconds each, because every one is a separate process; the recognition bench, 74 seconds, run because the README quotes its output; and half a minute per package of the test runner's own startup. Each of those is a property chosen on purpose rather than an accident to be tuned away. `pnpm --filter @taggant/<name> test` runs one package while you work.
 
 The runtime is driven in a real browser rather than asserted: the artwork is drawn into a canvas sitting in a larger frame, that canvas is handed to the page as its camera, and the test waits for the page to reach its tracking state, then checks that the content landed where the frame actually put the artwork. A published bundle is driven the same way and in every engine, from a static folder with nothing else running, on artwork put through the real compiler first, which is the only place the two halves of the system meet. That is the artifact a viewer actually gets, so it is the one worth opening in more than one browser: the test watches every request the page makes, fails on anything that 404s or leaves the origin, and requires the content to land where the frame put the artwork, at the size it was tracked at, with something actually in it, and with the recognition off the page's thread. Feeding it a frame the artwork is not in fails it, which is how that was established to be a check on recognition rather than on the page loading; that was run by hand, and no standing test keeps it true.
 

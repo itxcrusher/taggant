@@ -12,7 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
-import { carriesItsDistance } from "@taggant/compiler";
+import { isCurrentReport } from "@taggant/compiler";
 import { manifestSchema } from "@taggant/manifest";
 import { DEFAULT_SCAN_DISTANCE_MM, bundleDirFor, compile, publish, registerCode } from "./operations.js";
 import { STYLESHEET } from "./style.js";
@@ -326,10 +326,11 @@ export function createConsole(options: ConsoleOptions): Server {
           report?: TargetView["report"];
           scanDistanceMm?: number;
         };
-        // Shown only when this build produced it. An older one holds a width about four
-        // times too small, and the page presents that width as the instruction a printer
-        // follows, so displaying it is worse than displaying nothing.
-        if (compiled.report && !carriesItsDistance(compiled.report)) {
+        // Shown only when this build would stand behind it. An older one holds a width about
+        // four times too small, or a readiness inferred from a figure that called a sheet of
+        // identical labels ready for press, and the page presents both as the instruction a
+        // printer follows, so displaying it is worse than displaying nothing.
+        if (compiled.report && !isCurrentReport(compiled.report)) {
           view.staleReport = true;
         } else if (compiled.report) {
           view.report = compiled.report;

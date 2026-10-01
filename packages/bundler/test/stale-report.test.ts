@@ -71,7 +71,15 @@ describe("a compiled target from an older build", () => {
     // 147 mm needed clears the comparison by a millimetre either way, so what changed the
     // answer is the missing distance and not the widths. Under the corrected model that
     // artwork needs about 270 mm, which is the size of the hole this closes.
-    const current = { ...features, report: { minimumWidthMm: 147, pass: true, scanDistanceMm: 190 } };
+    const current = {
+      ...features,
+      report: {
+        minimumWidthMm: 147,
+        pass: true,
+        scanDistanceMm: 190,
+        recognition: { pixelsAcross: 320, found: true, inliers: 58, needed: 20 },
+      },
+    };
     const result = await bundle({ manifest, targets: { front: current }, ...(await scratch()) });
     expect(result.targets).toContain("front");
   });
@@ -79,9 +87,45 @@ describe("a compiled target from an older build", () => {
   it("names the distance when it refuses a piece printed too small", async () => {
     // A refusal that says a piece needs more width without saying at what distance leaves
     // the operator with two ways to act on it and no way to tell which is meant.
-    const current = { ...features, report: { minimumWidthMm: 300, pass: true, scanDistanceMm: 190 } };
+    const current = {
+      ...features,
+      report: {
+        minimumWidthMm: 300,
+        pass: true,
+        scanDistanceMm: 190,
+        recognition: { pixelsAcross: 320, found: true, inliers: 58, needed: 20 },
+      },
+    };
     await expect(bundle({ manifest, targets: { front: current }, ...(await scratch()) })).rejects.toThrow(
       /at least 300 mm to be read at 190 mm/,
+    );
+  });
+
+  it("is refused when its report never asked the recogniser", async () => {
+    // The build before this one inferred readiness from how often features had look-alikes, a
+    // figure that fell as a design repeated, so it called a sheet of sixteen identical
+    // postcards ready for press at a width where it is not found. Its pass carries a distance
+    // and a width like any other, and only the missing recognition gives it away.
+    const unchecked = { ...features, report: { minimumWidthMm: 147, pass: true, scanDistanceMm: 190 } };
+    await expect(bundle({ manifest, targets: { front: unchecked }, ...(await scratch()) })).rejects.toThrow(
+      /before readiness was checked against the recogniser/,
+    );
+  });
+
+  it("refuses a passing report that carries no width", async () => {
+    // The shape a NaN width became once written to JSON: pass true, width null. Every gate
+    // that compares numbers read null as nothing to compare and let it through.
+    const widthless = {
+      ...features,
+      report: {
+        minimumWidthMm: null,
+        pass: true,
+        scanDistanceMm: 190,
+        recognition: { pixelsAcross: 320, found: true, inliers: 58, needed: 20 },
+      },
+    };
+    await expect(bundle({ manifest, targets: { front: widthless }, ...(await scratch()) })).rejects.toThrow(
+      /carries no print width/,
     );
   });
 
