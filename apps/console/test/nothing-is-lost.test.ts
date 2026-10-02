@@ -266,6 +266,110 @@ describe("two people doing one thing at once", () => {
     expect(refused, `both creates were accepted: ${lines.join(" | ")}`).toHaveLength(1);
   });
 
+  it("keeps two workspace objects on one folder to one queue", async () => {
+    // The queue belonged to the object, so two `createWorkspace` calls on one folder had a
+    // queue each and both creates of one id succeeded in eighteen rounds of twenty. The command
+    // line makes one object; anything embedding the console can make two.
+    const root = await mkdtemp(join(tmpdir(), "console-two-objects-"));
+    const one = createWorkspace(join(root, "workspace"));
+    const two = createWorkspace(join(root, "workspace"));
+    for (let round = 0; round < 20; round++) {
+      const outcomes = await Promise.allSettled([
+        one.create(`same-${round}`, "One"),
+        two.create(`same-${round}`, "Two"),
+      ]);
+      const created = outcomes.filter((outcome) => outcome.status === "fulfilled");
+      expect(created, `round ${round}: both objects created the same experience`).toHaveLength(1);
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("keeps both codes when one link table is reached through a linked folder", async () => {
+    // A junction or a symbolic link puts one table under two folders, and the queue keyed the
+    // two paths apart: both registrations read the table before either wrote, and one code was
+    // gone with both callers told it was registered.
+    const { registerCode } = await import("../src/operations.js");
+    for (let round = 0; round < 10; round++) {
+      const root = await mkdtemp(join(tmpdir(), "console-linked-table-"));
+      const real = join(root, "tables");
+      await mkdir(real, { recursive: true });
+      const via = join(root, "via");
+      await symlink(real, via, "junction");
+      await Promise.all([
+        registerCode(join(real, "links.json"), {
+          path: "/01/09520123456788",
+          href: "https://example.invalid/a",
+          title: "A",
+        }),
+        registerCode(join(via, "links.json"), {
+          path: "/01/09520123456795",
+          href: "https://example.invalid/b",
+          title: "B",
+        }),
+      ]);
+      const codes = Object.keys(JSON.parse(await readFile(join(real, "links.json"), "utf8")).entries).sort();
+      expect(codes, `round ${round}`).toEqual(["/01/09520123456788", "/01/09520123456795"]);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("gives an upload a name of its own when the manifest still names a file that is gone", async () => {
+    // Names were checked against the disk alone. With one target's artwork moved away, the next
+    // upload of that name took it, and two targets pointed at one image: the second target's.
+    const { post, workspace } = await drive();
+    await post("/experiences", new URLSearchParams({ id: "shelf", title: "Shelf" }));
+    await post("/e/shelf/targets", target("front", "logo.png", Buffer.from("FRONT")));
+    const before = await workspace.read("shelf");
+    await rm(join(before.directory, "artwork", "logo.png"));
+
+    await post("/e/shelf/targets", target("back", "logo.png", Buffer.from("BACK")));
+
+    const after = await workspace.read("shelf");
+    const sources = Object.fromEntries(after.manifest.targets.map((one) => [one.id, one.source]));
+    expect(sources.front).toBe("artwork/logo.png");
+    expect(sources.back, "the new upload took the name the front target still holds").not.toBe(
+      "artwork/logo.png",
+    );
+    expect(await readFile(join(after.directory, sources.back ?? ""), "utf8")).toBe("BACK");
+  });
+
+  it("leaves nothing behind when it refuses an upload made under a name whose file is gone", async () => {
+    // The refused upload took the missing file's name, and the cleanup will not delete a file
+    // the manifest names, so it stayed: the refused bytes became the front target's artwork.
+    // The console's own message for a moved file says to upload it again, which leads here.
+    const { post, workspace } = await drive();
+    await post("/experiences", new URLSearchParams({ id: "shelf", title: "Shelf" }));
+    await post("/e/shelf/targets", target("front", "logo.png", Buffer.from("FRONT")));
+    const before = await workspace.read("shelf");
+    await rm(join(before.directory, "artwork", "logo.png"));
+
+    await post("/e/shelf/targets", target("front", "logo.png", Buffer.from("REFUSED")));
+
+    expect(await readdir(join(before.directory, "artwork"))).toEqual([]);
+  });
+
+  it("writes two compiled versions of one target at once, one after the other", async () => {
+    // The compiled target was written outside the experience's queue, and on Windows the
+    // second of two renames onto one file is refused: a double click on Compile was a 500 with
+    // an EPERM stack. Driven at the write rather than through two compiles, because a compile
+    // takes seconds and two of them put their writes together too rarely to show anything: six
+    // double clicks stayed green with the queue removed. Linux renames onto one file without
+    // complaint, so only a Windows run can catch this one being undone.
+    const { workspace } = await drive();
+    await workspace.create("twice", "Twice");
+    for (let round = 0; round < 40; round++) {
+      const written = await Promise.allSettled([
+        workspace.writeTarget("twice", "front", { round, from: "one" }),
+        workspace.writeTarget("twice", "front", { round, from: "two" }),
+      ]);
+      const refused = written.flatMap((outcome) =>
+        outcome.status === "rejected" ? [String(outcome.reason)] : [],
+      );
+      expect(refused, `round ${round}`).toEqual([]);
+      expect(await workspace.readTarget("twice", "front"), `round ${round}`).toEqual({ round, from: "two" });
+    }
+  });
+
   it("publishes one at a time, so the file count an operator is told is the count on disk", async () => {
     // Two publishes of one experience shared a staging directory: the second emptied it
     // while the first was writing into it. Measured over fourteen pairs with the defect

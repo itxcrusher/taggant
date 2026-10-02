@@ -18,8 +18,10 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, extname, join, resolve, sep } from "node:path";
+import { basename, extname, join, posix, resolve, sep } from "node:path";
+import process from "node:process";
 import { type ManifestError, type TaggantExperienceManifest, validateManifest } from "@taggant/manifest";
+import { inTurn as inTurnFor, queueKey } from "./in-turn.js";
 
 /**
  * What an experience id may be.
@@ -208,12 +210,20 @@ export function targetFilename(targetId: string): string {
  *
  * Two uploaded names that reduce to one safe name is ordinary, and writing over the first
  * left a manifest entry pointing at a different target's image.
+ *
+ * Taken means named by the manifest as well as present on disk. A file the manifest names can
+ * be missing, moved or tidied away, and with only the disk asked, the next upload of that name
+ * became the artwork of the target still naming it: two targets on one image, and a refused
+ * re-upload kept as the original's replacement because the cleanup will not delete a file the
+ * manifest names. The console's own message for a missing file says to upload it again, which
+ * led straight there.
  */
-async function freeName(directory: string, wanted: string): Promise<string> {
+async function freeName(directory: string, wanted: string, named: ReadonlySet<string>): Promise<string> {
   const extension = extname(wanted);
   const stem = wanted.slice(0, wanted.length - extension.length);
   for (let attempt = 0; attempt < 1000; attempt++) {
     const candidate = attempt === 0 ? wanted : `${stem}-${attempt + 1}${extension}`;
+    if (named.has(foldedName(candidate))) continue;
     try {
       await stat(join(directory, candidate));
     } catch {
@@ -221,6 +231,15 @@ async function freeName(directory: string, wanted: string): Promise<string> {
     }
   }
   throw new WorkspaceError(`there are already a thousand files called something like ${wanted}`);
+}
+
+/**
+ * A name as the filesystem compares it: one spelling per file where letter case is folded. A
+ * manifest edited by hand can name `Logo.png` where an upload is stored as `logo.png`, and on
+ * Windows and macOS those are one file.
+ */
+function foldedName(name: string): string {
+  return process.platform === "win32" || process.platform === "darwin" ? name.toLowerCase() : name;
 }
 
 function reasonFor(error: unknown): string {
@@ -280,35 +299,28 @@ export interface Workspace {
   hasTarget(id: string, targetId: string): Promise<boolean>;
 }
 
+/**
+ * One queue per experience, so a read and the write that follows it are not separated.
+ *
+ * This is a self-hosted tool for the people who own the artwork, so the process is the
+ * boundary and an in-process queue is the right size of answer. It is not a lock file
+ * and it orders this console's writes only. One console per workspace is what makes
+ * that enough, and `claim` in `one-console.ts` is what checks it: a lock inside the
+ * workspace, taken at startup, refusing a workspace another live console holds.
+ *
+ * Held here rather than by each workspace object, and keyed by the experience's folder as
+ * the filesystem names it. It belonged to the object, so two `createWorkspace` calls on one
+ * folder had a queue each: two creates of one id both succeeded in eighteen rounds of twenty,
+ * where one object refused the second in all twenty. The command line makes one object, and
+ * `createWorkspace` is exported, so this was reachable by anything embedding the console.
+ */
+const experienceQueues = new Map<string, Promise<void>>();
+
 export function createWorkspace(root: string): Workspace {
   const base = resolve(root);
 
-  /**
-   * One queue per experience, so a read and the write that follows it are not separated.
-   *
-   * This is a self-hosted tool for the people who own the artwork, so the process is the
-   * boundary and an in-process queue is the right size of answer. It is not a lock file
-   * and it orders this console's writes only. One console per workspace is what makes
-   * that enough, and `claim` in `one-console.ts` is what checks it: a lock beside the
-   * workspace, taken at startup, refusing a workspace another live console holds.
-   */
-  const queues = new Map<string, Promise<void>>();
-  const inTurn = <T>(id: string, work: () => Promise<T>): Promise<T> => {
-    const previous = queues.get(id) ?? Promise.resolve();
-    // Run on either outcome of the one before, so a failed operation does not wedge the
-    // queue behind it.
-    const result = previous.then(work, work);
-    const settled = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    queues.set(id, settled);
-    // Dropped only when nothing queued behind it, so an idle workspace holds nothing.
-    void settled.then(() => {
-      if (queues.get(id) === settled) queues.delete(id);
-    });
-    return result;
-  };
+  const inTurn = <T>(id: string, work: () => Promise<T>): Promise<T> =>
+    inTurnFor(experienceQueues, queueKey(directoryFor(id)), work);
 
   const directoryFor = (id: string): string => {
     const directory = resolve(base, assertId(id));
@@ -418,6 +430,26 @@ export function createWorkspace(root: string): Workspace {
 
   const read = async (id: string): Promise<Experience> => interpret(id, await readManifestFile(id));
 
+  /**
+   * Every path the manifest names, spelled the way the filesystem compares names. Empty when
+   * the manifest cannot be read.
+   */
+  const namedBy = async (id: string): Promise<Set<string>> =>
+    await read(id)
+      .then((experience) => {
+        const sources = experience.manifest.targets.map((target) => target.source);
+        const content = experience.manifest.targets.flatMap((target) =>
+          target.content.map((item) => item.src),
+        );
+        // A hand-edited manifest may spell a path `./artwork/x.png`; it is the same file.
+        return new Set(
+          [...sources, ...content]
+            .filter((path): path is string => typeof path === "string")
+            .map((path) => foldedName(posix.normalize(path))),
+        );
+      })
+      .catch(() => new Set<string>());
+
   return {
     root: base,
     directoryFor,
@@ -510,7 +542,13 @@ export function createWorkspace(root: string): Workspace {
         // `LOGO.PNG`, or `photo one.png` and `photo-one.png`. Writing the safe name blind
         // deleted the first file and left the first target's manifest entry pointing at the
         // second target's image, with nothing saying so.
-        const filename = await freeName(directory, safeFilename(name));
+        const inFolder = `${folder}/`;
+        const named = new Set(
+          [...(await namedBy(id))]
+            .filter((path) => path.startsWith(inFolder))
+            .map((path) => path.slice(inFolder.length)),
+        );
+        const filename = await freeName(directory, safeFilename(name), named);
         await writeAtomic(join(directory, filename), bytes);
         return `${folder}/${filename}`;
       });
@@ -529,25 +567,24 @@ export function createWorkspace(root: string): Workspace {
       // closed where names are chosen, and this is the second lock, because a cleanup that
       // can delete a named file is one rename away from doing it again.
       await inTurn(id, async () => {
-        const named = await read(id)
-          .then((experience) => {
-            const sources = experience.manifest.targets.map((target) => target.source);
-            const content = experience.manifest.targets.flatMap((target) =>
-              target.content.map((item) => item.src),
-            );
-            return new Set([...sources, ...content]);
-          })
-          .catch(() => new Set<string>());
-        if (named.has(`${folder}/${name}`)) return;
+        if ((await namedBy(id)).has(foldedName(`${folder}/${name}`))) return;
         await rm(join(directoryFor(id), folder, name), { force: true }).catch(() => undefined);
       });
     },
 
     async writeTarget(id: string, targetId: string, target: unknown): Promise<string> {
-      const directory = await realFolder(id, "targets");
-      const filename = targetFilename(targetId);
-      await writeAtomic(join(directory, filename), `${JSON.stringify(target)}\n`);
-      return `targets/${filename}`;
+      // In the queue, which it was alone among the writers in not being. Two compiles of one
+      // target at once, which is a double click on Compile, both renamed onto one file, and on
+      // Windows the second rename is refused: the operator got a 500 with an EPERM stack. The
+      // compile itself stays outside, because it takes seconds and the experience's other
+      // writes have no reason to wait for it; only the write is ordered, and the later of the
+      // two is the one kept.
+      return await inTurn(id, async () => {
+        const directory = await realFolder(id, "targets");
+        const filename = targetFilename(targetId);
+        await writeAtomic(join(directory, filename), `${JSON.stringify(target)}\n`);
+        return `targets/${filename}`;
+      });
     },
 
     async readTarget(id: string, targetId: string): Promise<unknown> {
