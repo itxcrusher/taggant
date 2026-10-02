@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { copyFile, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { validateManifest } from "@taggant/manifest";
 import { fromTargetFile } from "@taggant/vision";
 import { type CopiedAsset, RENDER_BUDGET_MS, copyAsset, within } from "./assets.js";
@@ -84,6 +84,142 @@ async function mayReplace(outDir: string): Promise<boolean> {
     );
   }
   return true;
+}
+
+/** The new bundle is built at `<destination>.publishing-<hex>`, beside the destination. */
+const STAGING = "publishing-";
+/** What was live is moved to `<destination>.replaced-<hex>` while the new one moves in. */
+const ASIDE = "replaced-";
+
+/**
+ * How old a folder left by a publish that stopped part way has to be before a later publish
+ * of the same experience removes it.
+ *
+ * Long, because the folder may belong to a publish that is still running in another console:
+ * a publish spends up to two minutes rendering, then copies, and its staging folder is not to
+ * be taken from under it. An hour is far past any publish and short of anyone noticing.
+ */
+const LEFTOVER_AFTER_MS = 60 * 60 * 1000;
+
+/**
+ * Remove what earlier publishes of this destination left beside it.
+ *
+ * Each publish builds in a folder of its own and moves it in at the end, so a publish that
+ * failed or was killed part way leaves a whole bundle beside the destination, and the folder
+ * the destination sits in is the one the static host serves. Nothing removed them: the clean
+ * before each publish looked for the name this publish was about to use, which is random, so
+ * it never found an earlier one. Measured, every failed swap left one, and three publishes
+ * later it was still there.
+ *
+ * Only names this module writes, and an old copy of what was live only while something is
+ * live: with the destination missing, that copy may be the only one there is.
+ */
+async function sweepLeftovers(outDir: string): Promise<void> {
+  const parent = dirname(outDir);
+  const base = basename(outDir);
+  let names: string[];
+  try {
+    names = await readdir(parent);
+  } catch {
+    return;
+  }
+  const live = await readdir(outDir).then(
+    () => true,
+    () => false,
+  );
+  for (const name of names) {
+    const kind = name.startsWith(`${base}.${STAGING}`)
+      ? STAGING
+      : name.startsWith(`${base}.${ASIDE}`)
+        ? ASIDE
+        : null;
+    if (kind === null || !/^[0-9a-f]{8}$/.test(name.slice(base.length + 1 + kind.length))) continue;
+    if (kind === ASIDE && !live) continue;
+    const path = join(parent, name);
+    try {
+      const info = await stat(path);
+      if (!info.isDirectory() || Date.now() - info.mtimeMs < LEFTOVER_AFTER_MS) continue;
+      await rm(path, { recursive: true, force: true });
+    } catch {
+      // Left for the next publish. A leftover that cannot be removed now is not a reason to
+      // refuse a publish that can otherwise go ahead.
+    }
+  }
+}
+
+/**
+ * Put a finished bundle where the published one is, without ever deleting the published one
+ * first.
+ *
+ * It was removed and then the new one renamed over the gap, outside the try that cleans up a
+ * failed build, and both halves failed in practice. A process holding the published folder
+ * open made the removal fail part way, which on Windows deletes every file it can and then
+ * refuses the folder itself: the experience was emptied, the staging folder stayed in the
+ * served tree, and the operator read a raw EBUSY naming an internal path. Two consoles
+ * publishing into one folder failed the same way on most rounds measured.
+ *
+ * Now the published folder is moved aside by a rename, which either happens whole or not at
+ * all, and the new one is renamed into its place; the old one is deleted only after that. A
+ * folder that cannot be moved is left exactly as it was. A swap that loses to another publish
+ * puts back what it moved, or, when the other publish's bundle is already in place, leaves that
+ * one live and says so. Either way nothing of this publish is left behind.
+ */
+async function swapIn(staging: string, outDir: string, replacing: boolean, suffix: string): Promise<void> {
+  const aside = `${outDir}.${ASIDE}${suffix}`;
+  const reason = (error: unknown): string => {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    return code ?? (error instanceof Error ? error.message : String(error));
+  };
+  await mkdir(dirname(outDir), { recursive: true });
+  if (replacing) {
+    try {
+      await rename(outDir, aside);
+    } catch (error) {
+      await rm(staging, { recursive: true, force: true });
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+        throw new Error(
+          `another publish of ${basename(outDir)} was replacing it at the same moment, so this one was not published. Publish again if this version should be the live one.`,
+        );
+      }
+      throw new Error(
+        `the published folder at ${outDir} could not be moved aside to be replaced (${reason(error)}), so it was left exactly as it was and nothing was published. Something has that folder or a file in it open; close it and publish again.`,
+      );
+    }
+  }
+  try {
+    await rename(staging, outDir);
+  } catch (error) {
+    let restored = false;
+    if (replacing) {
+      restored = await rename(aside, outDir).then(
+        () => true,
+        () => false,
+      );
+    }
+    await rm(staging, { recursive: true, force: true });
+    const anotherIsLive =
+      !restored &&
+      (await readdir(outDir).then(
+        (names) => names.includes(MARKER),
+        () => false,
+      ));
+    if (anotherIsLive) {
+      // The copy moved aside is older than the bundle now live, and is nobody's to keep.
+      if (replacing) await rm(aside, { recursive: true, force: true }).catch(() => undefined);
+      throw new Error(
+        `another publish of ${basename(outDir)} finished at the same moment, and its version is the live one, so this one was not published. Publish again if this version should be the live one.`,
+      );
+    }
+    throw new Error(
+      replacing && !restored
+        ? `the new bundle could not be moved into ${outDir} (${reason(error)}), and the version that was live could not be put back either: it is at ${aside}. Rename it back to ${basename(outDir)} to restore it.`
+        : `the new bundle could not be moved into ${outDir} (${reason(error)}), so nothing was published${replacing ? " and the version that was live is unchanged" : ""}.`,
+    );
+  }
+  if (replacing) {
+    // Best effort. A copy that cannot be deleted now is swept by a later publish.
+    await rm(aside, { recursive: true, force: true }).catch(() => undefined);
+  }
 }
 
 export async function bundle(options: BundleOptions): Promise<BundleResult> {
@@ -198,9 +334,10 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // only one reached the destination, and with one each they both reach it and collide on
   // the removal and rename there. Fourteen rounds of fourteen failed that way against
   // eight of fourteen before, and one round published nothing at all while both operators
-  // were told how many files had been written. `mayReplace` carries the rest.
-  const staging = `${options.outDir}.publishing-${randomBytes(4).toString("hex")}`;
-  await rm(staging, { recursive: true, force: true });
+  // were told how many files had been written. `swapIn` carries the rest.
+  const suffix = randomBytes(4).toString("hex");
+  const staging = `${options.outDir}.${STAGING}${suffix}`;
+  await sweepLeftovers(options.outDir);
   await mkdir(staging, { recursive: true });
   try {
     await write(staging);
@@ -208,10 +345,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     await rm(staging, { recursive: true, force: true });
     throw error;
   }
-
-  if (replacing) await rm(options.outDir, { recursive: true, force: true });
-  await mkdir(dirname(options.outDir), { recursive: true });
-  await rename(staging, options.outDir);
+  await swapIn(staging, options.outDir, replacing, suffix);
 
   return result;
 
