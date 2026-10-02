@@ -8,8 +8,7 @@
 
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
-import process from "node:process";
+import { dirname, join } from "node:path";
 import { bundle, realWithin } from "@taggant/bundler";
 import {
   type Report,
@@ -27,6 +26,7 @@ import {
   sameLinkType,
 } from "@taggant/resolver";
 import { fromTargetFile } from "@taggant/vision";
+import { canonical, inTurn, queueKey } from "./in-turn.js";
 import { type Experience, type Workspace, WorkspaceError, publishable } from "./workspace.js";
 
 /**
@@ -128,39 +128,16 @@ export interface PublishOutcome {
  * Keyed on the destination rather than the experience id, because that is the thing being
  * written and two ids cannot share it, and through `queueKey` for the same reason the
  * table's queue is.
+ *
+ * This orders one console's publishes. Two consoles sharing a publish folder is a legitimate
+ * arrangement, one per workspace, and when both publish one experience at once the bundler's
+ * swap decides it: one version ends up live and whole, and the other operator is told theirs
+ * was not published.
  */
 const publishQueues = new Map<string, Promise<void>>();
 
-/**
- * The key a path takes in a queue.
- *
- * `resolve` alone was not enough, and the comment that said it was is the finding. It
- * normalises separators and relative segments and does not normalise case, which is the
- * spelling difference that matters on the filesystem this is developed on: two calls
- * spelled `case.json` and `CASE.JSON` took two queues, ran together, and one of the two
- * codes was gone. Case is folded where the platform folds it and left alone where it does
- * not, because on Linux those two names are two files and sharing a queue between them
- * would be the opposite mistake.
- */
-function queueKey(path: string): string {
-  const resolved = resolve(path);
-  const caseInsensitive = process.platform === "win32" || process.platform === "darwin";
-  return caseInsensitive ? resolved.toLowerCase() : resolved;
-}
-
 function inTurnForPublish<T>(outDir: string, work: () => Promise<T>): Promise<T> {
-  const key = queueKey(outDir);
-  const previous = publishQueues.get(key) ?? Promise.resolve();
-  const result = previous.then(work, work);
-  const settled = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  publishQueues.set(key, settled);
-  void settled.then(() => {
-    if (publishQueues.get(key) === settled) publishQueues.delete(key);
-  });
-  return result;
+  return inTurn(publishQueues, queueKey(outDir), work);
 }
 
 export interface PublishOptions {
@@ -322,28 +299,15 @@ async function publishOnce(
  */
 const tableQueues = new Map<string, Promise<void>>();
 
-function inTurnForTable<T>(tablePath: string, work: () => Promise<T>): Promise<T> {
-  const key = queueKey(tablePath);
-  const previous = tableQueues.get(key) ?? Promise.resolve();
-  // Run on either outcome of the one before, so a failed registration does not wedge the
-  // queue behind it.
-  const result = previous.then(work, work);
-  const settled = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  tableQueues.set(key, settled);
-  void settled.then(() => {
-    if (tableQueues.get(key) === settled) tableQueues.delete(key);
-  });
-  return result;
-}
-
 export async function registerCode(
   tablePath: string,
   entry: { path: string; href: string; title: string; linkType?: string; language?: string },
 ): Promise<{ path: string; replaced: number; kept: number }> {
-  return await inTurnForTable(tablePath, () => writeCode(tablePath, entry));
+  // Written under the name the filesystem uses, not the one given, and that name is asked for
+  // inside the turn, when the table the turn before wrote exists to be asked about. Given a
+  // short name, the rename that puts a new table in place renamed the table itself, so the
+  // file the resolver reads was gone and a table nobody reads held every code.
+  return await inTurn(tableQueues, queueKey(tablePath), () => writeCode(canonical(tablePath), entry));
 }
 
 async function writeCode(

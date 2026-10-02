@@ -11,18 +11,18 @@
  * a stack trace and a 500 instead of a sentence they could act on.
  */
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { type Server, createServer } from "node:http";
 import { connect } from "node:net";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { hostname, tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import { EXIT, FLAGS, USAGE, main } from "../src/cli.js";
-import { claim, lockFor } from "../src/one-console.js";
+import { STALE_AFTER_MS, claim, lockFor } from "../src/one-console.js";
 import { createConsole } from "../src/server.js";
 import { type Workspace, createWorkspace } from "../src/workspace.js";
 
@@ -155,26 +155,55 @@ async function saying(work: () => Promise<number>): Promise<{ code: number; said
 /** The workspace as `claim` takes it, since every test here locks the same kind of thing. */
 const WORKSPACE = (path: string) => ({ what: "workspace", path, kind: "directory" }) as const;
 
+/**
+ * Another name for an existing file, if this machine can make one: a symbolic link where
+ * anyone may make one, or the short name Windows keeps beside a long one on volumes that keep
+ * them. Null where neither exists, and the test that needs it says it was skipped.
+ */
+async function secondNameFor(file: string): Promise<string | null> {
+  const link = join(dirname(file), "alias.json");
+  try {
+    await symlink(file, link, "file");
+    return link;
+  } catch {
+    // Windows without the right to make links.
+  }
+  if (process.platform !== "win32") return null;
+  const listing = spawnSync("cmd", ["/c", "dir", "/x", dirname(file)], { encoding: "utf8" }).stdout ?? "";
+  const line = listing.split(/\r?\n/).find((row) => row.trimEnd().endsWith(` ${basename(file)}`));
+  const short = line?.trim().split(/\s+/).at(-2);
+  return short?.includes("~") ? join(dirname(file), short) : null;
+}
+
 describe("two people doing one thing at once", () => {
   it("does not let two uploads whose names reduce to one share a file", async () => {
     // Both names slug to `logo.png`, and the second write landed on the first's bytes: one
     // target's manifest entry pointed at the other target's artwork, and a press run was
     // the way to find out.
+    //
+    // Five rounds, because one missed the defect three times in thirty with the queue removed.
     const { post, workspace } = await drive();
-    await post("/experiences", new URLSearchParams({ id: "collide", title: "Collide" }));
-    await Promise.all([
-      post("/e/collide/targets", target("target-one", "logo.png", Buffer.from("AAAA"))),
-      post("/e/collide/targets", target("target-two", "LOGO.PNG", Buffer.from("BBBB"))),
-    ]);
+    for (let round = 0; round < 5; round++) {
+      const id = `collide-${round}`;
+      await post("/experiences", new URLSearchParams({ id, title: "Collide" }));
+      await Promise.all([
+        post(`/e/${id}/targets`, target("target-one", "logo.png", Buffer.from("AAAA"))),
+        post(`/e/${id}/targets`, target("target-two", "LOGO.PNG", Buffer.from("BBBB"))),
+      ]);
 
-    const saved = await workspace.read("collide");
-    const sources = saved.manifest.targets.map((one) => one.source);
-    expect(new Set(sources).size, `two targets share a file: ${sources.join(" ")}`).toBe(sources.length);
-    const held = await Promise.all(
-      sources.map((source) => readFile(join(saved.directory, source), "utf8").catch(() => "MISSING")),
-    );
-    expect(held).not.toContain("MISSING");
-    expect(new Set(held).size, `two targets hold the same bytes: ${held.join(" ")}`).toBe(held.length);
+      const saved = await workspace.read(id);
+      const sources = saved.manifest.targets.map((one) => one.source);
+      expect(new Set(sources).size, `round ${round}: two targets share a file: ${sources.join(" ")}`).toBe(
+        sources.length,
+      );
+      const held = await Promise.all(
+        sources.map((source) => readFile(join(saved.directory, source), "utf8").catch(() => "MISSING")),
+      );
+      expect(held, `round ${round}`).not.toContain("MISSING");
+      expect(new Set(held).size, `round ${round}: two targets hold the same bytes: ${held.join(" ")}`).toBe(
+        held.length,
+      );
+    }
   });
 
   it("does not delete an accepted upload while refusing another with the same name", async () => {
@@ -355,11 +384,10 @@ describe("one console at a time", () => {
     );
   });
 
-  it("refuses a workspace another live console holds, and names the process", async () => {
+  it("refuses a workspace a running console holds, and names the process and the file", async () => {
     // Every write here is atomic and queued, and none of that survives a second console in
-    // another process: both read a file, both decide the next version of it, and one edit
-    // is gone with both operators told it was saved. Until this check existed the comments
-    // on both queues cited a document that said nothing of the kind.
+    // another process: both read a file, both decide the next version of it, and one edit is
+    // gone with both operators told it was saved.
     const root = await mkdtemp(join(tmpdir(), "console-lock-"));
     const workspace = join(root, "workspace");
     const held = await claim([WORKSPACE(workspace)]);
@@ -372,56 +400,198 @@ describe("one console at a time", () => {
     expect(code).toBe(EXIT.alreadyOpen);
     expect(said).toContain("another console is already open");
     expect(said).toContain(`process ${process.pid}`);
+    expect(said).toContain(lockFor(WORKSPACE(workspace)));
     if (held.ok) held.claim.release();
     await rm(root, { recursive: true, force: true });
   });
 
-  it("takes over a lock left by a process that is gone", async () => {
-    // A lock that outlived a crash must not brick the tool, and the takeover is printed
-    // rather than silent, because a lock file appearing and disappearing on its own is the
-    // sort of thing that gets debugged for an hour.
+  it("takes over a lock nobody has touched for longer than the stale interval", async () => {
+    // A lock is kept fresh by the console holding it. One left untouched was left by a console
+    // that is not running, whatever process it names, and is taken over with the takeover said.
     const root = await mkdtemp(join(tmpdir(), "console-stale-"));
     const workspace = join(root, "workspace");
-    // A process id that is certainly dead: one that has already exited.
-    const dead = spawnSync(process.execPath, ["-e", ""]).pid;
-    // The lock lives inside the workspace, so there has to be one.
     await mkdir(workspace, { recursive: true });
+    // Named after a process that is certainly alive, the parent of this one, because whether
+    // the named process is alive no longer decides anything.
     await writeFile(
       lockFor(WORKSPACE(workspace)),
-      JSON.stringify({ pid: dead, since: new Date().toISOString(), what: "workspace" }),
+      JSON.stringify({ pid: process.ppid, host: "elsewhere", nonce: "x" }),
     );
+    const longAgo = new Date(Date.now() - (STALE_AFTER_MS + 5_000));
+    await utimes(lockFor(WORKSPACE(workspace)), longAgo, longAgo);
 
     const held = await claim([WORKSPACE(workspace)]);
-    expect(held.ok, "a lock naming a dead process blocked the console").toBe(true);
+    expect(held.ok, "a lock nobody touched blocked the console").toBe(true);
     if (held.ok) {
-      expect(held.notes.join(" ")).toContain(`left by process ${dead}`);
+      expect(held.notes.join(" ")).toMatch(/took over .*untouched for/);
       held.claim.release();
     }
     await rm(root, { recursive: true, force: true });
   });
 
-  it("refuses a lock taken on another machine, and says it cannot tell", async () => {
-    // The failure branch of the check rather than of the thing it guards. A console in a
-    // container writes a lock on a mounted workspace, the container is killed, and the next
-    // container starts its process ids again from one: the lock names a process that is
-    // alive there and is its own init. Checked by id alone, that console never starts
-    // again. So a lock says where it was taken, and one from elsewhere is refused with a
-    // sentence naming the file, which is a few seconds of attention rather than a tool that
-    // will not open.
+  it("refuses a fresh lock from another machine, and says when it will be taken over", async () => {
+    // A lock from a container or another machine is checked the same way as one from here:
+    // touched recently means running. It used to be refused for ever, because whether a process
+    // on another machine is alive is not a question this one can answer; the heartbeat is.
     const root = await mkdtemp(join(tmpdir(), "console-elsewhere-"));
     const workspace = join(root, "workspace");
     await mkdir(workspace, { recursive: true });
     await writeFile(
       lockFor(WORKSPACE(workspace)),
-      JSON.stringify({ pid: 1, host: "some-other-container", since: "2026-09-17T00:00:00.000Z" }),
+      JSON.stringify({ pid: 1, host: "some-other-container", since: "2026-10-02T00:00:00.000Z", nonce: "x" }),
     );
-
     const held = await claim([WORKSPACE(workspace)]);
     expect(held.ok).toBe(false);
     if (!held.ok) {
       expect(held.because).toContain("some-other-container");
-      expect(held.because).toContain("cannot tell whether that process is still running");
       expect(held.because).toContain(lockFor(WORKSPACE(workspace)));
+      expect(held.because).toMatch(/taken over once \d+ s pass/);
+      expect(held.heldByAnother).toBe(true);
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("takes over a lock an earlier run of this very process left, which is every container restart", async () => {
+    // Inside a container the console is process 1 every time. After an unclean stop the lock
+    // names process 1 on this host, and asking whether process 1 is alive asked this console
+    // about itself: refused on every restart, for ever. A lock naming this process with a value
+    // this process is not holding was written by an earlier run of it.
+    const root = await mkdtemp(join(tmpdir(), "console-restart-"));
+    const workspace = join(root, "workspace");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(
+      lockFor(WORKSPACE(workspace)),
+      JSON.stringify({
+        pid: process.pid,
+        host: hostname(),
+        since: new Date().toISOString(),
+        nonce: "from-before",
+      }),
+    );
+    const held = await claim([WORKSPACE(workspace)]);
+    expect(held.ok, "a restarted console was refused its own lock").toBe(true);
+    if (held.ok) {
+      expect(held.notes.join(" ")).toContain("left by an earlier run of this console");
+      held.claim.release();
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("lets exactly one of two claims made at the same instant hold the lock", async () => {
+    // The lock was created empty and then written, and a second claim reading the empty file
+    // in between took it for a lock that named nobody: both started. Driven twenty times,
+    // because one clean run of a race is one scheduling.
+    for (let round = 0; round < 20; round++) {
+      const root = await mkdtemp(join(tmpdir(), "console-both-"));
+      const workspace = join(root, "workspace");
+      const both = await Promise.all([claim([WORKSPACE(workspace)]), claim([WORKSPACE(workspace)])]);
+      const holders = both.filter((one) => one.ok);
+      expect(holders, `round ${round}: ${holders.length} claims held the lock`).toHaveLength(1);
+      // And the one holding it did not get there by calling the other a leftover. Both name this
+      // process, so a claim that only learned of the other after creating its own file would
+      // remove a live lock and say an earlier run had left it.
+      for (const one of holders) {
+        if (one.ok) expect(one.notes.join(" "), `round ${round}`).not.toContain("earlier run");
+      }
+      for (const one of both) if (one.ok) one.claim.release();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a claim made while another is still confirming, rather than calling it a leftover", async () => {
+    // Both name this process. A claim that only learned of the other after creating its own
+    // file read that file as left by an earlier run, removed a live lock and said so, and the
+    // first claim then lost the lock it had just made.
+    //
+    // The first claim waits long before confirming, so the second certainly reads a lock that
+    // is written and not yet confirmed. Started a few milliseconds apart instead, this stayed
+    // green with the defect restored: timers here fire in steps of about fifteen milliseconds,
+    // and the second claim nearly always arrived after the first had finished.
+    for (let round = 0; round < 5; round++) {
+      const root = await mkdtemp(join(tmpdir(), "console-stagger-"));
+      const workspace = join(root, "workspace");
+      const first = claim([WORKSPACE(workspace)], { settleMs: 400 });
+      await new Promise((settle) => setTimeout(settle, 60));
+      const second = await claim([WORKSPACE(workspace)]);
+      const held = await first;
+      expect(held.ok, `round ${round}: the first claim lost the lock it made`).toBe(true);
+      expect(second.ok, `round ${round}: the second claim took a live lock`).toBe(false);
+      if (!second.ok) expect(second.because).toContain("already open");
+      if (held.ok) held.claim.release();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lets exactly one of two claims take over the same stale lock", async () => {
+    // Both see a lock nobody has touched, both remove it and both create their own, and the
+    // second removal can delete the first claim's new lock: each then believes it holds the
+    // workspace. Reading the lock back after a moment is what tells the first it lost.
+    for (let round = 0; round < 40; round++) {
+      const root = await mkdtemp(join(tmpdir(), "console-stale-both-"));
+      const workspace = join(root, "workspace");
+      await mkdir(workspace, { recursive: true });
+      const lock = lockFor(WORKSPACE(workspace));
+      await writeFile(lock, JSON.stringify({ pid: 1, host: "gone", nonce: "old" }));
+      const longAgo = new Date(Date.now() - (STALE_AFTER_MS + 5_000));
+      await utimes(lock, longAgo, longAgo);
+
+      const both = await Promise.all([claim([WORKSPACE(workspace)]), claim([WORKSPACE(workspace)])]);
+      const holders = both.filter((one) => one.ok);
+      expect(holders, `round ${round}: ${holders.length} claims held the lock`).toHaveLength(1);
+      for (const one of both) if (one.ok) one.claim.release();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps its lock fresh while it holds it, and says so if another console takes it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "console-beat-"));
+    const workspace = join(root, "workspace");
+    const lost: string[] = [];
+    const held = await claim([WORKSPACE(workspace)], {
+      heartbeatMs: 25,
+      onLost: (sentence) => lost.push(sentence),
+    });
+    expect(held.ok).toBe(true);
+    const lock = lockFor(WORKSPACE(workspace));
+    const longAgo = new Date(Date.now() - 60_000);
+    await utimes(lock, longAgo, longAgo);
+    await new Promise((settle) => setTimeout(settle, 120));
+    expect(Date.now() - (await stat(lock)).mtimeMs, "the holder stopped touching its lock").toBeLessThan(
+      5_000,
+    );
+
+    await writeFile(lock, JSON.stringify({ pid: 4242, host: "intruder", nonce: "theirs" }));
+    await new Promise((settle) => setTimeout(settle, 120));
+    expect(lost, "another console took the lock and nothing was said").toHaveLength(1);
+    expect(lost[0]).toContain("no longer holds");
+    expect(lost[0]).toContain("4242");
+    if (held.ok) held.claim.release();
+    // Released, and not its to delete: the lock is the other console's now.
+    expect((await readFile(lock, "utf8")).includes("theirs")).toBe(true);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("says what is wrong when the lock cannot be made, and exits with the code for that", async () => {
+    // A file where the link table's folder should be was read as a lock somebody held, with a
+    // sentence naming a lock file that could not exist; a folder named like the lock was a Node
+    // stack; and a folder refusing new files exited with the code for another console.
+    const root = await mkdtemp(join(tmpdir(), "console-cannot-"));
+    const workspace = join(root, "workspace");
+    await writeFile(join(root, "afile"), "not a folder");
+    const blocked = await saying(() =>
+      main([workspace, "--port", "4999", "--links", join(root, "afile", "links.json")]),
+    );
+    expect(blocked.code).toBe(EXIT.cannotLock);
+    expect(blocked.said).toContain("is not a folder");
+    expect(blocked.said).not.toMatch(/\n\s+at /);
+
+    const other = join(root, "other");
+    await mkdir(join(other, ".console-lock"), { recursive: true });
+    const folder = await claim([WORKSPACE(other)]);
+    expect(folder.ok).toBe(false);
+    if (!folder.ok) {
+      expect(folder.because).toContain("is a folder");
+      expect(folder.heldByAnother).toBe(false);
     }
     await rm(root, { recursive: true, force: true });
   });
@@ -448,6 +618,63 @@ describe("one console at a time", () => {
     expect(again.ok, "a failed start left the workspace claimed").toBe(true);
     if (again.ok) again.claim.release();
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("takes one lock for one link table however its path is spelled", async (context) => {
+    // On a volume that keeps short names, `LINKS~1.JSO` is `links.json`, and a symbolic link is
+    // another name again. The lock was the path as typed plus a suffix, so two consoles given
+    // the two names both started; and a code registered through the short name renamed the
+    // table itself, so the file the resolver reads was gone.
+    const root = await mkdtemp(join(tmpdir(), "console-spelled-"));
+    const tables = join(root, "tables");
+    await mkdir(tables, { recursive: true });
+    const table = join(tables, "links.json");
+    await writeFile(table, `${JSON.stringify({ version: 1, entries: {} })}\n`);
+    const other = await secondNameFor(table);
+    if (other === null) {
+      await rm(root, { recursive: true, force: true });
+      context.skip();
+      return;
+    }
+    const held = await claim([{ what: "link table", path: table, kind: "file" }]);
+    expect(held.ok).toBe(true);
+    // A port already taken, so a console the lock fails to stop says so instead of serving.
+    const busy = createServer();
+    await new Promise<void>((ready) => busy.listen(0, "127.0.0.1", ready));
+    const port = (busy.address() as AddressInfo).port;
+
+    const { code, said } = await saying(() =>
+      main([join(root, "workspace"), "--port", String(port), "--links", other]),
+    );
+    busy.close();
+    if (held.ok) held.claim.release();
+    expect(code, said).toBe(EXIT.alreadyOpen);
+    expect(said).toContain(lockFor({ what: "link table", path: table, kind: "file" }));
+
+    const { registerCode } = await import("../src/operations.js");
+    await registerCode(other, { path: "/01/09520123456788", href: "https://example.invalid/a", title: "A" });
+    expect((await readdir(tables)).filter((name) => !name.startsWith("alias"))).toEqual(["links.json"]);
+    expect(Object.keys(JSON.parse(await readFile(table, "utf8")).entries)).toEqual(["/01/09520123456788"]);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("answers --help wherever it is on the line", async () => {
+    // Only the first position was looked at, so `taggant-console ./workspace --help` was an
+    // unknown option and exit 1.
+    const printed: string[] = [];
+    const wrote = process.stdout.write;
+    process.stdout.write = ((chunk: unknown) => {
+      printed.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    let code: number;
+    try {
+      code = await main([join(tmpdir(), "console-help-never-made"), "--help"]);
+    } finally {
+      process.stdout.write = wrote;
+    }
+    expect(code).toBe(EXIT.ok);
+    expect(printed.join("")).toBe(USAGE);
   });
 });
 

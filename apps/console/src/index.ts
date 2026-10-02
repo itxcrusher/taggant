@@ -1,4 +1,6 @@
 export { createConsole } from "./server.js";
+export { HEARTBEAT_MS, STALE_AFTER_MS, claim, lockFor } from "./one-console.js";
+export type { Claim, ClaimOptions, Exclusive } from "./one-console.js";
 export type { ConsoleOptions } from "./server.js";
 export {
   createWorkspace,

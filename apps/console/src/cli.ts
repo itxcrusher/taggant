@@ -3,14 +3,20 @@ import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import process, { argv, stderr, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
+import { canonical } from "./in-turn.js";
 import { claim } from "./one-console.js";
 import { createConsole } from "./server.js";
 import { createWorkspace } from "./workspace.js";
 
-export const EXIT = { ok: 0, usage: 1, cannotListen: 4, alreadyOpen: 5 } as const;
+/**
+ * Exit codes. `alreadyOpen` is another console holding what this one asked for; `cannotLock`
+ * is a lock that could not be made at all, a folder that refuses new files or a file where a
+ * folder should be. They were one code, so a permissions problem read as a second console.
+ */
+export const EXIT = { ok: 0, usage: 1, cannotListen: 4, alreadyOpen: 5, cannotLock: 6 } as const;
 
 export const USAGE =
-  "usage: taggant-console <workspace> [--port <n>] [--publish-to <dir>] [--links <file>] [--host <addr>] [--allow-host <name>]\n  --host       the address to listen on. 127.0.0.1 unless you say otherwise.\n  --allow-host a name this console will act on forms from, beyond the loopback ones.\n               Needed once --host is anything else: every page is readable from the\n               network immediately, and no form works until the name is named here.\n";
+  "usage: taggant-console <workspace> [--port <n>] [--publish-to <dir>] [--links <file>] [--host <addr>] [--allow-host <name>] [--help]\n  --host       the address to listen on. 127.0.0.1 unless you say otherwise.\n  --allow-host a name this console will act on forms from, beyond the loopback ones.\n               Needed once --host is anything else: every page is readable from the\n               network immediately, and no form works until the name is named here.\n";
 
 /**
  * Every flag that takes a value, in one list rather than in two.
@@ -80,7 +86,10 @@ export function parseArguments(args: string[]): { arguments: Arguments } | { err
 }
 
 export async function main(args: string[]): Promise<number> {
-  if (args.length === 0 || args[0] === "--help") {
+  // Help anywhere on the line, as the compiler's command line takes it: only the first
+  // position was looked at, so `taggant-console ./workspace --help` was refused as an unknown
+  // option.
+  if (args.length === 0 || args.includes("--help")) {
     stdout.write(USAGE);
     return args.length === 0 ? EXIT.usage : EXIT.ok;
   }
@@ -90,12 +99,12 @@ export async function main(args: string[]): Promise<number> {
     return EXIT.usage;
   }
 
-  const { workspace: root, port, host, publishTo, links } = parsed.arguments;
+  const { port, host } = parsed.arguments;
   // A path that is a file rather than a directory is an ordinary mistake, and printing a
   // Node stack at somebody for it is not an answer.
   for (const [what, where] of [
-    ["the workspace", root],
-    ["the publish folder", publishTo],
+    ["the workspace", parsed.arguments.workspace],
+    ["the publish folder", parsed.arguments.publishTo],
   ] as const) {
     try {
       await mkdir(resolve(where), { recursive: true });
@@ -107,18 +116,28 @@ export async function main(args: string[]): Promise<number> {
       return EXIT.usage;
     }
   }
+  // Each path as the filesystem names it, so one file reached two ways is one file to the
+  // lock, to the queues and to the write that replaces it. Two consoles given `links.json`
+  // and its short name `LINKS~1.JSO` both started, both operators were told their code
+  // pointed somewhere, and the codes ended up in two files or the table vanished.
+  const root = canonical(parsed.arguments.workspace);
+  const publishTo = canonical(parsed.arguments.publishTo);
+  const links = canonical(parsed.arguments.links);
 
   // One console per workspace and per link table, checked rather than asserted. Every
   // write here is atomic and queued behind the last, and none of that survives a second
   // console in another process: both read a file, both decide what the next version of it
   // is, and one of the two edits is gone with both operators told it was saved.
-  const held = await claim([
-    { what: "workspace", path: resolve(root), kind: "directory" },
-    { what: "link table", path: resolve(links), kind: "file" },
-  ]);
+  const held = await claim(
+    [
+      { what: "workspace", path: root, kind: "directory" },
+      { what: "link table", path: links, kind: "file" },
+    ],
+    { onLost: (sentence) => stderr.write(`\n  WARNING: ${sentence}\n`) },
+  );
   if (!held.ok) {
     stderr.write(`${held.because}\n`);
-    return EXIT.alreadyOpen;
+    return held.heldByAnother ? EXIT.alreadyOpen : EXIT.cannotLock;
   }
   for (const note of held.notes) stderr.write(`  ${note}\n`);
   // An exit handler cannot await, and a signal does not run one at all unless it is
@@ -134,8 +153,8 @@ export async function main(args: string[]): Promise<number> {
   const workspace = createWorkspace(root);
   const server = createConsole({
     workspace,
-    publishRoot: resolve(publishTo),
-    linkTablePath: resolve(links),
+    publishRoot: publishTo,
+    linkTablePath: links,
     // Whatever name it is reached by, when that is not the loopback address. The console
     // will not act on a form posted to a name it does not know, because Host is written by
     // whoever is asking and everything same-origin means is compared against it.
@@ -177,8 +196,8 @@ export async function main(args: string[]): Promise<number> {
   stdout.write(
     `  workspace   ${workspace.root} (${listed.length} experience${listed.length === 1 ? "" : "s"})\n`,
   );
-  stdout.write(`  publishing  ${resolve(publishTo)}\n`);
-  stdout.write(`  link table  ${resolve(links)}\n\n`);
+  stdout.write(`  publishing  ${publishTo}\n`);
+  stdout.write(`  link table  ${links}\n\n`);
   return EXIT.ok;
 }
 
