@@ -26,7 +26,16 @@ describe("formatReportLines", () => {
         smallestUsableScale: 0.5,
         minimumWidthMm: 62,
         scanDistanceMm: 150,
-        recognition: { pixelsAcross: 320, found: true, inliers: 58, needed: 30 },
+        recognition: {
+          pixelsAcross: 320,
+          widths: 5,
+          widthsAgreed: 4,
+          views: 20,
+          misplaced: 0,
+          found: true,
+          inliers: 58,
+          needed: 20,
+        },
         reasons: [],
       },
     });
@@ -35,7 +44,9 @@ describe("formatReportLines", () => {
     expect(text).toContain("82 / 100");
     expect(text).toContain("62 mm");
     // Beside the verdict, what the verdict was made of.
-    expect(text).toContain("at that width, 58 points agree in the worst of four turns");
+    expect(text).toContain(
+      "every turn found it with 20 or more points agreeing at 4 of 5 widths, 58 at the middle one",
+    );
   });
 
   it("lists every reason when the artwork fails", () => {

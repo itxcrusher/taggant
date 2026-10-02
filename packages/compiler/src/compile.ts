@@ -42,7 +42,7 @@ export async function compileTarget(artwork: Buffer, options: CompileOptions): P
   // up: an empty size stops it, an absent one is stepped over to a smaller healthy one, and
   // the width came out more than a third too small (308 mm against 487 in the review).
   const scales = [...DEFAULT_SCALES];
-  const report = buildReport({
+  const report = await buildReport({
     image: { width: image.width, height: image.height },
     levels: scales.map((scale) => ({
       scale,

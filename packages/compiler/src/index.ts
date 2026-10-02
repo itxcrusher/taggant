@@ -11,4 +11,4 @@ export {
   distanceBehind,
   isCurrentReport,
 } from "./report.js";
-export type { Recognition, Report, ReportInput } from "./report.js";
+export type { Recognition, Report, ReportInput, View } from "./report.js";

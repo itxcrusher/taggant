@@ -197,9 +197,9 @@ function describeRecognition(report: Report): string {
   const seen = report.recognition;
   if (seen === null) return "not asked, because the artwork did not get that far";
   if (report.pass) {
-    return `at that width, ${seen.inliers} points agree in the worst of four turns, where ${seen.needed} are needed`;
+    return `at that size, every turn found it with ${seen.needed} or more points agreeing at ${seen.widthsAgreed} of ${seen.widths} widths, ${seen.inliers} at the middle one, and no look put it in the wrong place`;
   }
-  return `at most ${seen.inliers} points agree at any size, where ${seen.needed} are needed`;
+  return `at the size that came closest, every turn found it with ${seen.needed} or more points agreeing at ${seen.widthsAgreed} of ${seen.widths} widths, where most are needed${seen.misplaced > 0 ? `, and ${seen.misplaced} looks put it in the wrong place` : ""}`;
 }
 
 function samePath(a: string, b: string): boolean {

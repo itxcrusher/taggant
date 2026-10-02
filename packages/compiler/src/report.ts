@@ -18,24 +18,49 @@ export interface ReportInput {
   /** Distance in millimetres at which a person is expected to hold the camera. */
   scanDistanceMm: number;
   /**
-   * Show the recogniser the artwork with this many pixels across it, and say what it found.
+   * Show the recogniser the artwork with this many pixels across it, once for each turn it is
+   * shown at, and say what it made of each.
    *
    * Supplied by whoever has the pixels, which is the compiler; this module has corners and
    * nothing else. Without it a report cannot pass, because every way of deciding readiness
    * from the corners alone has been measured wrong.
    */
-  recognises?: (pixelsAcross: number) => { found: boolean; inliers: number };
+  recognises?: (pixelsAcross: number) => View[] | Promise<View[]>;
 }
 
-/** What the recogniser made of the artwork at the width a report gives. */
-export interface Recognition {
-  /** Pixels across the artwork that the stated width puts in front of the recogniser. */
-  pixelsAcross: number;
+/** One look the recogniser took: the artwork at one width and one turn. */
+export interface View {
   found: boolean;
-  /** Matches that agreed with the pose it fitted. */
+  /** Matches that agreed with the pose it fitted; none when it was not found. */
   inliers: number;
-  /** How many have to agree before the width is called enough. */
+  /**
+   * Found, with the pose putting the artwork more than a tenth of its own width from where it
+   * is: on another copy of a design that repeats, or nowhere near.
+   */
+  misplaced: boolean;
+}
+
+/** What the recogniser made of the artwork at the size a report gives. */
+export interface Recognition {
+  /** Pixels across the artwork at that size; it was shown at this and at two widths either side. */
+  pixelsAcross: number;
+  /** Widths it was shown at, each at every turn. */
+  widths: number;
+  /** Widths at which every turn found it with at least `needed` points agreeing. */
+  widthsAgreed: number;
+  /** Looks it was given in all, a width at one turn being one look. */
+  views: number;
+  /** Looks that found it in the wrong place, at that size or one size smaller. */
+  misplaced: number;
+  /**
+   * Points agreeing in the worst turn at the middle width, counting a look that found nothing as
+   * none: the figure the line of `needed` is held against.
+   */
+  inliers: number;
+  /** How many points every turn needs at a width before that width counts. */
   needed: number;
+  /** Whether that size was confirmed: most widths agreed, and no look was in the wrong place. */
+  found: boolean;
 }
 
 export interface Report {
@@ -59,10 +84,10 @@ export interface Report {
    */
   repetition: number | null;
   /**
-   * The artwork put in front of the recogniser at exactly the width this report gives, and
-   * what came back. This is what decides readiness: the width is a claim about what a camera
-   * at the scan distance will see, and the only check of that claim is to show it to the
-   * thing that has to see it.
+   * The artwork put in front of the recogniser at the size this report gives, and what came
+   * back. This is what decides readiness: the width is a claim about what a camera at the scan
+   * distance will see, and the only check of that claim is to show it to the thing that has to
+   * see it. When nothing passed, the size that came closest.
    *
    * Null when nothing drove it, and a report like that does not pass.
    */
@@ -72,8 +97,9 @@ export interface Report {
   /** Pixels across the artwork as it was analysed. The width below is derived from it. */
   analysisWidth: number;
   /**
-   * Smallest size, as a fraction of the analysed artwork, at which it still holds up.
-   * Most artwork reaches the bottom of the range the compiled target covers.
+   * Smallest size, as a fraction of the analysed artwork, at which it still holds up: the size
+   * the recogniser confirmed, when the report passes. When it does not, this is only what the
+   * corners say, and nothing should present it as a size the artwork can be printed at.
    */
   smallestUsableScale: number;
   /**
@@ -189,22 +215,23 @@ export function isCurrentReport(report: unknown): report is Report {
   // this build writes.
   if ((fields.pass === true) !== (width !== null)) return false;
   const seen = fields.recognition as Record<string, unknown> | null | undefined;
-  if (seen === undefined) return false;
-  if (seen !== null) {
-    if (
-      typeof seen.inliers !== "number" ||
-      typeof seen.needed !== "number" ||
-      typeof seen.found !== "boolean"
-    ) {
-      return false;
-    }
-  }
-  // Passing means the recogniser was asked and agreed.
-  if (
-    fields.pass === true &&
-    (seen === null || seen.found !== true || (seen.inliers as number) < (seen.needed as number))
-  ) {
+  if (seen === undefined || (seen !== null && (typeof seen !== "object" || Array.isArray(seen))))
     return false;
+  if (seen !== null) {
+    // Every count a number a count can be. The shape alone let a string or a negative stand in
+    // for one, and the widths fields are what tell a report from this build from one decided on
+    // a single width, whose verdict flipped with a millimetre of distance.
+    const counts = [seen.inliers, seen.needed, seen.widths, seen.widthsAgreed, seen.views, seen.misplaced];
+    if (!counts.every((count) => typeof count === "number" && Number.isInteger(count) && count >= 0))
+      return false;
+    if (typeof seen.found !== "boolean") return false;
+  }
+  // Passing means the recogniser was asked and agreed: at most of its widths, in every turn, and
+  // never in the wrong place.
+  if (fields.pass === true) {
+    if (seen === null || seen.found !== true) return false;
+    const { widths, widthsAgreed, misplaced, inliers, needed } = seen as unknown as Recognition;
+    if (widths === 0 || widthsAgreed * 2 <= widths || misplaced !== 0 || inliers < needed) return false;
   }
   return true;
 }
@@ -268,49 +295,31 @@ const MIN_AREAS = 8;
 const GRID = 4;
 
 /**
- * Points that must agree, in the worst of four turns of the print, before a width is called
- * enough.
+ * Points that must agree in a look before the look counts.
  *
  * Twice the recogniser's own floor of ten. At the floor a pose is believed and no more, and the
  * frame this is measured on is the best case a phone will ever see: no lighting, no focus, no
- * angle, no paper. Four turns, because the count moves by a fifth as the print turns and a check
- * made only in the easiest pose passes artwork whose margin is gone at another.
- *
- * Measured: the worst of four turns at each size the compiled target covers, with the mark that
- * many pixels across in a 480 pixel frame.
- *
- *   piece                              320 px    400 px    500 px    640 px
- *   the example postcard                  58        85        83        15
- *   the same, softened                    60        77        89        42
- *   generated, 900 fine marks             97       105       103        36
- *   generated, 200 medium marks          115        74        49        13
- *   generated, 40 bold marks              24        28        21        11
- *   200 medium marks, printed twice       19        49        45        22
- *   the postcard printed 2 by 2            0         0        10        13
- *   the postcard printed 3 by 3            0         0         0         0
- *   the postcard printed 4 by 4                      0         0         0
- *   the postcard printed 5 by 5                                0         0
- *
- * No repeated sheet reaches more than 13 at any size. Everything else is found in every turn
- * and reaches at least 19 wherever the mark fits in the frame; at 640 pixels it does not, and
- * the counts fall for everything. The line sits above everything a sheet reaches and at or
- * below what every other piece reaches at the size it is accepted at.
- *
- * There is no empty gap above it, and that is worth knowing before moving it. Artwork with few
- * distinct marks lands a few points over the line, so whether it is confirmed at the first size
- * or the next can turn on a few points. That moves its width, which is the honest place for the
- * uncertainty, and not its verdict. The sheets are refused at every size by a wide margin.
- *
- * Calibrated on generated artwork and one example, in a simulation that is the best case; what
- * a real camera needs above the floor is what the print corpus and the field measurement are
- * for, and until they exist this is the line the measurements above support.
- *
- * This replaced a ceiling on `repetition`, which had a table of its own. Its first row read the
- * example postcard at 0.361, which the compiler does not produce: it reads 0.290. And the measure
- * fell as copies were added, so the 4 by 4 and 5 by 5 sheets passed under it and were not found
- * at the widths they were given.
+ * angle, no paper.
  */
 const AGREEING_POINTS_NEEDED = 20;
+
+/**
+ * The widths the recogniser is shown at each size, as fractions of that size's own width.
+ *
+ * **One width was the defect.** The count of agreeing points is noisy from one pixel to the next:
+ * a sheet of four generated designs at one size gave 21, 17 and 20 at 506, 507 and 508 pixels
+ * across, and the width checked came from rounding the scan distance's arithmetic to whole
+ * millimetres and back. So which side of the line a piece fell turned on that arithmetic: the
+ * same sheet was ready at 190 mm and not at 191, and a sweep from 150 to 400 mm alternated every
+ * few millimetres. Exported at half the size, the same sheet gave the other answer again.
+ *
+ * Now each size is judged over five widths, two per cent apart and fixed by the size alone, at
+ * four turns each: twenty looks, none of which the distance can move. The distance only turns
+ * the size that passes into millimetres. Over 96 sizes of 24 pieces, the rule over one width
+ * changed its verdict at 10 when the width moved by one per cent, and this one, over five,
+ * changed at none. Each look is a few hundred milliseconds, so twenty is what stability costs.
+ */
+const WIDTHS_SHOWN = [0.98, 0.99, 1, 1.01, 1.02] as const;
 
 /**
  * Turn the features found at each size into the verdict a printer needs.
@@ -329,7 +338,7 @@ const AGREEING_POINTS_NEEDED = 20;
  * artwork's part in it is close to a pass or a fail. So it is computed from the things
  * that set it, and the report carries both of them so the number can be checked.
  */
-export function buildReport(input: ReportInput): Report {
+export async function buildReport(input: ReportInput): Promise<Report> {
   const { image, levels, scanDistanceMm } = input;
   if (!Number.isFinite(scanDistanceMm) || scanDistanceMm <= 0) {
     throw new RangeError(`scan distance must be a positive number of millimetres, got ${scanDistanceMm}`);
@@ -377,100 +386,74 @@ export function buildReport(input: ReportInput): Report {
   // fixed number of pixels wide and covers a width of print that grows with distance.
   const frameWidthMm = FRAME_WIDTH_MM_AT_1M * (scanDistanceMm / 1000);
   const pixelsPerMm = RECOGNISED_PIXELS_ACROSS_FRAME / frameWidthMm;
-  const pixelsNeeded = smallestUsableScale * image.width;
 
-  // There is deliberately no ceiling here, and there was one for a day, which was a mistake
-  // worth leaving a note about. It refused artwork needing more pixels across itself than
-  // the frame is wide, on the reasoning that the print would have to fill more than the
-  // whole picture and no size could arrange that. The recogniser does not need the whole
-  // mark in view. Driven against this repository's own example, at the frame width the
-  // runtime uses:
+  // There is deliberately no ceiling on how many pixels a size may put across the mark, and
+  // there was one for a day, which was a mistake worth leaving a note about. It refused artwork
+  // needing more pixels across itself than the frame is wide, on the reasoning that the print
+  // would have to fill more than the whole picture and no size could arrange that. The
+  // recogniser does not need the whole mark in view. Driven against this repository's own
+  // example, at the frame width the runtime uses:
   //
   //   506 px across the mark,  95% of its width in frame -> found, 116 inliers
   //   560 px across the mark,  86% of its width in frame -> found,  36 inliers
   //   640 px across the mark,  75% of its width in frame -> found, 123 inliers
   //   800 px across the mark,  60% of its width in frame -> not found
   //
-  // So the width below stays a minimum and nothing else. Printing larger than it is never
-  // the problem it looked like: a reader with a bigger piece in front of them stands back,
-  // and standing back puts the same pixels across the same mark. What a large `pixelsNeeded`
-  // really says is that the distance asked for is optimistic, and the width already says
-  // that, in millimetres, which is the unit the person reading it works in.
-  let minimumWidthMm = pass ? Math.ceil(pixelsNeeded / pixelsPerMm) : null;
-  // A width no manifest can declare is not an answer. Said here rather than left to the
-  // publish gate, because this is where "ready for press" is decided and a printer reading
-  // that sentence has no reason to doubt it.
-  if (minimumWidthMm !== null && minimumWidthMm > WIDEST_DECLARABLE_MM) {
-    pass = false;
-    minimumWidthMm = null;
-    reasons.push(
-      `it would have to be printed ${Math.ceil(pixelsNeeded / pixelsPerMm)} mm wide to be read from ${scanDistanceMm} mm, which is wider than any piece this format can describe. Read it from closer.`,
-    );
-  }
+  // So the width stays a minimum and nothing else. Printing larger than it is never the problem
+  // it looked like: a reader with a bigger piece in front of them stands back, and standing back
+  // puts the same pixels across the same mark.
+  let minimumWidthMm: number | null = null;
 
   // Readiness is decided by showing the artwork to the recogniser, not by inferring it from
-  // the corners. The corners say which sizes the target covers; only the recogniser says
-  // whether a mark of a given width is found. Every proxy for that has been measured wrong in
-  // turn, the last a repetition figure that called a sheet of sixteen identical postcards
-  // ready for press at a width where it is not found at all.
+  // the corners. The corners say whether there is enough to work with and which sizes the
+  // target covers; only the recogniser says whether a mark of a given width is found. Every
+  // proxy for that has been measured wrong in turn, the last a repetition figure that called a
+  // sheet of sixteen identical postcards ready for press at a width where it is not found.
   //
-  // So the width printed is the smallest the recogniser confirms. It starts where the corners
-  // say, and when the recogniser does not agree there it moves up through the sizes the target
-  // covers. Artwork the recogniser confirms at no size is not ready, whatever its corners say.
+  // So the width printed is the smallest the recogniser confirms, and the search starts at the
+  // smallest size the target covers rather than where the corners say. Started from the
+  // corners, bold artwork whose corners hold up only at full size was asked about at full size
+  // alone, where the mark overflows the frame, and was refused for repeating itself when it
+  // repeats nothing; the recogniser finds the same artwork at half that size.
   let recognition: Recognition | null = null;
-  if (pass && minimumWidthMm !== null) {
+  if (pass) {
     if (input.recognises === undefined) {
       pass = false;
       reasons.push(
         "it was never put in front of the recogniser at the width it would be printed, so nothing says that width is enough",
       );
     } else {
-      const sizes = [...new Set(levels.map((level) => level.scale))]
-        .filter((scale) => scale >= smallestUsableScale)
-        .sort((a, b) => a - b);
-      let best: { recognition: Recognition; widthMm: number } | null = null;
-      let confirmed: { scale: number; widthMm: number } | null = null;
-      for (const scale of sizes) {
-        const widthMm = Math.ceil((scale * image.width) / pixelsPerMm);
-        // A width no manifest can declare is not one to confirm. Checked before the
-        // recogniser runs, because a larger size is only ever wider.
-        if (widthMm > WIDEST_DECLARABLE_MM) break;
-        // The pixels this width puts across the mark, rounded the way the width was, so what
-        // is checked is the number a printer acts on and not the one before rounding.
-        const pixelsAcross = Math.round(widthMm * pixelsPerMm);
-        const seen = input.recognises(pixelsAcross);
-        const attempt: Recognition = {
-          pixelsAcross,
-          found: seen.found,
-          inliers: seen.found ? seen.inliers : 0,
-          needed: AGREEING_POINTS_NEEDED,
-        };
-        if (best === null || attempt.inliers > best.recognition.inliers)
-          best = { recognition: attempt, widthMm };
-        if (attempt.found && attempt.inliers >= AGREEING_POINTS_NEEDED) {
-          recognition = attempt;
-          confirmed = { scale, widthMm };
-          break;
-        }
-      }
-      if (confirmed !== null) {
-        smallestUsableScale = confirmed.scale;
-        minimumWidthMm = confirmed.widthMm;
+      const outcome = await confirmSize({
+        recognises: input.recognises,
+        sizes: [...new Set(levels.map((level) => level.scale))].sort((a, b) => a - b),
+        analysisWidth: image.width,
+        pixelsPerMm,
+      });
+      recognition = outcome.recognition;
+      if (outcome.confirmed !== null) {
+        smallestUsableScale = outcome.confirmed.scale;
+        minimumWidthMm = outcome.confirmed.widthMm;
       } else {
         pass = false;
-        recognition = best?.recognition ?? null;
-        reasons.push(
-          best === null
-            ? `no size the target covers can be printed narrower than ${WIDEST_DECLARABLE_MM} mm at this distance, so the recogniser could not be asked`
-            : `the recogniser did not find it with ${AGREEING_POINTS_NEEDED} points agreeing at any size the target covers, and the most it found was ${best.recognition.inliers}, printed ${best.widthMm} mm wide and read from ${scanDistanceMm} mm. Artwork that repeats itself does this: the same detail in several places leaves the recogniser unable to settle on one`,
-        );
+        reasons.push(refusal(outcome, scanDistanceMm));
       }
     }
-    if (!pass) minimumWidthMm = null;
   }
 
+  // A refusal by the recogniser scores by how far short of agreeing it fell. It scored by the
+  // corners alone, so a sheet found nowhere read 59 of 100, one point under passing.
+  const agreedShare =
+    recognition === null || pass
+      ? 1
+      : recognition.widths === 0
+        ? 0
+        : (2 * recognition.widthsAgreed) / recognition.widths;
+
   return {
-    score: scoreOf(featureCount / MIN_FEATURES, areasWithFeatures / MIN_AREAS, pass),
+    score: Math.min(
+      scoreOf(featureCount / MIN_FEATURES, areasWithFeatures / MIN_AREAS, pass),
+      pass ? 100 : Math.round(59 * Math.min(1, agreedShare)),
+    ),
     pass,
     scanDistanceMm,
     featureCount,
@@ -483,6 +466,177 @@ export function buildReport(input: ReportInput): Report {
     minimumWidthMm,
     reasons,
   };
+}
+
+interface SizeOutcome {
+  /** The size confirmed and its width, or null when none was. */
+  confirmed: { scale: number; widthMm: number } | null;
+  /** What was seen at the confirmed size, or at the size that came closest. */
+  recognition: Recognition | null;
+  /** The width of that closest size. */
+  widthMm: number | null;
+  /** Set when a pose put the artwork in the wrong place, at the size where it happened. */
+  misplacedAt: { widthMm: number; misplaced: number; views: number } | null;
+  /** Set when the smallest size the target covers is already wider than any manifest allows. */
+  tooWideMm: number | null;
+}
+
+/**
+ * The smallest size the recogniser confirms, from the smallest the target covers upwards.
+ *
+ * A size is confirmed when, of its five widths, at least three are found in every one of the four
+ * turns with twice the recogniser's floor agreeing, and no look at all puts the artwork in the
+ * wrong place; and, when the target covers a size below it, no look at that size does either.
+ *
+ * Every turn at a width, because a person holds a label at whatever angle it comes to hand and
+ * the count moves by a fifth as it turns, which is the rule this replaced, held at one width. Most
+ * widths rather than all, because one width is a sample of noise. Counted over every look
+ * instead, as half of the twenty, the line was easier than the rule it replaced: a sheet of four
+ * postcards exported 4400 pixels wide was ready for press.
+ *
+ * The size below is for the reader who stands a little further off than planned, who sees the
+ * print one size smaller. Being found there with too few points is harmless, because the reader
+ * steps closer; being found on the wrong copy of a design that repeats itself is not, because the
+ * content is drawn on the wrong label. A design printed twice side by side passes at the size it
+ * is printed for, and one size smaller one look in twenty puts it on the other copy with forty
+ * points agreeing. What this cannot see is a reader further off than one size below, and a design
+ * whose wrong-copy poses are rarer than one look in twenty.
+ *
+ * A size stops being looked at as soon as it cannot pass, so artwork that fails costs fewer
+ * looks than artwork that passes; a passing size costs all twenty.
+ */
+async function confirmSize(given: {
+  recognises: (pixelsAcross: number) => View[] | Promise<View[]>;
+  sizes: number[];
+  analysisWidth: number;
+  pixelsPerMm: number;
+}): Promise<SizeOutcome> {
+  const { recognises, sizes, analysisWidth, pixelsPerMm } = given;
+  // Looks already taken, by the width they were taken at, so the size below reuses what its own
+  // turn already paid for.
+  const taken = new Map<number, View[]>();
+  const look = async (pixels: number): Promise<View[]> => {
+    let views = taken.get(pixels);
+    if (views === undefined) {
+      views = await recognises(pixels);
+      taken.set(pixels, views);
+    }
+    return views;
+  };
+  const widthsAt = (scale: number): number[] =>
+    WIDTHS_SHOWN.map((fraction) => Math.round(scale * analysisWidth * fraction));
+
+  const outcome: SizeOutcome = {
+    confirmed: null,
+    recognition: null,
+    widthMm: null,
+    misplacedAt: null,
+    tooWideMm: null,
+  };
+  for (const [index, scale] of sizes.entries()) {
+    const widthMm = Math.ceil((scale * analysisWidth) / pixelsPerMm);
+    // A width no manifest can declare is not one to confirm, and a larger size is only wider.
+    if (widthMm > WIDEST_DECLARABLE_MM) {
+      if (index === 0) outcome.tooWideMm = widthMm;
+      break;
+    }
+
+    const atWidths: View[][] = [];
+    const widths = widthsAt(scale);
+    for (const pixels of widths) {
+      atWidths.push(await look(pixels));
+      // Stopped once the size cannot pass: a look in the wrong place, or so many widths short of
+      // the line that most cannot agree.
+      const short = atWidths.filter((looks) => !agrees(looks)).length;
+      if (atWidths.flat().some((view) => view.misplaced) || short * 2 > widths.length) break;
+    }
+    const seen = summarise(atWidths, widths.length, Math.round(scale * analysisWidth));
+    if (seen.misplaced > 0 && outcome.misplacedAt === null) {
+      outcome.misplacedAt = { widthMm, misplaced: seen.misplaced, views: seen.views };
+    }
+    let passes = seen.found;
+    if (passes && index > 0) {
+      const below: View[] = [];
+      for (const pixels of widthsAt(sizes[index - 1] as number)) {
+        below.push(...(await look(pixels)));
+        if (below.some((view) => view.misplaced)) break;
+      }
+      const misplacedBelow = below.filter((view) => view.misplaced).length;
+      if (misplacedBelow > 0) {
+        passes = false;
+        seen.found = false;
+        seen.misplaced = misplacedBelow;
+        if (outcome.misplacedAt === null) {
+          outcome.misplacedAt = {
+            widthMm: Math.ceil(((sizes[index - 1] as number) * analysisWidth) / pixelsPerMm),
+            misplaced: misplacedBelow,
+            views: below.length,
+          };
+        }
+      }
+    }
+    if (
+      outcome.recognition === null ||
+      passes ||
+      seen.widthsAgreed > outcome.recognition.widthsAgreed ||
+      (seen.widthsAgreed === outcome.recognition.widthsAgreed && seen.inliers > outcome.recognition.inliers)
+    ) {
+      outcome.recognition = seen;
+      outcome.widthMm = widthMm;
+    }
+    if (passes) {
+      outcome.confirmed = { scale, widthMm };
+      break;
+    }
+  }
+  return outcome;
+}
+
+/** The fewest points any turn at one width found, a look that found nothing counting none. */
+function worstTurn(looks: View[]): number {
+  return looks.length === 0 ? 0 : Math.min(...looks.map((view) => (view.found ? view.inliers : 0)));
+}
+
+/** Whether every turn at one width found the artwork with enough points agreeing. */
+function agrees(looks: View[]): boolean {
+  return worstTurn(looks) >= AGREEING_POINTS_NEEDED;
+}
+
+/** The looks at one size, counted the way the report states them. */
+function summarise(atWidths: View[][], widthsShown: number, pixelsAcross: number): Recognition {
+  const widthsAgreed = atWidths.filter(agrees).length;
+  const misplaced = atWidths.flat().filter((view) => view.misplaced).length;
+  // The worst turns, the widths not looked at counting as none: a size cut short is reported as
+  // what it was seen to be, not as what the rest of its widths might have been.
+  const worst = [...atWidths.map(worstTurn), ...new Array(widthsShown - atWidths.length).fill(0)].sort(
+    (a, b) => a - b,
+  );
+  return {
+    pixelsAcross,
+    widths: widthsShown,
+    widthsAgreed,
+    views: atWidths.flat().length,
+    misplaced,
+    inliers: worst[Math.floor(worst.length / 2)] ?? 0,
+    needed: AGREEING_POINTS_NEEDED,
+    found: widthsShown > 0 && misplaced === 0 && widthsAgreed * 2 > widthsShown,
+  };
+}
+
+/** Why nothing was confirmed, in the terms of what was seen. */
+function refusal(outcome: SizeOutcome, scanDistanceMm: number): string {
+  if (outcome.tooWideMm !== null) {
+    return `it would have to be printed ${outcome.tooWideMm} mm wide to be read from ${scanDistanceMm} mm, which is wider than any piece this format can describe. Read it from closer.`;
+  }
+  const seen = outcome.recognition;
+  if (seen === null || outcome.widthMm === null) {
+    return `no size the target covers can be printed narrower than ${WIDEST_DECLARABLE_MM} mm at this distance, so the recogniser could not be asked`;
+  }
+  if (outcome.misplacedAt !== null) {
+    const at = outcome.misplacedAt;
+    return `the recogniser put it in the wrong place in ${at.misplaced} of ${at.views} looks at ${at.widthMm} mm wide, read from ${scanDistanceMm} mm. A design that repeats itself does this: the same detail in several places, and it settles on the wrong one, which draws the content on the wrong copy. Compile one copy of the design, or change it so its parts differ`;
+  }
+  return `the recogniser did not find it in every turn with ${AGREEING_POINTS_NEEDED} points agreeing at most of its widths, at any size the target covers. The closest was ${seen.widthsAgreed} of ${seen.widths} widths, printed ${outcome.widthMm} mm wide and read from ${scanDistanceMm} mm. Artwork with too little distinct detail does this, and so does a design that repeats itself`;
 }
 
 /**
@@ -499,8 +653,12 @@ export function buildReport(input: ReportInput): Report {
  */
 export function describeWidth(report: Report): string {
   if (report.minimumWidthMm === null) return "not printable until the artwork passes";
-  const pixels = Math.round(report.smallestUsableScale * report.analysisWidth);
-  return `${report.minimumWidthMm} mm to be read from ${report.scanDistanceMm} mm away, being ${pixels} px across the artwork from left to right`;
+  // The figure the recogniser was shown, the middle of its widths at that size. It printed one
+  // number and checked another, 506 against 508, because the check took the width after the
+  // distance's rounding and this line took it before.
+  const pixels =
+    report.recognition?.pixelsAcross ?? Math.round(report.smallestUsableScale * report.analysisWidth);
+  return `${report.minimumWidthMm} mm to be read from ${report.scanDistanceMm} mm away, putting at least ${pixels} px across the artwork from left to right`;
 }
 
 function areasTouched(corners: Corner[], image: { width: number; height: number }): number {

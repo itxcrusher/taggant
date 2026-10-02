@@ -39,7 +39,14 @@ describe("compileTarget", () => {
     expect(target.id).toBe("front-panel");
     expect(target.width).toBeGreaterThan(0);
     expect(target.features.length).toBeGreaterThan(0);
-    expect(target.report.score).toBeGreaterThan(0);
+    // A report the recogniser was asked about, whatever it answered. This said the score was
+    // above zero, which was a stand-in for "there is a report": this artwork is found upright
+    // and almost never turned, so it is refused, and a refusal now scores by how far short of
+    // agreeing it fell, which here is all the way.
+    expect(target.report.recognition).not.toBeNull();
+    expect(target.report.score).toBeGreaterThanOrEqual(0);
+    expect(target.report.score).toBeLessThanOrEqual(100);
+    expect(typeof target.report.pass).toBe("boolean");
   });
 
   it("carries a descriptor for every feature, because corners alone match nothing", async () => {

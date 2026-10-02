@@ -423,7 +423,16 @@ describe("L1: the score", () => {
       smallestUsableScale: 0.5,
       minimumWidthMm: 70,
       scanDistanceMm: 150,
-      recognition: { pixelsAcross: 320, found: true, inliers: 58, needed: 20 },
+      recognition: {
+        pixelsAcross: 320,
+        widths: 5,
+        widthsAgreed: 5,
+        views: 20,
+        misplaced: 0,
+        found: true,
+        inliers: 58,
+        needed: 20,
+      },
       reasons: [],
     });
     expect(rendered).not.toContain("<img src=x");

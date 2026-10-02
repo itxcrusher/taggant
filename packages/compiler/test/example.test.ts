@@ -53,8 +53,10 @@ describe("the postcard example", () => {
       id: "front",
       scanDistanceMm: 190,
     });
-    const across = Math.round(target.report.smallestUsableScale * target.report.analysisWidth);
-    expect(readme).toContain(`needs ${across} px across and so ${target.report.minimumWidthMm} mm at 190 mm`);
+    const across = target.report.recognition?.pixelsAcross;
+    expect(readme).toContain(
+      `is found at ${across} px across and so needs ${target.report.minimumWidthMm} mm at 190 mm`,
+    );
   });
 
   it("quotes the whole compile in the example README, not only the width", async () => {
@@ -67,13 +69,13 @@ describe("the postcard example", () => {
       scanDistanceMm: 190,
     });
     const report = target.report;
-    const across = Math.round(report.smallestUsableScale * report.analysisWidth);
+    const seen = report.recognition;
     for (const line of [
       `size                  ${target.width} x ${target.height} px`,
       `tracking quality      ${report.score} / 100`,
       `features              ${report.featureCount}, reaching ${report.areasWithFeatures} of ${report.areas} areas`,
-      `minimum print width   ${report.minimumWidthMm} mm to be read from 190 mm away, being ${across} px across the artwork from left to right`,
-      `recognised            at that width, ${report.recognition?.inliers} points agree in the worst of four turns, where ${report.recognition?.needed} are needed`,
+      `minimum print width   ${report.minimumWidthMm} mm to be read from 190 mm away, putting at least ${seen?.pixelsAcross} px across the artwork from left to right`,
+      `recognised            at that size, every turn found it with ${seen?.needed} or more points agreeing at ${seen?.widthsAgreed} of ${seen?.widths} widths, ${seen?.inliers} at the middle one, and no look put it in the wrong place`,
     ]) {
       expect(readme, `the README does not say: ${line}`).toContain(line);
     }
@@ -89,13 +91,13 @@ describe("the postcard example", () => {
       scanDistanceMm: 190,
     });
     const report = target.report;
-    const across = Math.round(report.smallestUsableScale * report.analysisWidth);
+    const seen = report.recognition;
     for (const claim of [
       `COMPILED ${target.width} x ${target.height} px`,
       `tracking quality ${report.score} / 100`,
       `${report.featureCount} features, ${report.areasWithFeatures} of ${report.areas} areas`,
       `min width ${report.minimumWidthMm} mm to read at 190 mm`,
-      `recognised: ${report.recognition?.inliers} points agree, ${report.recognition?.needed} needed`,
+      `recognised: ${seen?.widthsAgreed} of ${seen?.widths} widths, every turn ${seen?.needed}+`,
       report.pass ? "VERDICT READY FOR PRESS" : "VERDICT NOT READY",
     ]) {
       expect(page, `the project page does not say: ${claim}`).toContain(claim);

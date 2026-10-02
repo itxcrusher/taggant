@@ -44,8 +44,10 @@ async function artwork(options: {
 
 // These compile real images at several sizes, which takes seconds rather than
 // milliseconds. Stated here rather than left to the default, where they pass alone and
-// time out in a full run, which is the worst way for a test to fail.
-describe("the report against real artwork", { timeout: 30_000 }, () => {
+// time out in a full run, which is the worst way for a test to fail. Two minutes, because a
+// compile shows the recogniser twenty looks at the size it confirms and more at the sizes it
+// refuses, a few hundred milliseconds each, and a sheet it refuses everywhere is the dearest.
+describe("the report against real artwork", { timeout: 120_000 }, () => {
   it("does not give bold artwork a bigger minimum print than fine artwork", async () => {
     const bold = await compileTarget(await artwork({ blobs: 40, radius: 40 }), {
       id: "bold",
@@ -149,6 +151,17 @@ describe("the report against real artwork", { timeout: 30_000 }, () => {
     expect(seen?.inliers ?? 0).toBeLessThan(single.report.recognition?.inliers ?? 0);
   });
 
+  it("refuses the postcard printed twice, for putting it on the wrong copy one size further off", async () => {
+    // Found at the size it would be printed at, and at the next size down, a reader a little
+    // further off, one look in twelve put it on the other copy with dozens of points agreeing:
+    // the content drawn on the wrong half of the piece. Being found there with too few points
+    // would have been harmless; being found on the wrong copy is not.
+    const twice = await sheetOf(1, 2);
+    const compiled = await compileTarget(twice, { id: "twice", scanDistanceMm: 190 });
+    expect(compiled.report.pass).toBe(false);
+    expect(compiled.report.reasons.join(" ")).toMatch(/put it in the wrong place in \d+ of \d+ looks/);
+  }, 240_000);
+
   it("refuses a sheet of identical labels at every size, which the old repetition gate passed", async () => {
     // Sixteen copies of the example postcard. The repetition figure that decided readiness
     // read 0.31 for this, under its line of 0.6, because it falls as copies are added; the
@@ -173,25 +186,28 @@ describe("the report against real artwork", { timeout: 30_000 }, () => {
       const compiled = await compileTarget(exported, { id: "sheet", scanDistanceMm: 190 });
       expect(compiled.report.pass, `exported ${edge} pixels wide`).toBe(false);
     }
-  });
+  }, 360_000);
 });
 
-/** N by N copies of the example postcard, laid out edge to edge as a sheet of labels is. */
-async function sheetOf(n: number): Promise<Buffer> {
+/**
+ * Copies of the example postcard laid out edge to edge as a sheet of labels is: `across` by
+ * `down`, which is `across` by `across` when only one is given.
+ */
+async function sheetOf(across: number, down = across): Promise<Buffer> {
   const one = await sharp(join(EXAMPLE_DIR, "artwork.png"))
     .grayscale()
     .raw()
     .toBuffer({ resolveWithObject: true });
   const { width, height } = one.info;
-  const out = Buffer.alloc(width * n * height * n);
-  for (let ty = 0; ty < n; ty++) {
-    for (let tx = 0; tx < n; tx++) {
+  const out = Buffer.alloc(width * across * height * down);
+  for (let ty = 0; ty < down; ty++) {
+    for (let tx = 0; tx < across; tx++) {
       for (let y = 0; y < height; y++) {
-        one.data.copy(out, (ty * height + y) * width * n + tx * width, y * width, y * width + width);
+        one.data.copy(out, (ty * height + y) * width * across + tx * width, y * width, y * width + width);
       }
     }
   }
-  return sharp(out, { raw: { width: width * n, height: height * n, channels: 1 } })
+  return sharp(out, { raw: { width: width * across, height: height * down, channels: 1 } })
     .png()
     .toBuffer();
 }
