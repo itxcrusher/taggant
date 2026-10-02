@@ -566,6 +566,58 @@ describe("one console at a time", () => {
       expect(held.notes.join(" ")).toMatch(/took over .*untouched for/);
       held.claim.release();
     }
+    // The marker a takeover holds is gone once it is done, or the next takeover of this lock
+    // would be refused as another console starting.
+    expect(await readdir(workspace)).not.toContain(".console-lock.taking-over");
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("gives a lock up when another console replaces it before it is confirmed", async () => {
+    // Two consoles cannot both create one lock, and a takeover goes through a marker, so nothing
+    // in this process can replace a fresh lock. A console on another machine whose clock runs
+    // ahead can: it reads the fresh lock as old and takes it over. Reading the lock back before
+    // going on is what notices.
+    const root = await mkdtemp(join(tmpdir(), "console-replaced-"));
+    const workspace = join(root, "workspace");
+    const pending = claim([WORKSPACE(workspace)], { settleMs: 300 });
+    await new Promise((settle) => setTimeout(settle, 100));
+    await writeFile(
+      lockFor(WORKSPACE(workspace)),
+      JSON.stringify({ pid: 4242, host: "clock-ahead", nonce: "theirs" }),
+    );
+    const held = await pending;
+    expect(held.ok, "went on holding a lock another console had replaced").toBe(false);
+    if (!held.ok) expect(held.because).toContain("at the same moment");
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("waits out another console's takeover, and clears a takeover that stopped part way", async () => {
+    // A takeover holds a marker only one claimant can create. A fresh marker is another console
+    // taking over the lock right now: refused, as another console. A marker nobody has touched
+    // for ten seconds was left by a takeover that died part way, and leaving it would refuse
+    // every takeover of that lock for ever.
+    const root = await mkdtemp(join(tmpdir(), "console-marker-"));
+    const workspace = join(root, "workspace");
+    await mkdir(workspace, { recursive: true });
+    const lock = lockFor(WORKSPACE(workspace));
+    const marker = `${lock}.taking-over`;
+    const longAgo = new Date(Date.now() - (STALE_AFTER_MS + 5_000));
+    await writeFile(lock, JSON.stringify({ pid: 1, host: "gone", nonce: "old" }));
+    await utimes(lock, longAgo, longAgo);
+
+    await writeFile(marker, "someone else's");
+    const waiting = await claim([WORKSPACE(workspace)]);
+    expect(waiting.ok, "took over a lock another console was taking over").toBe(false);
+    if (!waiting.ok) {
+      expect(waiting.because).toContain("is starting on the workspace");
+      expect(waiting.heldByAnother).toBe(true);
+    }
+
+    await utimes(marker, longAgo, longAgo);
+    const cleared = await claim([WORKSPACE(workspace)]);
+    expect(cleared.ok, "a takeover that died part way blocked every later one").toBe(true);
+    if (cleared.ok) cleared.claim.release();
+    expect(await readdir(workspace)).not.toContain(".console-lock.taking-over");
     await rm(root, { recursive: true, force: true });
   });
 
