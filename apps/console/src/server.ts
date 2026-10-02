@@ -70,6 +70,33 @@ export interface ConsoleOptions {
 }
 
 /**
+ * How many unread notices are held at once.
+ *
+ * One per operator action that redirects, held for five minutes or until the redirect is
+ * followed. A thousand is far more than a person generates.
+ */
+const MOST_NOTICES = 1000;
+
+/**
+ * The longest a notice's message or detail is kept, in characters.
+ *
+ * The count alone bounded nothing, because a notice can echo what was posted: a refused
+ * width repeats the field it refused, and one 100 MB field became a 100 MB notice and then a
+ * 100 MB page. Five such posts took the console from 67 to 694 MB. Cut here, so every notice
+ * is small whatever put it there, and a thousand of them are a few megabytes at most.
+ *
+ * The middle is what goes, not the end. A refusal names the value first and says what is
+ * wrong with it last, so keeping only the start kept a screenful of the value and dropped the
+ * sentence.
+ */
+const LONGEST_NOTICE = 2000;
+
+const shortened = (text: string): string =>
+  text.length <= LONGEST_NOTICE
+    ? text
+    : `${text.slice(0, LONGEST_NOTICE / 2)} [${text.length - LONGEST_NOTICE} characters not shown] ${text.slice(-LONGEST_NOTICE / 2)}`;
+
+/**
  * A one-shot message shown after a redirect.
  *
  * Held here rather than put in the URL, because a message in a URL is a message anyone can
@@ -77,21 +104,15 @@ export interface ConsoleOptions {
  * experience that was never published. It is escaped either way, and it should still not
  * be possible to say.
  */
-/**
- * How many unread notices are held at once.
- *
- * One per operator action that redirects, held for five minutes or until the redirect is
- * followed. A thousand is far more than a person generates and far less than a heap.
- */
-const MOST_NOTICES = 1000;
-
 class Notices {
   private readonly held = new Map<string, { notice: Notice; at: number }>();
 
   put(notice: Notice): string {
     this.sweep();
     const token = randomUUID();
-    this.held.set(token, { notice, at: Date.now() });
+    const kept: Notice = { tone: notice.tone, message: shortened(notice.message) };
+    if (notice.detail !== undefined) kept.detail = shortened(notice.detail);
+    this.held.set(token, { notice: kept, at: Date.now() });
     // A ceiling, because this was the one quantity in this file without one while every
     // other bound here is commented. A notice is held until its redirect is followed or
     // five minutes pass, and a client that never follows its redirects holds every one:

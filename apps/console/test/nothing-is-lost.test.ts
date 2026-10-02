@@ -900,6 +900,21 @@ describe("what it writes down, and how much it holds", () => {
     ).not.toContain('role="status"');
   });
 
+  it("keeps a notice short whatever it repeats back", async () => {
+    // The count of notices was bounded and their size was not: a refused width repeats the
+    // field it refused, so one 100 MB field became a 100 MB notice and then a 100 MB page,
+    // and five of them took the console from 67 to 694 MB.
+    const { post, told } = await drive();
+    await post("/experiences", new URLSearchParams({ id: "wide", title: "Wide" }));
+    const form = target("front", "front.png", Buffer.from("PNG"));
+    form.set("physicalWidthMm", "9".repeat(1_000_000));
+    const line = await told(await post("/e/wide/targets", form));
+    expect(line.length, "the notice carried the whole field").toBeLessThan(3_000);
+    expect(line).toContain("characters not shown");
+    // And still says what was wrong, which comes after the value it repeats.
+    expect(line).toContain("is not a printed width");
+  });
+
   it("keeps both codes when one link table is registered under two spellings", async () => {
     // `resolve` normalises separators and relative segments and does not normalise case,
     // and the comment on both queues said it did. Where the filesystem folds case,
