@@ -54,6 +54,9 @@ importers:
 
   packages/bundler:
     dependencies:
+      '@taggant/compiler':
+        specifier: workspace:*
+        version: link:../compiler
       '@taggant/manifest':
         specifier: workspace:*
         version: link:../manifest
@@ -66,10 +69,6 @@ importers:
       sharp:
         specifier: 0.33.5
         version: 0.33.5
-    devDependencies:
-      '@taggant/compiler':
-        specifier: workspace:*
-        version: link:../compiler
 
   packages/compiler:
     dependencies:

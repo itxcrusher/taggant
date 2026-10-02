@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { basename, dirname, join } from "node:path";
+import { carriesItsDistance, isCurrentReport } from "@taggant/compiler";
 import { validateManifest } from "@taggant/manifest";
 import { fromTargetFile } from "@taggant/vision";
 import { type CopiedAsset, RENDER_BUDGET_MS, copyAsset, within } from "./assets.js";
@@ -245,12 +246,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   for (const target of manifest.targets) {
     const compiled = options.targets[target.id] as {
       features?: unknown[];
-      report?: {
-        minimumWidthMm?: number | null;
-        scanDistanceMm?: number;
-        pass?: boolean;
-        recognition?: { found?: unknown; inliers?: unknown; needed?: unknown } | null;
-      };
+      report?: unknown;
     };
     // Nothing to recognise with. The parser accepts an empty list, because an array of zero
     // is a legal array, so a target truncated in a copy or built from artwork that produced
@@ -260,49 +256,65 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
         `${target.id} has no features in it, so nothing in a camera frame could ever match it. Compile it again.`,
       );
     }
-    const report = compiled?.report;
     // A target with no report at all was never claimed to have been checked, and this gate
-    // has nothing to say about it. A target that carries a report but no distance is a
-    // different thing: it was written by the build whose width was computed against the
-    // sensor's pixels rather than the recogniser's, so the width in it is about four times
-    // too small and this comparison would pass a piece that cannot be read. A gate that is
-    // four times too lenient is worse than an absent one, because it reads as a gate.
-    if (report !== undefined && typeof report.scanDistanceMm !== "number") {
-      throw new Error(
-        `${target.id} was compiled by an older build, whose minimum print width was too small to trust. Compile it again before publishing.`,
-      );
-    }
-    // A report that never asked the recogniser is from the build whose readiness was inferred
-    // from how often features had look-alikes, a figure that fell as a design repeated: it
-    // called a sheet of sixteen identical postcards ready for press at a width where it is not
-    // found. Its pass is not a pass this gate can stand behind.
-    if (report !== undefined && report.recognition === undefined) {
-      throw new Error(
-        `${target.id} was compiled before readiness was checked against the recogniser, and its verdict cannot be trusted. Compile it again before publishing.`,
-      );
-    }
-    // Refused before the width is looked at, because a failing report has no width: it is
-    // null, and comparing against null compares nothing. The gate read the width alone, so
-    // the artwork it had most to say about was the artwork it said nothing about, and the
-    // publish went through clean.
-    if (report?.pass === false) {
-      throw new Error(
-        `${target.id} did not pass its print readiness check, so it cannot be published. Compile it again and read what it says about the artwork.`,
-      );
-    }
-    // A passing report with no width has nothing for the comparison below to compare, and
-    // was how a NaN width got through: written to JSON it is null, and a gate that only
-    // compares numbers read that as nothing to say.
-    if (report?.pass === true && !(typeof report.minimumWidthMm === "number" && report.minimumWidthMm > 0)) {
-      throw new Error(
-        `${target.id} claims to be ready for press and carries no print width, so nothing says how small it can be printed. Compile it again.`,
-      );
-    }
-    const needs = report?.minimumWidthMm;
-    if (typeof needs === "number" && target.physicalWidthMm < needs) {
-      throw new Error(
-        `${target.id} is declared ${target.physicalWidthMm} mm wide, and its artwork needs at least ${needs} mm to be read at ${report?.scanDistanceMm} mm, the distance it was compiled for`,
-      );
+    // has nothing to say about it. Everything else is held to `isCurrentReport`, the one
+    // definition the console's rebuild also uses: this gate had its own reading of the fields,
+    // and the two disagreed on ten of seventeen shapes a stored report can take, so a target the
+    // console would have rebuilt was published as it stood.
+    if (compiled !== undefined && "report" in compiled && compiled.report !== undefined) {
+      const report = compiled.report as Record<string, unknown> | null;
+      const fields = typeof report === "object" && report !== null ? report : null;
+      // A report that is not an object, `null` among them, reached the checks below as a raw
+      // TypeError naming a property of null.
+      if (fields === null) {
+        throw new Error(
+          `${target.id} carries a print readiness report that is not one at all. Compile it again before publishing.`,
+        );
+      }
+      // A report with no distance was written by the build whose width was computed against the
+      // sensor's pixels rather than the recogniser's, so the width in it is about four times
+      // too small and this comparison would pass a piece that cannot be read. A gate that is
+      // four times too lenient is worse than an absent one, because it reads as a gate.
+      if (!carriesItsDistance(fields)) {
+        throw new Error(
+          `${target.id} was compiled by an older build, whose minimum print width was too small to trust. Compile it again before publishing.`,
+        );
+      }
+      // A report that never asked the recogniser is from the build whose readiness was inferred
+      // from how often features had look-alikes, a figure that fell as a design repeated: it
+      // called a sheet of sixteen identical postcards ready for press at a width where it is not
+      // found. Its pass is not a pass this gate can stand behind.
+      if (fields.recognition === undefined) {
+        throw new Error(
+          `${target.id} was compiled before readiness was checked against the recogniser, and its verdict cannot be trusted. Compile it again before publishing.`,
+        );
+      }
+      // A passing report with no width has nothing for the comparison below to compare, and
+      // was how a NaN width got through: written to JSON it is null, and a gate that only
+      // compares numbers read that as nothing to say.
+      if (fields.pass === true && !(typeof fields.minimumWidthMm === "number" && fields.minimumWidthMm > 0)) {
+        throw new Error(
+          `${target.id} claims to be ready for press and carries no print width, so nothing says how small it can be printed. Compile it again.`,
+        );
+      }
+      if (!isCurrentReport(fields)) {
+        throw new Error(
+          `${target.id} carries a print readiness report this build does not stand behind: written by an earlier build, whose verdict could turn on a millimetre of scan distance, or edited by hand. Compile it again before publishing.`,
+        );
+      }
+      // Refused before the width is looked at, because a failing report has no width: it is
+      // null, and comparing against null compares nothing.
+      if (!fields.pass) {
+        throw new Error(
+          `${target.id} did not pass its print readiness check, so it cannot be published. Compile it again and read what it says about the artwork.`,
+        );
+      }
+      const needs = fields.minimumWidthMm as number;
+      if (target.physicalWidthMm < needs) {
+        throw new Error(
+          `${target.id} is declared ${target.physicalWidthMm} mm wide, and its artwork needs at least ${needs} mm to be read at ${fields.scanDistanceMm} mm, the distance it was compiled for`,
+        );
+      }
     }
   }
 

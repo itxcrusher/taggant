@@ -6,6 +6,10 @@ import sharp from "sharp";
 import { afterAll, describe, expect, it } from "vitest";
 import { RENDER_TIMEOUT_MS, prepareAsset } from "../src/assets.js";
 import { bundle } from "../src/bundle.js";
+import { currentReport } from "./current-report.js";
+
+/** A report the compiler writes, so the publish gate lets the probes through to what they test. */
+const REPORT = await currentReport({ minimumWidthMm: 100 });
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO = join(here, "../../..");
@@ -38,12 +42,7 @@ describe("a published bundle", () => {
     width: 640,
     height: 452,
     features: [{ x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] }],
-    report: {
-      minimumWidthMm: 100,
-      pass: true,
-      scanDistanceMm: 190,
-      recognition: { pixelsAcross: 320, found: true, inliers: 58, needed: 20 },
-    },
+    report: REPORT,
   };
 
   const manifestFor = (src: string) => ({

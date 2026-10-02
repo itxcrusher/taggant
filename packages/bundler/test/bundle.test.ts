@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { within } from "../src/assets.js";
 import { bundle } from "../src/bundle.js";
+import { currentReport } from "./current-report.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNTIME_DIST = join(here, "../../runtime/dist");
@@ -175,11 +176,7 @@ describe("bundle", () => {
         targets: {
           front: {
             ...TARGET,
-            report: {
-              minimumWidthMm: 70,
-              scanDistanceMm: 150,
-              recognition: { pixelsAcross: 320, found: true, inliers: 58, needed: 20 },
-            },
+            report: await currentReport({ minimumWidthMm: 70 }, 150),
           },
         },
         sourceDir,
@@ -197,11 +194,7 @@ describe("bundle", () => {
         targets: {
           front: {
             ...TARGET,
-            report: {
-              minimumWidthMm: 70,
-              scanDistanceMm: 150,
-              recognition: { pixelsAcross: 320, found: true, inliers: 58, needed: 20 },
-            },
+            report: await currentReport({ minimumWidthMm: 70 }, 150),
           },
         },
         sourceDir,

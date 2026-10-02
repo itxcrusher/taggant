@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import { bundle } from "../src/bundle.js";
+import { currentReport } from "./current-report.js";
 
 const RUNTIME_DIST = join(dirname(fileURLToPath(import.meta.url)), "../../runtime/dist");
 
@@ -71,15 +72,8 @@ describe("a compiled target from an older build", () => {
     // 147 mm needed clears the comparison by a millimetre either way, so what changed the
     // answer is the missing distance and not the widths. Under the corrected model that
     // artwork needs about 270 mm, which is the size of the hole this closes.
-    const current = {
-      ...features,
-      report: {
-        minimumWidthMm: 147,
-        pass: true,
-        scanDistanceMm: 190,
-        recognition: { pixelsAcross: 320, found: true, inliers: 58, needed: 20 },
-      },
-    };
+    const current = { ...features, report: await currentReport() };
+    expect(current.report.minimumWidthMm).toBe(147);
     const result = await bundle({ manifest, targets: { front: current }, ...(await scratch()) });
     expect(result.targets).toContain("front");
   });
@@ -87,15 +81,7 @@ describe("a compiled target from an older build", () => {
   it("names the distance when it refuses a piece printed too small", async () => {
     // A refusal that says a piece needs more width without saying at what distance leaves
     // the operator with two ways to act on it and no way to tell which is meant.
-    const current = {
-      ...features,
-      report: {
-        minimumWidthMm: 300,
-        pass: true,
-        scanDistanceMm: 190,
-        recognition: { pixelsAcross: 320, found: true, inliers: 58, needed: 20 },
-      },
-    };
+    const current = { ...features, report: await currentReport({ minimumWidthMm: 300 }) };
     await expect(bundle({ manifest, targets: { front: current }, ...(await scratch()) })).rejects.toThrow(
       /at least 300 mm to be read at 190 mm/,
     );
@@ -115,18 +101,61 @@ describe("a compiled target from an older build", () => {
   it("refuses a passing report that carries no width", async () => {
     // The shape a NaN width became once written to JSON: pass true, width null. Every gate
     // that compares numbers read null as nothing to compare and let it through.
-    const widthless = {
-      ...features,
-      report: {
-        minimumWidthMm: null,
-        pass: true,
-        scanDistanceMm: 190,
-        recognition: { pixelsAcross: 320, found: true, inliers: 58, needed: 20 },
-      },
-    };
+    const widthless = { ...features, report: await currentReport({ minimumWidthMm: null }) };
     await expect(bundle({ manifest, targets: { front: widthless }, ...(await scratch()) })).rejects.toThrow(
       /carries no print width/,
     );
+  });
+
+  it("says a report that is not one is not one, rather than failing on it", async () => {
+    // `report: null` reached the checks as a TypeError about reading a property of null.
+    const broken = { ...features, report: null };
+    await expect(bundle({ manifest, targets: { front: broken }, ...(await scratch()) })).rejects.toThrow(
+      /a print readiness report that is not one at all/,
+    );
+  });
+
+  it("refuses every stored report the console would rebuild, and publishes the one it would not", async () => {
+    // The gate read the fields its own way and the console asked `isCurrentReport`, and the two
+    // disagreed on ten of seventeen shapes: a pass with a recognition of null, or not found, or
+    // 13 points where 20 were needed, or with a verdict that was a string, all published.
+    const good = await currentReport();
+    const { widths, widthsAgreed, views, ...oneWidth } = good.recognition as unknown as Record<
+      string,
+      unknown
+    >;
+    const shapes: Array<[string, unknown]> = [
+      ["recognition null with a pass", { ...good, recognition: null }],
+      ["recognition not found with a pass", { ...good, recognition: { ...good.recognition, found: false } }],
+      ["13 points where 20 are needed", { ...good, recognition: { ...good.recognition, inliers: 13 } }],
+      ["a recognition that is a string", { ...good, recognition: "found" }],
+      ["a verdict that is a string", { ...good, pass: "true" }],
+      ["no verdict", { ...good, pass: undefined }],
+      ["no score", { ...good, score: undefined }],
+      ["a distance of 0", { ...good, scanDistanceMm: 0 }],
+      ["a distance of -5", { ...good, scanDistanceMm: -5 }],
+      [
+        "a recognition decided on one width, as the build before wrote it",
+        { ...good, recognition: oneWidth },
+      ],
+      [
+        "a pass with a look in the wrong place",
+        { ...good, recognition: { ...good.recognition, misplaced: 2 } },
+      ],
+    ];
+    for (const [label, report] of shapes) {
+      await expect(
+        bundle({ manifest, targets: { front: { ...features, report } }, ...(await scratch()) }),
+        label,
+      ).rejects.toThrow(/Compile it again|did not pass/);
+    }
+    expect([widths, widthsAgreed, views]).toEqual([5, 5, 5]);
+    const result = await bundle({
+      manifest,
+      targets: { front: { ...features, report: good } },
+      ...(await scratch()),
+    });
+    expect(result.targets).toContain("front");
   });
 
   it("refuses a target with no features in it at all", async () => {
