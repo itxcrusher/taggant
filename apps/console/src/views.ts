@@ -131,7 +131,14 @@ function reportRecord(report: Report): string {
     ["features", String(report.featureCount)],
     ["areas reached", `${report.areasWithFeatures} of ${report.areas}`],
     ["analysed at", `${report.analysisWidth} px across`],
-    ["smallest usable size", `${Math.round(report.smallestUsableScale * 100)}% of that`],
+    // Only for artwork that passed. A refused report still carries what the corners said, and it
+    // read "50% of that" beside a recogniser that found nothing at any size.
+    [
+      "smallest usable size",
+      report.pass
+        ? `${Math.round(report.smallestUsableScale * 100)}% of that`
+        : "none, it is not ready at any size",
+    ],
     // What decided the verdict, in place of the repetition figure that used to sit here: it
     // fell as a design repeated, so it was a measurement of the wrong thing beside the
     // sentence it did not decide.
@@ -139,7 +146,7 @@ function reportRecord(report: Report): string {
       "recognised",
       report.recognition === null
         ? "not asked, the artwork did not get that far"
-        : `${report.recognition.inliers} points agree in the worst of four turns, ${report.recognition.needed} needed`,
+        : `every turn found it with ${report.recognition.needed} or more points agreeing at ${report.recognition.widthsAgreed} of ${report.recognition.widths} widths${report.pass ? "" : " at the size that came closest"}, ${report.recognition.misplaced === 0 ? "none in the wrong place" : `${report.recognition.misplaced} looks in the wrong place`}`,
     ],
     ["score", `${report.score} of 100, passing at 60`],
   ];
@@ -190,8 +197,12 @@ export interface TargetView {
   contentCount: number;
   report?: Report | undefined;
   scanDistanceMm?: number | undefined;
-  /** Set when a compiled target exists but was written by a build whose widths were wrong. */
-  staleReport?: boolean | undefined;
+  /**
+   * Set when a compiled target exists and its report is not one this build stands behind:
+   * `width` when it was written before the width carried its distance, and was about four times
+   * too small; `verdict` when the width is sound and the verdict came from a check since replaced.
+   */
+  staleReport?: "width" | "verdict" | undefined;
   /** Set when the compiled target asks for more width than the manifest says it is printed at. */
   tooSmall?: string | undefined;
 }
@@ -218,9 +229,11 @@ export function experiencePage(view: ExperienceView): string {
   ${
     target.report
       ? verdict(target.report)
-      : target.staleReport
+      : target.staleReport === "width"
         ? `<div class="notice gap-md"><p>Compiled by an older build, whose minimum print width was too small to trust. Compile it again to see what this artwork needs.</p></div>`
-        : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
+        : target.staleReport === "verdict"
+          ? `<div class="notice gap-md"><p>Compiled by an earlier build, whose verdict on this artwork came from a check that has since been replaced. Compile it again to see what this artwork needs.</p></div>`
+          : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
   }
   ${target.tooSmall ? `<div class="notice bad gap-md"><p>${esc(target.tooSmall)}</p></div>` : ""}
   <form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/compile" class="gap-md">

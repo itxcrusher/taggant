@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeProblem, esc } from "../src/views.js";
+import { describeProblem, esc, experiencePage, verdict } from "../src/views.js";
 
 /**
  * The wording a person is shown when they cannot publish, and the escaping everything
@@ -46,5 +46,55 @@ describe("what a person is told is missing", () => {
 describe("escaping", () => {
   it("escapes every character that could end an attribute or open a tag", () => {
     expect(esc(`<a href="x" onclick='y'>&`)).toBe("&lt;a href=&quot;x&quot; onclick=&#39;y&#39;&gt;&amp;");
+  });
+});
+
+describe("what a stored report is said to be", () => {
+  const page = (staleReport: "width" | "verdict") =>
+    experiencePage({
+      id: "botanica-500",
+      manifest: MANIFEST as never,
+      problems: [],
+      targets: [
+        { id: "front-panel", source: "artwork/front.png", physicalWidthMm: 62, contentCount: 0, staleReport },
+      ],
+    });
+
+  it("blames the width only for a report whose width was the problem", () => {
+    // Every stale report was called too small to trust, including one whose width was right
+    // and whose verdict came from a check since replaced.
+    expect(page("width")).toContain("too small to trust");
+    expect(page("verdict")).not.toContain("too small to trust");
+    expect(page("verdict")).toContain("a check that has since been replaced");
+  });
+
+  it("offers no printable size for artwork that is not ready at any size", () => {
+    // A refusal still carries what the corners said, and the record read "50% of that" beside a
+    // recogniser that found nothing anywhere.
+    const refused = verdict({
+      score: 0,
+      pass: false,
+      featureCount: 300,
+      areasWithFeatures: 16,
+      areas: 16,
+      repetition: null,
+      analysisWidth: 640,
+      smallestUsableScale: 0.5,
+      minimumWidthMm: null,
+      scanDistanceMm: 190,
+      recognition: {
+        pixelsAcross: 320,
+        widths: 5,
+        widthsAgreed: 0,
+        views: 12,
+        misplaced: 0,
+        found: false,
+        inliers: 0,
+        needed: 20,
+      },
+      reasons: ["the recogniser did not find it"],
+    });
+    expect(refused).toContain("none, it is not ready at any size");
+    expect(refused).not.toContain("50% of that");
   });
 });

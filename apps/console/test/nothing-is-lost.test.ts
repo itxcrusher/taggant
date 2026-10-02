@@ -915,6 +915,33 @@ describe("what it writes down, and how much it holds", () => {
     expect(line).toContain("is not a printed width");
   });
 
+  it("says what is wrong with a stored report it will not show, rather than one reason for all", async () => {
+    // Every report this build does not stand behind was called too small to trust, which is
+    // true of the oldest and not of one whose width carried its distance and whose verdict came
+    // from the check on one width that this build replaced.
+    const { post, workspace, port } = await drive();
+    await post("/experiences", new URLSearchParams({ id: "stored", title: "Stored" }));
+    await post("/e/stored/targets", target("front", "front.png", Buffer.from("PNG")));
+    const page = async () => await (await fetch(`http://127.0.0.1:${port}/e/stored`)).text();
+    const oneWidth = {
+      score: 100,
+      pass: true,
+      minimumWidthMm: 147,
+      scanDistanceMm: 190,
+      recognition: { pixelsAcross: 322, found: true, inliers: 58, needed: 20 },
+    };
+    await workspace.writeTarget("stored", "front", { formatVersion: 2, features: [], report: oneWidth });
+    expect(await page()).toContain("a check that has since been replaced");
+    expect(await page()).not.toContain("too small to trust");
+
+    await workspace.writeTarget("stored", "front", {
+      formatVersion: 2,
+      features: [],
+      report: { minimumWidthMm: 70, pass: true },
+    });
+    expect(await page()).toContain("too small to trust");
+  });
+
   it("keeps both codes when one link table is registered under two spellings", async () => {
     // `resolve` normalises separators and relative segments and does not normalise case,
     // and the comment on both queues said it did. Where the filesystem folds case,

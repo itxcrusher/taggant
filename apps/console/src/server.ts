@@ -12,7 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
-import { isCurrentReport } from "@taggant/compiler";
+import { carriesItsDistance, isCurrentReport } from "@taggant/compiler";
 import { manifestSchema } from "@taggant/manifest";
 import { DEFAULT_SCAN_DISTANCE_MM, bundleDirFor, compile, publish, registerCode } from "./operations.js";
 import { STYLESHEET } from "./style.js";
@@ -358,7 +358,10 @@ export function createConsole(options: ConsoleOptions): Server {
         // identical labels ready for press, and the page presents both as the instruction a
         // printer follows, so displaying it is worse than displaying nothing.
         if (compiled.report && !isCurrentReport(compiled.report)) {
-          view.staleReport = true;
+          // Said by what is wrong with it. Every stale report was called too small to trust,
+          // which is true of the oldest and false of one whose width was right and whose
+          // verdict came from a check this build replaced.
+          view.staleReport = carriesItsDistance(compiled.report) ? "verdict" : "width";
         } else if (compiled.report) {
           view.report = compiled.report;
           const needed = compiled.report.minimumWidthMm;
