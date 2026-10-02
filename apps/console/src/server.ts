@@ -241,7 +241,13 @@ async function readForm(
   // form fields. Two routes take a file and say so; every other route is 64 KB whatever
   // the request calls itself. Multipart is still parsed either way, because a form with
   // no file in it may legally be posted that way.
-  const body = await readBody(request, carries === "a file" ? MAX_BODY_BYTES : MAX_FORM_BYTES);
+  //
+  // And the large limit needs both: a route that takes a file, and a body that can carry
+  // one. Given to the route alone, it went to whatever was posted there, and a body that is
+  // not multipart is parsed below as a form in one synchronous step: 250 MB of urlencoded
+  // text to the targets route held every other request for three to five seconds, where it
+  // had been refused at 64 KB in a tenth of one.
+  const body = await readBody(request, carries === "a file" && multipart ? MAX_BODY_BYTES : MAX_FORM_BYTES);
   if (multipart) {
     try {
       return await new Request("http://console.invalid/", {

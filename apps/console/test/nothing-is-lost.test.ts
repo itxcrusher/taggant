@@ -490,6 +490,25 @@ describe("an internal failure said as a sentence", () => {
     );
     expect(upload).not.toContain("the limit is 64 KB");
   });
+
+  it("allows the upload limit only to a body that is an upload", async () => {
+    // Giving the two file routes the large limit gave it to anything posted to them, and a
+    // body that is not multipart is parsed as a form, in one synchronous step: 250 MB of
+    // urlencoded text to the targets route held every other request for three to five
+    // seconds, where before it was refused at 64 KB in a tenth of one. The limit belongs to a
+    // file, so a body that cannot carry one gets the form limit whatever the route.
+    const { post, told } = await drive();
+    await post("/experiences", new URLSearchParams({ id: "plain", title: "Plain" }));
+    // The content route refuses a target it does not know before it reads a body.
+    await post("/e/plain/targets", target("front", "front.png", Buffer.from("FRONT")));
+    const big = Buffer.alloc(100 * 1024, 0x41);
+    for (const route of ["/e/plain/targets", "/e/plain/targets/front/content"]) {
+      const said = await told(
+        await post(route, big, { "content-type": "application/x-www-form-urlencoded" }),
+      );
+      expect(said, route).toContain("the limit is 64 KB");
+    }
+  });
 });
 
 describe("one console at a time", () => {
