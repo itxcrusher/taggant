@@ -1,11 +1,22 @@
-import { copyFile, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { copyFile, mkdtemp, readFile, readdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { EXIT, formatReportLines, main, parseArguments } from "../src/cli.js";
 
 const POSTCARD = join(dirname(fileURLToPath(import.meta.url)), "../../../examples/postcard/artwork.png");
+
+/** The short name Windows keeps beside a long one, where the volume keeps them; else null. */
+function shortNameOf(file: string): string | null {
+  if (process.platform !== "win32") return null;
+  const listing = spawnSync("cmd", ["/c", "dir", "/x", dirname(file)], { encoding: "utf8" }).stdout ?? "";
+  const line = listing.split(/\r?\n/).find((row) => row.trimEnd().endsWith(` ${basename(file)}`));
+  const short = line?.trim().split(/\s+/).at(-2);
+  return short?.includes("~") ? join(dirname(file), short) : null;
+}
 
 describe("formatReportLines", () => {
   it("prints the numbers a printer needs, in millimetres", () => {
@@ -100,10 +111,41 @@ describe("main", () => {
     const before = await readFile(art);
     // Spelled differently, where the filesystem folds case, is still the same file.
     const shouting = process.platform === "linux" ? art : join(dir, "FRONT.PNG");
-    for (const out of [art, shouting]) {
+    // And reached another way. Folding case was the whole comparison, and a junction to the
+    // artwork's folder, or the short name Windows keeps beside a long one, replaced the artwork
+    // with the target and printed "written".
+    const via = join(dir, "via");
+    await symlink(dir, via, "junction");
+    const others = [art, shouting, join(via, "front.png")];
+    const short = shortNameOf(art);
+    if (short !== null) others.push(short);
+    for (const out of others) {
       expect(await main([art, "--scan-distance", "190", "--out", out]), out).toBe(EXIT.usage);
     }
     expect(Buffer.compare(await readFile(art), before)).toBe(0);
+    await rm(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  it("says --out is a folder, rather than naming a file nobody gave it", async () => {
+    // A rename onto a folder fails, and the message named the temporary file beside it,
+    // `outdir.writing-79b82021`, a name nobody gave the command.
+    const dir = await mkdtemp(join(tmpdir(), "compile-out-"));
+    const said: string[] = [];
+    const wrote = process.stderr.write;
+    process.stderr.write = ((chunk: unknown) => {
+      said.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    let code: number;
+    try {
+      code = await main([POSTCARD, "--scan-distance", "190", "--out", dir]);
+    } finally {
+      process.stderr.write = wrote;
+    }
+    expect(code).toBe(EXIT.cannotWrite);
+    expect(said.join("")).toContain("is a folder");
+    expect(said.join("")).not.toContain(".writing-");
+    expect(await readdir(dir)).toEqual([]);
     await rm(dir, { recursive: true, force: true });
   }, 60_000);
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { randomBytes } from "node:crypto";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { realpathSync, statSync } from "node:fs";
+import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import process, { argv, stderr, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import { type CompiledTarget, compileTarget, toTargetJson } from "./compile.js";
@@ -173,7 +174,7 @@ export async function main(args: string[]): Promise<number> {
     try {
       await writeTarget(out, JSON.stringify(toTargetJson(target)));
     } catch (error) {
-      stderr.write(`could not write ${out}: ${error instanceof Error ? error.message : String(error)}\n`);
+      stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       return EXIT.cannotWrite;
     }
     stdout.write(`  written ${out}\n\n`);
@@ -202,10 +203,40 @@ function describeRecognition(report: Report): string {
   return `at the size that came closest, every turn found it with ${seen.needed} or more points agreeing at ${seen.widthsAgreed} of ${seen.widths} widths, where most are needed${seen.misplaced > 0 ? `, and ${seen.misplaced} looks put it in the wrong place` : ""}`;
 }
 
+/**
+ * Whether two paths name one file.
+ *
+ * Compared by what the filesystem says the file is, not by how it is spelled. Folding case was
+ * not enough: the short name Windows keeps beside a long one, `ARTWOR~1.PNG`, and a junction to
+ * the artwork's folder both named the artwork, and `--out` through either replaced it with the
+ * target and printed "written".
+ */
 function samePath(a: string, b: string): boolean {
+  try {
+    const first = statSync(a);
+    const second = statSync(b);
+    if (first.ino !== 0 && first.dev === second.dev && first.ino === second.ino) return true;
+  } catch {
+    // One of the two does not exist, which a file about to be written usually does not: it
+    // cannot be the artwork, unless the two spellings are of one path, which is checked below.
+  }
   const caseFolds = process.platform === "win32" || process.platform === "darwin";
-  const fold = (path: string) => (caseFolds ? resolve(path).toLowerCase() : resolve(path));
+  const fold = (path: string) => (caseFolds ? canonical(path).toLowerCase() : canonical(path));
   return fold(a) === fold(b);
+}
+
+/** The path as the filesystem names it, through its folder when the file is not there yet. */
+function canonical(path: string): string {
+  const absolute = resolve(path);
+  try {
+    return realpathSync.native(absolute);
+  } catch {
+    try {
+      return join(realpathSync.native(dirname(absolute)), basename(absolute));
+    } catch {
+      return absolute;
+    }
+  }
 }
 
 /**
@@ -223,6 +254,17 @@ async function writeTarget(out: string, text: string): Promise<void> {
     await rename(staging, out);
   } catch (error) {
     await rm(staging, { force: true });
-    throw error;
+    // Said about the file asked for, not the temporary one beside it: `--out` naming a folder
+    // was answered with a sentence about `outdir.writing-79b82021`, a name nobody gave it.
+    const code = (error as NodeJS.ErrnoException).code;
+    const isFolder = await stat(out).then(
+      (info) => info.isDirectory(),
+      () => false,
+    );
+    throw new Error(
+      isFolder
+        ? `${out} is a folder; give --out the name of a file to write`
+        : `${out} could not be written${code === undefined ? "" : ` (${code})`}`,
+    );
   }
 }
