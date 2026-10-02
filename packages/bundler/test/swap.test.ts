@@ -134,6 +134,26 @@ describe("replacing a published bundle", () => {
     expect(await besides(parent)).toEqual([]);
   });
 
+  it("keeps the live version and says where it is when it can neither move in nor move back", async () => {
+    // The failure of the failure path. Moved aside, the old bundle is the only copy there is,
+    // so it is not deleted with the rest of what this publish made, and the operator is told
+    // where it went and how to put it back.
+    const { sourceDir, outDir, parent } = await scratch();
+    await publish(sourceDir, outDir, "first");
+    failing.rename = (_from, to) => (to === outDir ? "EPERM" : null);
+
+    const refused = await publish(sourceDir, outDir, "second").then(
+      () => null,
+      (error: Error) => error.message,
+    );
+
+    expect(refused).toMatch(/could not be put back either: it is at .*swap\.replaced-[0-9a-f]{8}/);
+    const kept = await besides(parent);
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatch(/^swap\.replaced-[0-9a-f]{8}$/);
+    expect(await live(join(parent, kept[0] ?? ""))).toEqual({ title: "first", whole: true });
+  });
+
   it("removes what an earlier publish left beside it, once that is old enough to be nobody's", async () => {
     const { sourceDir, outDir, parent } = await scratch();
     await publish(sourceDir, outDir, "first");
