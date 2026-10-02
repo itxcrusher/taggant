@@ -61,23 +61,48 @@ function notFound(): LocateResult {
  * which a target file can hold because nothing caps its feature count. So this bounds what a
  * large target costs per frame rather than speeding up an ordinary one.
  *
- * Keyed on the target object, so a target is treated as unchanging once it has been located
- * against, which is how the runtime and the compiler both use one.
+ * Keyed on the target object and checked against its features before each use, in one pass
+ * that costs nothing beside a frame. It was trusted once made, and the pose was then fitted from
+ * the live features with indices into the kept copy: a target whose features were reordered
+ * after one locate was not found, 6 points where a fresh object gave 58.
  */
-const prepared = new WeakMap<
-  TrackingTarget,
-  { descriptors: Uint32Array[]; positions: { x: number; y: number }[] }
->();
-
-function preparedFor(target: TrackingTarget): {
+interface Prepared {
+  /** The features this was made from, so a change to the list or to any one of them shows. */
+  source: TargetFeature[];
+  xs: Float64Array;
+  ys: Float64Array;
   descriptors: Uint32Array[];
   positions: { x: number; y: number }[];
-} {
+}
+
+const prepared = new WeakMap<TrackingTarget, Prepared>();
+
+function stillDescribes(held: Prepared, features: TargetFeature[]): boolean {
+  if (held.source !== features || held.descriptors.length !== features.length) return false;
+  for (let i = 0; i < features.length; i++) {
+    const feature = features[i];
+    if (
+      feature === undefined ||
+      feature.descriptor !== held.descriptors[i] ||
+      feature.x !== held.xs[i] ||
+      feature.y !== held.ys[i]
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function preparedFor(target: TrackingTarget): Prepared {
   let held = prepared.get(target);
-  if (held === undefined) {
+  if (held === undefined || !stillDescribes(held, target.features)) {
+    const features = target.features;
     held = {
-      descriptors: target.features.map((c) => c.descriptor),
-      positions: target.features.map((c) => ({ x: c.x, y: c.y })),
+      source: features,
+      xs: Float64Array.from(features, (c) => c.x),
+      ys: Float64Array.from(features, (c) => c.y),
+      descriptors: features.map((c) => c.descriptor),
+      positions: features.map((c) => ({ x: c.x, y: c.y })),
     };
     prepared.set(target, held);
   }
@@ -148,7 +173,8 @@ function attemptAt(
   const estimate = estimateHomography(
     matches.map((match) => {
       const frameCorner = described[match.query];
-      const targetCorner = target.features[match.target];
+      // From the copy the matches index into, never from the live features.
+      const targetCorner = side.positions[match.target];
       return {
         fromX: targetCorner?.x ?? 0,
         fromY: targetCorner?.y ?? 0,

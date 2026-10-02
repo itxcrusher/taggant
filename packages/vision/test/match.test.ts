@@ -105,4 +105,37 @@ describe("matchDescriptors", () => {
     expect(second).toEqual(first);
     expect(fresh).toEqual(first);
   });
+
+  it("matches what an array holds now, when it is refilled or edited between calls", () => {
+    // The packed target was kept per array, so an array refilled with another target's
+    // descriptors, or a descriptor edited in place, was answered as what it used to hold.
+    const targets = [descriptor(1), descriptor(2), descriptor(3), descriptor(4)];
+    const queries = [nudge(descriptor(5), 3)];
+    expect(matchDescriptors(queries, targets)).toEqual([]);
+
+    targets[2] = descriptor(5);
+    expect(matchDescriptors(queries, targets).map((match) => match.target)).toEqual([2]);
+
+    (targets[2] as Uint32Array).set(descriptor(6));
+    expect(matchDescriptors(queries, targets)).toEqual([]);
+  });
+
+  it("works out which features share a spot from where they are now, not where they were", () => {
+    // Two copies of one corner a pixel apart are not each other's rival; two features far
+    // apart are, and a near-tie between them is refused. Kept per array and not checked, the
+    // table went on saying "far apart" after one was moved onto the other's spot, and a match
+    // with its own copy as the runner-up was refused.
+    const original = descriptor(7);
+    const targets = [original, nudge(original, 2), descriptor(8)];
+    const positions = [
+      { x: 10, y: 10 },
+      { x: 250, y: 120 },
+      { x: 300, y: 200 },
+    ];
+    const queries = [nudge(original, 1)];
+    expect(matchDescriptors(queries, targets, { targetPositions: positions })).toEqual([]);
+
+    positions[1] = { x: 11, y: 10 };
+    expect(matchDescriptors(queries, targets, { targetPositions: positions }).length).toBe(1);
+  });
 });

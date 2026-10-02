@@ -65,32 +65,52 @@ function pack(descriptors: Uint32Array[]): Uint32Array {
 }
 
 /**
- * The packed target and its shared-spot table, kept for as long as the arrays they came from.
+ * The target's shared-spot table, kept for as long as the positions it came from still hold.
  *
- * Both are properties of the target and were rebuilt on every call, which is every camera
- * frame; the shared-spot table is a pairwise sweep, so a frame's cost grew with the square of
- * the target. Keyed on the arrays themselves, so a caller passing the same target arrays frame
- * after frame pays once, and one passing new arrays each time gets exactly what it got before.
+ * It is a property of the target and was rebuilt on every call, which is every camera frame,
+ * and it is a pairwise sweep, so a frame's cost grew with the square of the target. Kept per
+ * positions array, and checked against what that array holds before it is used: keyed on the
+ * array alone, a caller refilling one array with another target's positions was answered from
+ * the first target's table. The check is one pass over the positions, which is nothing beside
+ * the sweep it saves.
+ *
+ * The packed descriptors are not kept. Packing is one pass, and a cache of it was the same
+ * hazard for a smaller saving: an array refilled with other descriptors, or a descriptor edited
+ * in place, was matched as the descriptors it used to hold.
  */
-const packedTargets = new WeakMap<Uint32Array[], Uint32Array>();
-const sharedTargets = new WeakMap<Position[], { radiusSquared: number; shared: Uint8Array | undefined }>();
-
-function packedOnce(descriptors: Uint32Array[]): Uint32Array {
-  let packed = packedTargets.get(descriptors);
-  if (packed === undefined) {
-    packed = pack(descriptors);
-    packedTargets.set(descriptors, packed);
-  }
-  return packed;
-}
+const sharedTargets = new WeakMap<
+  Position[],
+  { radiusSquared: number; xs: Float64Array; ys: Float64Array; shared: Uint8Array | undefined }
+>();
 
 function sharedOnce(positions: Position[] | undefined, radiusSquared: number): Uint8Array | undefined {
   if (!positions) return undefined;
   const held = sharedTargets.get(positions);
-  if (held !== undefined && held.radiusSquared === radiusSquared) return held.shared;
+  if (held !== undefined && held.radiusSquared === radiusSquared && samePositions(held, positions))
+    return held.shared;
+  const xs = new Float64Array(positions.length);
+  const ys = new Float64Array(positions.length);
+  for (let i = 0; i < positions.length; i++) {
+    xs[i] = positions[i]?.x ?? Number.NaN;
+    ys[i] = positions[i]?.y ?? Number.NaN;
+  }
   const shared = sharedPositions(positions, radiusSquared);
-  sharedTargets.set(positions, { radiusSquared, shared });
+  sharedTargets.set(positions, { radiusSquared, xs, ys, shared });
   return shared;
+}
+
+function samePositions(held: { xs: Float64Array; ys: Float64Array }, positions: Position[]): boolean {
+  if (held.xs.length !== positions.length) return false;
+  for (let i = 0; i < positions.length; i++) {
+    // Object.is, so a hole read back as NaN matches the NaN it was stored as.
+    if (
+      !Object.is(held.xs[i], positions[i]?.x ?? Number.NaN) ||
+      !Object.is(held.ys[i], positions[i]?.y ?? Number.NaN)
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** Bits that differ between two descriptors held in flat buffers. */
@@ -207,7 +227,7 @@ export function matchDescriptors(
   if (query.length === 0 || target.length === 0) return [];
 
   const queries = pack(query);
-  const targets = packedOnce(target);
+  const targets = pack(target);
   const targetShared = sharedOnce(positions, radiusSquared);
   const queryShared = sharedPositions(options.queryPositions, radiusSquared);
 

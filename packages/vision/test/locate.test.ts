@@ -9,9 +9,9 @@ import { blur, transform, warp } from "./warp.js";
  * Stand-in artwork: irregular enough that corners are distinguishable, which is the same
  * property the print readiness report exists to measure on real artwork.
  */
-function artwork(width = 320, height = 240): GrayscaleImage {
+function artwork(width = 320, height = 240, from = 20260907): GrayscaleImage {
   const data = new Uint8Array(width * height);
-  let seed = 20260907;
+  let seed = from;
   const blot = (cx: number, cy: number, r: number, value: number) => {
     for (let y = Math.max(0, cy - r); y < Math.min(height, cy + r); y++) {
       for (let x = Math.max(0, cx - r); x < Math.min(width, cx + r); x++) {
@@ -168,5 +168,46 @@ describe("locate", () => {
     expect(twice.inliers).toBe(once.inliers);
     expect(twice.matches).toBe(once.matches);
     expect(Array.from(twice.homography ?? [])).toEqual(Array.from(once.homography ?? []));
+  });
+
+  it("finds a target whose features were reordered after it was first located against", () => {
+    // The kept copy indexed one order and the pose was fitted from the live features in
+    // another: 6 points instead of 58, and not found.
+    const frame = warp(source, transform({ translateX: 140, translateY: 90, rotationDeg: 12 }), 640, 480);
+    const reused = compile(source);
+    const before = locate(frame, reused);
+    expect(before.found).toBe(true);
+    reused.features.reverse();
+    const after = locate(frame, reused);
+    expect(after.found, `${after.inliers} points after the reorder against ${before.inliers} before`).toBe(
+      true,
+    );
+    expect(after.inliers).toBe(before.inliers);
+  });
+
+  it("locates against what a target holds now, when its features are replaced in place", () => {
+    // What matching needs is kept per target object. Trusted once made, a target whose list
+    // was refilled with another artwork's features went on being found as the first artwork.
+    const frame = warp(source, transform({ translateX: 140, translateY: 90, rotationDeg: 12 }), 640, 480);
+    const reused = compile(source);
+    expect(locate(frame, reused).found).toBe(true);
+    const other = compile(artwork(320, 240, 4242));
+    reused.features.splice(0, reused.features.length, ...other.features);
+    expect(locate(frame, reused).found, "found as the artwork it no longer holds").toBe(false);
+  });
+
+  it("reports not found for a frame of one pixel, rather than throwing", () => {
+    // The frame is described at 0.79 as well as at full size, and 0.79 of one pixel is not an
+    // image: the resample threw where a frame with no area returned not found.
+    expect(locate({ width: 1, height: 1, data: new Uint8Array(1) }, target).found).toBe(false);
+    expect(locate({ width: 3, height: 2, data: new Uint8Array(6) }, target).found).toBe(false);
+  });
+});
+
+describe("buildTrackingFeatures", () => {
+  it("finds nothing in an image too small to describe, rather than throwing", () => {
+    expect(buildTrackingFeatures({ width: 0, height: 0, data: new Uint8Array(0) })).toEqual([]);
+    expect(buildTrackingFeatures({ width: 1, height: 1, data: new Uint8Array(1) })).toEqual([]);
+    expect(buildTrackingFeatures({ width: 20, height: 20, data: new Uint8Array(400).fill(90) })).toEqual([]);
   });
 });
