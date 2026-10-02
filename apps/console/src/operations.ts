@@ -92,10 +92,20 @@ export async function compile(
       }. Upload the artwork again, or put the file back where the manifest says it is.`,
     );
   }
-  const compiled = await compileTarget(artwork, {
-    id: targetId,
-    scanDistanceMm,
-  });
+  // And the compile itself, which is where a file that is not an image is found out: the
+  // decoder's own error reached the operator as a 500 with a stack trace, from a form whose
+  // upload had been accepted a moment before.
+  let compiled: Awaited<ReturnType<typeof compileTarget>>;
+  try {
+    compiled = await compileTarget(artwork, { id: targetId, scanDistanceMm });
+  } catch (error) {
+    const said = error instanceof Error ? error.message : String(error);
+    throw new WorkspaceError(
+      /unsupported image format|corrupt|premature end|bad seek/i.test(said)
+        ? `${targetId} points at ${target.source}, which is not an image the compiler can read. Upload the artwork again as a PNG, JPEG or WebP file.`
+        : `${targetId} could not be compiled from ${target.source}: ${said}`,
+    );
+  }
   const path = await workspace.writeTarget(experience.id, targetId, toTargetJson(compiled));
   return { targetId, report: compiled.report, path };
 }

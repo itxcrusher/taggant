@@ -438,6 +438,23 @@ describe("an internal failure said as a sentence", () => {
     expect(line).toMatch(/Upload the artwork again/);
   });
 
+  it("says that artwork which is not an image cannot be compiled, rather than failing", async () => {
+    // The upload is accepted, because it is only bytes until something decodes it, and the
+    // decoder's own error then reached the operator as a 500 with a stack trace.
+    const { post, told } = await drive();
+    await post("/experiences", new URLSearchParams({ id: "words", title: "Words" }));
+    await post("/e/words/targets", target("front", "front.png", Buffer.from("this is not a png")));
+
+    const answer = await post(
+      "/e/words/targets/front/compile",
+      new URLSearchParams({ scanDistanceMm: "150" }),
+    );
+    const line = await told(answer);
+    expect(answer.status, line).toBeLessThan(500);
+    expect(line).toContain("not an image the compiler can read");
+    expect(line).toContain("artwork/front.png");
+  });
+
   it("creates the link table's folder rather than failing on it", async () => {
     // A link table in a folder that does not exist yet is the ordinary case on a fresh
     // checkout, and the first code anyone registered came back as an ENOENT naming an
