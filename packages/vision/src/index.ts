@@ -3,6 +3,7 @@ export { type Corner, type DetectOptions, detectCorners } from "./features.js";
 export { DESCRIPTOR_BITS, PATCH_RADIUS, TEST_PAIRS } from "./pattern.js";
 export { type DescribedCorner, describeCorners, hamming } from "./describe.js";
 export { type Distinctiveness, measureDistinctiveness } from "./distinct.js";
+export { type Repetition, type RepetitionOptions, measureRepetition } from "./repeat.js";
 export { type Match, type MatchOptions, matchDescriptors } from "./match.js";
 export {
   type Correspondence,

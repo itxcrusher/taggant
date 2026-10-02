@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { type Homography, applyHomography } from "../src/homography.js";
 import type { GrayscaleImage } from "../src/image.js";
 import { type TrackingTarget, locate } from "../src/locate.js";
-import { buildTrackingFeatures } from "../src/target.js";
+import { type TargetFeature, buildTrackingFeatures } from "../src/target.js";
 import { blur, transform, warp } from "./warp.js";
 
 /**
@@ -194,6 +194,32 @@ describe("locate", () => {
     const other = compile(artwork(320, 240, 4242));
     reused.features.splice(0, reused.features.length, ...other.features);
     expect(locate(frame, reused).found, "found as the artwork it no longer holds").toBe(false);
+  });
+
+  it("steps over a hole in a target's features, as the build before did", () => {
+    // A target built in code can hold a hole, and reading every entry as a feature threw on `.x`
+    // where the build before found the target. A hole made after a first locate must be seen too,
+    // and so must the list growing a hole at its end.
+    const frame = warp(source, transform({ translateX: 140, translateY: 90, rotationDeg: 12 }), 640, 480);
+    const whole = compile(source);
+    const expected = locate(frame, whole);
+    expect(expected.found).toBe(true);
+
+    const holed = compile(source);
+    const sparse = new Array<TargetFeature>(holed.features.length + 2);
+    holed.features.forEach((feature, i) => {
+      if (i !== 3) sparse[i] = feature;
+    });
+    holed.features = sparse;
+    expect(3 in holed.features).toBe(false);
+    const found = locate(frame, holed);
+    expect(found.found).toBe(true);
+    expect(found.inliers).toBeGreaterThan(expected.inliers * 0.8);
+
+    const later = compile(source);
+    expect(locate(frame, later).found).toBe(true);
+    later.features[7] = undefined as unknown as TargetFeature;
+    expect(locate(frame, later).found).toBe(true);
   });
 
   it("reports not found for a frame of one pixel, rather than throwing", () => {

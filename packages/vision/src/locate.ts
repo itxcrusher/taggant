@@ -69,6 +69,8 @@ function notFound(): LocateResult {
 interface Prepared {
   /** The features this was made from, so a change to the list or to any one of them shows. */
   source: TargetFeature[];
+  /** How long the list was, holes included. */
+  length: number;
   xs: Float64Array;
   ys: Float64Array;
   descriptors: Uint32Array[];
@@ -77,28 +79,38 @@ interface Prepared {
 
 const prepared = new WeakMap<TrackingTarget, Prepared>();
 
+/**
+ * Whether an entry in a target's list is a feature at all.
+ *
+ * A list with a hole in it reached `Float64Array.from`, which reads a hole as undefined and threw
+ * on `.x`; the build before stepped over it and found the target with 119 points. A hole cannot
+ * come out of a JSON file, but a target built in code can hold one.
+ */
+function present(feature: TargetFeature | undefined | null): feature is TargetFeature {
+  return typeof feature === "object" && feature !== null;
+}
+
 function stillDescribes(held: Prepared, features: TargetFeature[]): boolean {
-  if (held.source !== features || held.descriptors.length !== features.length) return false;
+  if (held.source !== features || held.length !== features.length) return false;
+  let k = 0;
   for (let i = 0; i < features.length; i++) {
     const feature = features[i];
-    if (
-      feature === undefined ||
-      feature.descriptor !== held.descriptors[i] ||
-      feature.x !== held.xs[i] ||
-      feature.y !== held.ys[i]
-    ) {
+    if (!present(feature)) continue;
+    if (feature.descriptor !== held.descriptors[k] || feature.x !== held.xs[k] || feature.y !== held.ys[k]) {
       return false;
     }
+    k++;
   }
-  return true;
+  return k === held.descriptors.length;
 }
 
 function preparedFor(target: TrackingTarget): Prepared {
   let held = prepared.get(target);
   if (held === undefined || !stillDescribes(held, target.features)) {
-    const features = target.features;
+    const features = target.features.filter(present);
     held = {
-      source: features,
+      source: target.features,
+      length: target.features.length,
       xs: Float64Array.from(features, (c) => c.x),
       ys: Float64Array.from(features, (c) => c.y),
       descriptors: features.map((c) => c.descriptor),
