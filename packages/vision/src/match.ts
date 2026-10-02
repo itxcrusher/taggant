@@ -34,9 +34,9 @@ export interface MatchOptions {
    *
    * Six pixels, because this is about one corner described at two sizes: a multi scale target
    * holds the same corner more than once, a pixel or two apart, and counting a feature's own
-   * copy as its rival rejects exactly the matches most certainly right. The report's
-   * distinctiveness figure uses 24 for a different question, whether a look-alike is somewhere
-   * else on the artwork, and the two sentences read alike while asking different things.
+   * copy as its rival rejects exactly the matches most certainly right. The repetition
+   * measure uses 24 for a different question, whether a look-alike is somewhere else on the
+   * artwork, and the two sentences read alike while asking different things.
    */
   distinctRadius?: number;
 }

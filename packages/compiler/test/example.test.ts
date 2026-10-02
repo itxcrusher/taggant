@@ -2,7 +2,9 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { validateManifest } from "@taggant/manifest";
+import sharp from "sharp";
 import { describe, expect, it } from "vitest";
+import { formatReportLines } from "../src/cli.js";
 import { compileTarget } from "../src/compile.js";
 
 const EXAMPLE = join(dirname(fileURLToPath(import.meta.url)), "../../../examples/postcard");
@@ -59,25 +61,23 @@ describe("the postcard example", () => {
     );
   });
 
-  it("quotes the whole compile in the example README, not only the width", async () => {
-    // The previous round pinned the width line and the repetition line went stale anyway,
-    // in two files, and was caught by reading rather than by anything running. The example
-    // README prints the compiler's output verbatim, so every line of it is a claim.
-    const readme = await readFile(join(EXAMPLE, "README.md"), "utf8");
+  it("quotes the whole compile in both READMEs, not only the width", async () => {
+    // With only the width line pinned, the repetition line went stale in two files and was
+    // caught by reading rather than by anything running. Both READMEs print the compiler's
+    // output verbatim, so every line of it is a claim, in each of them.
     const target = await compileTarget(await readFile(join(EXAMPLE, "artwork.png")), {
       id: "front",
       scanDistanceMm: 190,
     });
-    const report = target.report;
-    const seen = report.recognition;
-    for (const line of [
-      `size                  ${target.width} x ${target.height} px`,
-      `tracking quality      ${report.score} / 100`,
-      `features              ${report.featureCount}, reaching ${report.areasWithFeatures} of ${report.areas} areas`,
-      `minimum print width   ${report.minimumWidthMm} mm to be read from 190 mm away, putting at least ${seen?.pixelsAcross} px across the artwork from left to right`,
-      `recognised            at that size, every turn found it with ${seen?.needed} or more points agreeing at ${seen?.widthsAgreed} of ${seen?.widths} widths, ${seen?.inliers} at the middle one, and no look put it in the wrong place`,
-    ]) {
-      expect(readme, `the README does not say: ${line}`).toContain(line);
+    // Every line the command line prints, taken from its own formatter, so a line added to the
+    // output is a line the READMEs have to carry too.
+    const lines = formatReportLines("artwork.png", target).filter((line) => line.trim() !== "");
+    expect(lines.length).toBeGreaterThan(6);
+    for (const file of [join(EXAMPLE, "README.md"), join(EXAMPLE, "../../README.md")]) {
+      const readme = await readFile(file, "utf8");
+      for (const line of lines) {
+        expect(readme, `${file} does not say: ${line}`).toContain(line);
+      }
     }
   });
 
@@ -181,6 +181,30 @@ describe("the postcard example", () => {
     expect(checked, "nothing was found compiling the example").toBeGreaterThan(3);
   }, 30_000);
 
+  it("measures the postcard printed twice the way its README says", async () => {
+    // A figure in a README is a test that has not been written: this one is quoted in prose,
+    // where nothing comparing output blocks reaches it.
+    const readme = await readFile(join(EXAMPLE, "README.md"), "utf8");
+    const one = await sharp(join(EXAMPLE, "artwork.png"))
+      .grayscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const { width, height } = one.info;
+    const stacked = Buffer.alloc(width * height * 2);
+    one.data.copy(stacked, 0);
+    one.data.copy(stacked, width * height);
+    const twice = await sharp(stacked, { raw: { width, height: height * 2, channels: 1 } })
+      .png()
+      .toBuffer();
+    const report = (await compileTarget(twice, { id: "twice", scanDistanceMm: 190 })).report;
+    expect(report.pass).toBe(false);
+    expect(readme).toContain(
+      `it is ${report.repetition?.places} of ${report.repetition?.of}, more than a third`,
+    );
+    expect((report.repetition?.places ?? 0) / (report.repetition?.of ?? 1)).toBeGreaterThan(1 / 3);
+    expect(report.reasons.join(" ")).toContain("shifting it 71 per cent of its width down");
+  });
+
   it("prints, for the artwork it refuses, exactly what the README says it prints", async () => {
     // The README shows a failing run beside the passing one, and only the passing one was
     // ever checked. The failing block named a file that is not in the repository, claimed
@@ -195,15 +219,9 @@ describe("the postcard example", () => {
     });
     const report = target.report;
     expect(report.pass, "the artwork the README shows being refused now passes").toBe(false);
-    for (const line of [
-      `size                  ${target.width} x ${target.height} px`,
-      `tracking quality      ${report.score} / 100`,
-      `features              ${report.featureCount}, reaching ${report.areasWithFeatures} of ${report.areas} areas`,
-      "minimum print width   not printable until the artwork passes",
-      "recognised            not asked, because the artwork did not get that far",
-      "verdict               not ready",
-      `      ${report.reasons[0]}`,
-    ]) {
+    const lines = formatReportLines("wordmark.png", target).filter((line) => line.trim() !== "");
+    expect(lines).toContain("  verdict               not ready");
+    for (const line of lines) {
       expect(readme, `the README does not say: ${line}`).toContain(line);
     }
   });

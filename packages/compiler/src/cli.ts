@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import process, { argv, stderr, stdout } from "node:process";
 import { pathToFileURL } from "node:url";
 import { type CompiledTarget, compileTarget, toTargetJson } from "./compile.js";
-import { type Report, describeWidth } from "./report.js";
+import { type Report, SCAN_DISTANCE_MM, describeRepetition, describeWidth } from "./report.js";
 
 /**
  * Exit codes, so a build script can read the outcome instead of parsing stderr.
@@ -25,8 +25,8 @@ export const EXIT = {
 const USAGE = "usage: taggant-compile <artwork> [--id <id>] [--scan-distance <mm>] [--out <file>]\n";
 
 /** Distances a person can actually hold a phone at, or stand back to, in millimetres. */
-const MIN_SCAN_DISTANCE_MM = 50;
-const MAX_SCAN_DISTANCE_MM = 10_000;
+const MIN_SCAN_DISTANCE_MM = SCAN_DISTANCE_MM.nearest;
+const MAX_SCAN_DISTANCE_MM = SCAN_DISTANCE_MM.furthest;
 
 const FLAGS = new Set(["--id", "--scan-distance", "--out"]);
 
@@ -134,6 +134,7 @@ export function formatReportLines(source: string, target: CompiledTarget): strin
     // What the verdict is made of, beside it. The line here before was a repetition figure
     // under a judgement it could not support: it fell as a design repeated, so a sheet of
     // sixteen identical postcards read "31%, which is normal" above "ready for press".
+    `  maps onto itself      ${describeRepetition(report)}`,
     `  recognised            ${describeRecognition(report)}`,
     `  verdict               ${report.pass ? "ready for press" : "not ready"}`,
   ];
@@ -196,9 +197,16 @@ if (invokedDirectly) {
 /** What the recogniser made of the artwork, in the sentence a printer can check. */
 function describeRecognition(report: Report): string {
   const seen = report.recognition;
-  if (seen === null) return "not asked, because the artwork did not get that far";
+  // Said without a cause, because the cause is in the reasons below and is not always the
+  // artwork: a distance that puts the smallest size past the widest piece a manifest can declare
+  // stops it here too, and "the artwork did not get that far" blamed a postcard that is ready
+  // from closer.
+  if (seen === null) return "not asked, for the reason below";
   if (report.pass) {
-    return `at that size, every turn found it with ${seen.needed} or more points agreeing at ${seen.widthsAgreed} of ${seen.widths} widths, ${seen.inliers} at the middle one, and no look put it in the wrong place`;
+    // The middle of the five worst turns, which is what three of five reaching the line means:
+    // every turn at three of the widths found at least that many. It read "at the middle one",
+    // as though it were the worst turn at the middle width, which it is not.
+    return `at that size, every turn found it with ${seen.needed} or more points agreeing at ${seen.widthsAgreed} of ${seen.widths} widths, and with at least ${seen.inliers} at three of them, and no look put it in the wrong place`;
   }
   return `at the size that came closest, every turn found it with ${seen.needed} or more points agreeing at ${seen.widthsAgreed} of ${seen.widths} widths, where most are needed${seen.misplaced > 0 ? `, and ${seen.misplaced} looks put it in the wrong place` : ""}`;
 }
@@ -213,9 +221,11 @@ function describeRecognition(report: Report): string {
  */
 function samePath(a: string, b: string): boolean {
   try {
-    const first = statSync(a);
-    const second = statSync(b);
-    if (first.ino !== 0 && first.dev === second.dev && first.ino === second.ino) return true;
+    // As exact integers. NTFS file ids run past 2 to the 53, where two adjacent ids are one
+    // Number, so a different file was refused as the artwork being compiled.
+    const first = statSync(a, { bigint: true });
+    const second = statSync(b, { bigint: true });
+    if (first.ino !== 0n && first.dev === second.dev && first.ino === second.ino) return true;
   } catch {
     // One of the two does not exist, which a file about to be written usually does not: it
     // cannot be the artwork, unless the two spellings are of one path, which is checked below.

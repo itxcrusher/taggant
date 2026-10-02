@@ -7,7 +7,7 @@ import {
   sample,
   smooth,
 } from "@taggant/vision";
-import { RECOGNISED_PIXELS_ACROSS_FRAME, type View } from "./report.js";
+import { MISPLACED_BEYOND, RECOGNISED_PIXELS_ACROSS_FRAME, type View } from "./report.js";
 
 /**
  * Turns of the print the recogniser is shown, in degrees.
@@ -21,19 +21,6 @@ import { RECOGNISED_PIXELS_ACROSS_FRAME, type View } from "./report.js";
  * four identical designs were called ready.
  */
 const TURNS = [0, 30, 60, 90] as const;
-
-/**
- * How far from where the artwork is a pose may put it, as a share of the artwork's width,
- * before it counts as found in the wrong place.
- *
- * Measured over 3 067 found views of 24 pieces: every pose of a design that does not repeat
- * itself was within 0.1 of the artwork's width at the sizes where it fits the frame, most of
- * them within 0.01, and every pose that put a repeated design on another copy of itself was 0.13
- * or more out, most of them 0.35 to 0.71. Imprecision and the wrong place are different
- * failures, and this tells them apart: a pose a few per cent out draws content a little off, and
- * one a third of the way across draws it on the wrong label.
- */
-export const MISPLACED_BEYOND = 0.1;
 
 /**
  * Show the recogniser the artwork at a given width, the way a camera would hand it over.

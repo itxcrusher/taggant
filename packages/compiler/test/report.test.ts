@@ -1,6 +1,8 @@
-import type { Corner } from "@taggant/vision";
+import type { Corner, TargetFeature } from "@taggant/vision";
 import { describe, expect, it } from "vitest";
 import {
+  FRAME_WIDTH_MM_AT_1M,
+  RECOGNISED_PIXELS_ACROSS_FRAME,
   type View,
   buildReport,
   carriesItsDistance,
@@ -23,6 +25,13 @@ const seen = (inliers: number): View => ({ found: true, inliers, misplaced: fals
  */
 const FOUND_EVERYWHERE = (): View[] => [seen(99)];
 
+/**
+ * No features, measured: nothing repeats in a list with nothing in it. These tests are about the
+ * width, the corner gates and the rule that turns looks into a verdict; whether a design maps
+ * onto itself is measured on real features in `artwork.test.ts` and in the vision package.
+ */
+const NO_FEATURES: TargetFeature[] = [];
+
 function corners(count: number, spread = 100): Corner[] {
   return Array.from({ length: count }, (_, i) => ({
     x: (i * 37) % spread,
@@ -38,6 +47,7 @@ describe("buildReport", () => {
       levels: [{ scale: 1, corners: corners(4) }],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
     });
     expect(report.pass).toBe(false);
     expect(report.reasons).toContain("too few features to track reliably");
@@ -49,6 +59,7 @@ describe("buildReport", () => {
       levels: [{ scale: 1, corners: corners(300, 400) }],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
     });
     expect(report.pass).toBe(true);
     expect(report.reasons).toEqual([]);
@@ -60,6 +71,7 @@ describe("buildReport", () => {
       levels: [{ scale: 1, corners: corners(300, 400) }],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
     });
     expect(report.score).toBeGreaterThan(0);
     expect(report.score).toBeLessThanOrEqual(100);
@@ -71,12 +83,14 @@ describe("buildReport", () => {
       levels: [{ scale: 1, corners: corners(300, 400) }],
       scanDistanceMm: 300,
       recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
     });
     const far = await buildReport({
       image: { width: 400, height: 400 },
       levels: [{ scale: 1, corners: corners(300, 400) }],
       scanDistanceMm: 900,
       recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
     });
     expect(far.minimumWidthMm ?? 0).toBeGreaterThan(near.minimumWidthMm ?? 0);
   });
@@ -87,6 +101,7 @@ describe("buildReport", () => {
       levels: [{ scale: 1, corners: corners(300, 60) }],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
     });
     expect(report.reasons).toContain("features are concentrated in part of the artwork");
   });
@@ -101,6 +116,7 @@ describe("buildReport input validation", () => {
           levels: [{ scale: 1, corners: corners(10) }],
           scanDistanceMm: bad,
           recognises: FOUND_EVERYWHERE,
+          features: NO_FEATURES,
         }),
       ).rejects.toThrow(/scan distance/i);
     }
@@ -113,6 +129,7 @@ describe("buildReport input validation", () => {
         levels: [{ scale: 1, corners: corners(10) }],
         scanDistanceMm: 400,
         recognises: FOUND_EVERYWHERE,
+        features: NO_FEATURES,
       }),
     ).rejects.toThrow(/image/i);
   });
@@ -125,6 +142,7 @@ describe("the numbers a printer acts on", () => {
       levels: [{ scale: 1, corners: [] }],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
     });
     expect(report.minimumWidthMm).toBeNull();
   });
@@ -140,6 +158,7 @@ describe("the numbers a printer acts on", () => {
       levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
     });
     const cornersOnlyAtFullSize = await buildReport({
       image,
@@ -151,6 +170,7 @@ describe("the numbers a printer acts on", () => {
       ],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
     });
     expect(cornersOnlyAtFullSize.pass).toBe(true);
     expect(cornersOnlyAtFullSize.smallestUsableScale).toBe(0.5);
@@ -163,6 +183,7 @@ describe("the numbers a printer acts on", () => {
       levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
     });
     const described = describeWidth(report);
     expect(described).toContain("400 mm away");
@@ -180,6 +201,7 @@ describe("the numbers a printer acts on", () => {
       image: { width: 640, height: 640 },
       levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
       scanDistanceMm: 190,
+      features: NO_FEATURES,
       recognises: (pixelsAcross) => {
         asked.push(pixelsAcross);
         return [seen(60)];
@@ -209,6 +231,7 @@ describe("the numbers a printer acts on", () => {
       scanDistanceMm: 400,
       // Found well only once the mark is wider than the frame.
       recognises: (pixelsAcross) => [pixelsAcross >= 600 ? seen(60) : seen(8)],
+      features: NO_FEATURES,
     });
     expect(onlyAtFullSize.pass).toBe(true);
     expect(onlyAtFullSize.smallestUsableScale).toBe(1);
@@ -226,6 +249,7 @@ describe("the numbers a printer acts on", () => {
       levels: [{ scale: 1, corners: lattice(200, 640) }],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
     });
     expect(tooFaint.pass).toBe(false);
     expect(tooFaint.reasons).toEqual(["too few features to track reliably"]);
@@ -234,8 +258,20 @@ describe("the numbers a printer acts on", () => {
   it("scales the width with the scan distance, because a camera further away sees less", async () => {
     const image = { width: 640, height: 640 };
     const levels = [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) }));
-    const near = await buildReport({ image, levels, scanDistanceMm: 300, recognises: FOUND_EVERYWHERE });
-    const far = await buildReport({ image, levels, scanDistanceMm: 900, recognises: FOUND_EVERYWHERE });
+    const near = await buildReport({
+      image,
+      levels,
+      scanDistanceMm: 300,
+      recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
+    });
+    const far = await buildReport({
+      image,
+      levels,
+      scanDistanceMm: 900,
+      recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
+    });
     expect(far.minimumWidthMm ?? 0).toBeGreaterThan((near.minimumWidthMm ?? 0) * 2);
   });
 
@@ -248,6 +284,7 @@ describe("the numbers a printer acts on", () => {
           levels: [{ scale: 1, corners: lattice(spacing, 1000) }],
           scanDistanceMm: 400,
           recognises,
+          features: NO_FEATURES,
         });
         expect(report.pass).toBe(report.score >= 60);
       }
@@ -260,6 +297,7 @@ describe("the numbers a printer acts on", () => {
       levels: [{ scale: 1, corners: [] }],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
     });
     // Both are true of artwork with nothing on it, and the point of this case is the one
     // that is not said: nothing about features being bunched together, since there are none.
@@ -282,6 +320,7 @@ describe("the numbers a printer acts on", () => {
       ],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
     });
     expect(report.areasWithFeatures).toBeLessThanOrEqual(report.areas);
     expect(report.score).toBeGreaterThanOrEqual(0);
@@ -297,7 +336,7 @@ describe("readiness is the recogniser's answer", () => {
     // Every way of deciding readiness from corners alone has been measured wrong, the last a
     // repetition figure that passed a sheet of sixteen identical postcards. A report that was
     // never checked says so rather than saying ready.
-    const report = await buildReport({ image, levels, scanDistanceMm: 300 });
+    const report = await buildReport({ image, levels, scanDistanceMm: 300, features: NO_FEATURES });
     expect(report.pass).toBe(false);
     expect(report.minimumWidthMm).toBeNull();
     expect(report.recognition).toBeNull();
@@ -315,6 +354,7 @@ describe("readiness is the recogniser's answer", () => {
         image,
         levels,
         scanDistanceMm,
+        features: NO_FEATURES,
         recognises: (pixelsAcross) => {
           asked.push(pixelsAcross);
           return [seen(pixelsAcross % 3 === 0 ? 25 : 15)];
@@ -335,6 +375,7 @@ describe("readiness is the recogniser's answer", () => {
       image,
       levels,
       scanDistanceMm: 190,
+      features: NO_FEATURES,
       recognises: (pixelsAcross) => {
         asked.push(pixelsAcross);
         return [seen(60)];
@@ -350,6 +391,7 @@ describe("readiness is the recogniser's answer", () => {
       image,
       levels,
       scanDistanceMm: 300,
+      features: NO_FEATURES,
       recognises: (pixelsAcross) => {
         asked.push(pixelsAcross);
         return [seen(pixelsAcross >= 400 ? 60 : 12)];
@@ -360,6 +402,7 @@ describe("readiness is the recogniser's answer", () => {
       levels,
       scanDistanceMm: 300,
       recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
     });
 
     expect(report.pass).toBe(true);
@@ -381,8 +424,20 @@ describe("readiness is the recogniser's answer", () => {
       const index = widths.indexOf(pixelsAcross);
       return [seen(index >= 0 && index < count ? 40 : index >= 0 ? 12 : 99)];
     };
-    const three = await buildReport({ image, levels, scanDistanceMm: 190, recognises: agreeingAt(3) });
-    const two = await buildReport({ image, levels, scanDistanceMm: 190, recognises: agreeingAt(2) });
+    const three = await buildReport({
+      image,
+      levels,
+      scanDistanceMm: 190,
+      recognises: agreeingAt(3),
+      features: NO_FEATURES,
+    });
+    const two = await buildReport({
+      image,
+      levels,
+      scanDistanceMm: 190,
+      recognises: agreeingAt(2),
+      features: NO_FEATURES,
+    });
     expect(three.smallestUsableScale).toBe(0.5);
     expect(three.recognition).toMatchObject({
       widths: 5,
@@ -403,12 +458,14 @@ describe("readiness is the recogniser's answer", () => {
       levels,
       scanDistanceMm: 190,
       recognises: turns([90, 90, 90, 15]),
+      features: NO_FEATURES,
     });
     const everyTurn = await buildReport({
       image,
       levels,
       scanDistanceMm: 190,
       recognises: turns([21, 22, 20, 25]),
+      features: NO_FEATURES,
     });
     expect(oneTurnShort.pass).toBe(false);
     expect(oneTurnShort.recognition?.inliers).toBe(15);
@@ -424,10 +481,15 @@ describe("readiness is the recogniser's answer", () => {
       levels,
       scanDistanceMm: 190,
       recognises: (pixelsAcross) => [{ found: true, inliers: 80, misplaced: pixelsAcross % 2 === 0 }],
+      features: NO_FEATURES,
     });
     expect(report.pass).toBe(false);
-    expect(report.reasons.join(" ")).toMatch(/wrong place in \d+ of \d+ looks/);
-    expect(report.reasons.join(" ")).toMatch(/A design that repeats itself does this/);
+    // The count is of the looks taken before looking stopped, which is at the first in the wrong
+    // place, and is said as that rather than as a rate: "1 of 4 looks" read as a quarter of them.
+    expect(report.reasons.join(" ")).toMatch(
+      /wrong place at \d+ mm wide, read from \d+ mm, in \d+ of the \d+ looks taken at that size before it stopped looking/,
+    );
+    expect(report.reasons.join(" ")).toMatch(/A design that repeats part of itself does this/);
   });
 
   it("refuses a size whose next size down puts the artwork in the wrong place", async () => {
@@ -439,6 +501,7 @@ describe("readiness is the recogniser's answer", () => {
       image,
       levels,
       scanDistanceMm: 190,
+      features: NO_FEATURES,
       recognises: (pixelsAcross) =>
         pixelsAcross < 330 ? [{ found: true, inliers: 12, misplaced: pixelsAcross === 320 }] : [seen(60)],
     });
@@ -447,7 +510,13 @@ describe("readiness is the recogniser's answer", () => {
   });
 
   it("refuses artwork the recogniser confirms at no size, and says how close it came", async () => {
-    const report = await buildReport({ image, levels, scanDistanceMm: 300, recognises: () => [seen(13)] });
+    const report = await buildReport({
+      image,
+      levels,
+      scanDistanceMm: 300,
+      recognises: () => [seen(13)],
+      features: NO_FEATURES,
+    });
     expect(report.pass).toBe(false);
     expect(report.minimumWidthMm).toBeNull();
     expect(report.score).toBeLessThan(60);
@@ -461,12 +530,19 @@ describe("readiness is the recogniser's answer", () => {
   it("scores a refusal by how far short of agreeing it fell", async () => {
     // A sheet found nowhere scored 59, one point under passing, because the score looked at the
     // corners alone.
-    const nowhere = await buildReport({ image, levels, scanDistanceMm: 190, recognises: () => [seen(0)] });
+    const nowhere = await buildReport({
+      image,
+      levels,
+      scanDistanceMm: 190,
+      recognises: () => [seen(0)],
+      features: NO_FEATURES,
+    });
     const nearly = await buildReport({
       image,
       levels,
       scanDistanceMm: 190,
       recognises: (pixelsAcross) => [seen([314, 317, 403, 407].includes(pixelsAcross) ? 40 : 12)],
+      features: NO_FEATURES,
     });
     expect(nowhere.score).toBe(0);
     expect(nearly.score).toBeGreaterThan(nowhere.score);
@@ -479,6 +555,7 @@ describe("readiness is the recogniser's answer", () => {
       levels,
       scanDistanceMm: 300,
       recognises: () => [{ found: false, inliers: 500, misplaced: false }],
+      features: NO_FEATURES,
     });
     expect(report.pass).toBe(false);
     expect(report.recognition?.inliers).toBe(0);
@@ -492,6 +569,7 @@ describe("readiness is the recogniser's answer", () => {
       image,
       levels,
       scanDistanceMm: 190,
+      features: NO_FEATURES,
       recognises: (pixelsAcross) => {
         asked.push(pixelsAcross);
         return [seen(5)];
@@ -510,6 +588,7 @@ describe("readiness is the recogniser's answer", () => {
       image,
       levels,
       scanDistanceMm: 5200,
+      features: NO_FEATURES,
       recognises: (pixelsAcross) => {
         asked.push(pixelsAcross);
         return [seen(5)];
@@ -527,6 +606,7 @@ describe("readiness is the recogniser's answer", () => {
       image,
       levels,
       scanDistanceMm: 10_000,
+      features: NO_FEATURES,
       recognises: (pixelsAcross) => {
         asked.push(pixelsAcross);
         return [seen(99)];
@@ -535,6 +615,43 @@ describe("readiness is the recogniser's answer", () => {
     expect(report.pass).toBe(false);
     expect(asked).toEqual([]);
     expect(report.reasons.join(" ")).toMatch(/Read it from closer/);
+  });
+
+  it("blames the distance when the sizes that fit were refused and the next one does not fit", async () => {
+    // From six metres the smallest size fits under five metres of print and the next does not.
+    // The smallest refused, the search stopped, and the reason read "too little distinct detail"
+    // for artwork the recogniser was never shown at the size it needed; a little closer, that
+    // size is asked about and confirmed.
+    const report = await buildReport({
+      image,
+      levels,
+      scanDistanceMm: 6000,
+      features: NO_FEATURES,
+      recognises: (pixelsAcross) => [seen(pixelsAcross < 400 ? 0 : 99)],
+    });
+    expect(report.pass).toBe(false);
+    expect(report.reasons.join(" ")).toContain("the next size up would have to be printed");
+    expect(report.reasons.join(" ")).toContain("Read it from closer, and that size can be asked about");
+    expect(report.reasons.join(" ")).not.toContain("too little distinct detail");
+  });
+
+  it("counts each width once on artwork too narrow to show five different ones", async () => {
+    // Through the exported function a narrow image rounds two of the five widths to one pixel
+    // count, and the same looks were counted twice: "4 of 5 widths agreed" was three widths.
+    const asked: number[] = [];
+    const report = await buildReport({
+      image: { width: 100, height: 100 },
+      levels: [1, 0.5].map((scale) => ({ scale, corners: lattice(8, 100) })),
+      scanDistanceMm: 190,
+      features: NO_FEATURES,
+      recognises: (pixelsAcross) => {
+        asked.push(pixelsAcross);
+        return [seen(99)];
+      },
+    });
+    expect(new Set(asked).size).toBe(asked.length);
+    expect(report.recognition?.widths).toBe(new Set(asked.filter((pixels) => pixels < 60)).size);
+    expect(report.recognition?.widths).toBeLessThan(5);
   });
 });
 
@@ -552,48 +669,122 @@ describe("what a caller may hand the report", () => {
           ],
           scanDistanceMm: 190,
           recognises: FOUND_EVERYWHERE,
+          features: NO_FEATURES,
         }),
         `a scale of ${scale} was accepted`,
       ).rejects.toThrow(RangeError);
     }
   });
 
-  it("calls repetition unmeasured when there was nothing to measure", async () => {
-    // An empty list read as 0, so a checkerboard with no usable features printed "0% of
-    // features have a look-alike, which is normal".
-    const report = await buildReport({
+  it("says nothing was measured when it was given nothing to measure, and does not pass", async () => {
+    // Without the features, nothing says the design is not printed twice, and a report like that
+    // is not one to stand behind.
+    const unmeasured = await buildReport({
       image: { width: 640, height: 640 },
-      levels: [{ scale: 1, corners: [] }],
-      described: [],
+      levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
       scanDistanceMm: 190,
       recognises: FOUND_EVERYWHERE,
     });
-    expect(report.repetition).toBeNull();
+    expect(unmeasured.repetition).toBeNull();
+    expect(unmeasured.pass).toBe(false);
+    expect(unmeasured.reasons.join(" ")).toContain("never checked for repeating itself");
 
-    // And a list with nothing far enough apart to compare: one feature, or five within 24
-    // pixels of each other, read 0, which says no look-alikes about artwork nothing was learned
-    // about.
-    const described = (points: Array<[number, number]>) =>
-      points.map(([x, y], i) => ({ x, y, strength: 1, angle: 0, descriptor: new Uint32Array(8).fill(i) }));
-    for (const points of [
-      [[100, 100]],
-      [
-        [100, 100],
-        [104, 100],
-        [100, 104],
-        [108, 108],
-        [110, 102],
-      ],
-    ] as Array<Array<[number, number]>>) {
-      const sparse = await buildReport({
-        image: { width: 640, height: 640 },
-        levels: [{ scale: 1, corners: [] }],
-        described: described(points),
-        scanDistanceMm: 190,
-        recognises: FOUND_EVERYWHERE,
-      });
-      expect(sparse.repetition, `${points.length} features`).toBeNull();
-    }
+    const empty = await buildReport({
+      image: { width: 640, height: 640 },
+      levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
+      scanDistanceMm: 190,
+      recognises: FOUND_EVERYWHERE,
+      features: NO_FEATURES,
+    });
+    expect(empty.repetition).toEqual({ places: 0, of: 0, move: null });
+    expect(empty.pass).toBe(true);
+  });
+
+  it("refuses features none of which could be read, rather than reading them as nothing repeating", async () => {
+    // Measured, a list of nothing usable says nothing repeats, which is the wrong answer to give
+    // about artwork nothing was learned about.
+    const unreadable = [
+      { x: Number.NaN, y: 10, strength: 1, angle: 0, scale: 1, descriptor: new Uint32Array(8) },
+      { x: 10, y: 10, strength: 1, angle: 0, scale: 1, descriptor: new Uint32Array(4) },
+    ] as TargetFeature[];
+    const report = await buildReport({
+      image: { width: 640, height: 640 },
+      levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
+      scanDistanceMm: 190,
+      recognises: FOUND_EVERYWHERE,
+      features: unreadable,
+    });
+    expect(report.repetition?.of).toBe(0);
+    expect(report.pass).toBe(false);
+    expect(report.reasons.join(" ")).toContain("none of its features could be read");
+  });
+});
+
+/**
+ * Features at their own places with descriptors unlike each other's, plus copies of the first
+ * `copied` of them a fixed shift away, facing the same way and found at the same size: a design
+ * part of which is printed twice, in the terms the repetition measure reads.
+ */
+function featuresWith(count: number, copied: number, seed = 20261002): TargetFeature[] {
+  let state = seed;
+  const next = () => {
+    state = (state * 1103515245 + 12345) & 0x7fff_ffff;
+    return state;
+  };
+  const originals: TargetFeature[] = [];
+  for (let i = 0; i < count; i++) {
+    const descriptor = new Uint32Array(8);
+    for (let w = 0; w < 8; w++) descriptor[w] = (next() ^ (next() << 16)) >>> 0;
+    // Apart from each other by more than a place, in the left half, so a copy lands in the right.
+    originals.push({
+      x: 20 + (i % 28) * 10,
+      y: 20 + Math.floor(i / 28) * 10,
+      strength: 1,
+      angle: (next() % 628) / 100,
+      scale: 1,
+      descriptor,
+    });
+  }
+  const copies = originals.slice(0, copied).map((feature) => ({ ...feature, x: feature.x + 320 }));
+  return [...originals, ...copies];
+}
+
+describe("a design that maps onto itself", () => {
+  const image = { width: 640, height: 640 };
+  const levels = [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) }));
+  const report = (
+    features: TargetFeature[],
+    recognises: (pixelsAcross: number) => View[] = FOUND_EVERYWHERE,
+  ) => buildReport({ image, levels, scanDistanceMm: 190, recognises, features });
+
+  it("is refused before the recogniser is asked, naming the move that does it", async () => {
+    const asked: number[] = [];
+    const twice = await report(featuresWith(200, 100), (pixels) => {
+      asked.push(pixels);
+      return [seen(99)];
+    });
+    expect(twice.pass).toBe(false);
+    expect(twice.repetition?.places).toBe(100);
+    expect(twice.reasons.join(" ")).toContain("it maps onto itself");
+    expect(twice.reasons.join(" ")).toContain("shifting it 50 per cent of its width right");
+    expect(twice.recognition).toBeNull();
+    expect(asked).toEqual([]);
+  });
+
+  it("is not refused for a part repeated that is many places and a small share of the design", async () => {
+    // Twenty-five places is past the line of twenty, and a fourteenth of the design's places is
+    // well short of a fifth: a logo printed twice on a label, which the recogniser's own looks
+    // are left to judge.
+    const logo = await report(featuresWith(320, 25));
+    expect(logo.repetition?.places).toBe(25);
+    expect(logo.pass).toBe(true);
+  });
+
+  it("is not refused for a part repeated that is a large share of a design with few places", async () => {
+    // Fifteen places is under the line of twenty, though it is more than a fifth of fifty-five.
+    const sparse = await report(featuresWith(40, 15));
+    expect(sparse.repetition?.places).toBe(15);
+    expect(sparse.pass).toBe(true);
   });
 });
 
@@ -606,6 +797,7 @@ describe("what a stored report has to hold before it is trusted", () => {
           levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
           scanDistanceMm: 190,
           recognises: FOUND_EVERYWHERE,
+          features: NO_FEATURES,
         }),
       ),
     );
@@ -656,6 +848,102 @@ describe("what a stored report has to hold before it is trusted", () => {
       expect(isCurrentReport(broken), label).toBe(false);
     }
     expect([widths, widthsAgreed, views, misplaced]).toEqual([5, 5, 5, 0]);
+  });
+
+  it("checks every field against what this build writes, one shape for each check", async () => {
+    // Shapes this build never writes, each accepted before these checks, among them a pass
+    // decided on one width, a pass scoring 10, and a width edited to 1 mm, which turned the
+    // bundler's comparison off for a piece that needs 147. Each shape here breaks one check.
+    const report = await current();
+    const recognition = report.recognition;
+    const failing = JSON.parse(
+      JSON.stringify(
+        await buildReport({
+          image: { width: 640, height: 640 },
+          levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
+          scanDistanceMm: 190,
+          recognises: () => [seen(0)],
+          features: NO_FEATURES,
+        }),
+      ),
+    );
+    expect(isCurrentReport(failing)).toBe(true);
+    const far = (distance: number) => ({
+      ...report,
+      scanDistanceMm: distance,
+      minimumWidthMm: Math.ceil(
+        (report.smallestUsableScale * report.analysisWidth) /
+          (RECOGNISED_PIXELS_ACROSS_FRAME / (FRAME_WIDTH_MM_AT_1M * (distance / 1000))),
+      ),
+    });
+    expect(isCurrentReport(far(190)), "the width worked out here is not the report's own").toBe(true);
+    for (const [label, broken] of [
+      ["a score over 100", { ...report, score: 1000 }],
+      ["a pass scoring under 60", { ...report, score: 10 }],
+      ["a score that is not a whole number", { ...report, score: 82.5 }],
+      ["no reasons", { ...report, reasons: undefined }],
+      ["reasons that are a word", { ...report, reasons: "abc" }],
+      ["reasons that are not words", { ...failing, reasons: [7] }],
+      ["a pass with a reason against it", { ...report, reasons: ["too few features to track reliably"] }],
+      ["a failure with no reason", { ...failing, reasons: [] }],
+      ["a feature count that is not a count", { ...report, featureCount: "300" }],
+      ["a grid of twenty-five areas", { ...report, areas: 25 }],
+      ["more areas reached than there are", { ...report, areasWithFeatures: 17 }],
+      ["no analysed width", { ...failing, analysisWidth: 0 }],
+      ["a smallest size of nothing", { ...failing, smallestUsableScale: 0 }],
+      ["a smallest size larger than the artwork", { ...failing, smallestUsableScale: 1.5 }],
+      ["no points needed", { ...report, recognition: { ...recognition, needed: 0 } }],
+      ["more widths agreeing than shown", { ...report, recognition: { ...recognition, widthsAgreed: 6 } }],
+      [
+        "more widths than are ever shown",
+        { ...failing, recognition: { ...failing.recognition, widths: 6 } },
+      ],
+      [
+        "more looks in the wrong place than looks",
+        {
+          ...failing,
+          recognition: { ...failing.recognition, misplaced: (failing.recognition.views ?? 0) + 1 },
+        },
+      ],
+      ["no repetition measured", { ...report, repetition: undefined }],
+      ["a repetition figure from the build before", { ...report, repetition: 0.36 }],
+      ["more places repeating than there are", { ...report, repetition: { places: 5, of: 3, move: null } }],
+      [
+        "a move that is not one",
+        {
+          ...report,
+          repetition: { places: 1, of: 300, move: { across: Number.NaN, down: 0, turnDegrees: 0, scale: 1 } },
+        },
+      ],
+      ["a pass with too few features", { ...report, featureCount: 59 }],
+      ["a pass with its features in too few areas", { ...report, areasWithFeatures: 7 }],
+      [
+        "a pass for a design that repeats itself",
+        {
+          ...report,
+          repetition: { places: 120, of: 400, move: { across: 0.5, down: 0, turnDegrees: 0, scale: 1 } },
+        },
+      ],
+      ["a pass the recogniser did not find", { ...report, recognition: { ...recognition, found: false } }],
+      [
+        "a pass on four widths",
+        { ...report, recognition: { ...recognition, widths: 4, widthsAgreed: 4, views: 4 } },
+      ],
+      ["a pass from no looks", { ...report, recognition: { ...recognition, views: 0 } }],
+      [
+        "a pass from looks that are not a turn for each width",
+        { ...report, recognition: { ...recognition, views: 7 } },
+      ],
+      [
+        "a pass at a size it was not shown at",
+        { ...report, recognition: { ...recognition, pixelsAcross: 321 } },
+      ],
+      ["a width edited to 1 mm", { ...report, minimumWidthMm: 1 }],
+      ["a width edited up by a millimetre", { ...report, minimumWidthMm: (report.minimumWidthMm ?? 0) + 1 }],
+      ["a width no manifest can declare", far(10_000)],
+    ] as const) {
+      expect(isCurrentReport(broken), label).toBe(false);
+    }
   });
 
   it("works an old report's distance back out, and answers a current one with its own", async () => {

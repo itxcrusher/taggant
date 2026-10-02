@@ -32,7 +32,7 @@ describe("formatReportLines", () => {
         featureCount: 240,
         areasWithFeatures: 14,
         areas: 16,
-        repetition: 0.1,
+        repetition: { places: 5, of: 300, move: { across: 0, down: 0.3, turnDegrees: 0, scale: 1 } },
         analysisWidth: 1200,
         smallestUsableScale: 0.5,
         minimumWidthMm: 62,
@@ -54,9 +54,14 @@ describe("formatReportLines", () => {
     expect(text).toContain("front.tif");
     expect(text).toContain("82 / 100");
     expect(text).toContain("62 mm");
-    // Beside the verdict, what the verdict was made of.
+    // Beside the verdict, what the verdict was made of. The figure is the middle of the five
+    // widths' worst turns, which is what three of them reaching it means; it read "at the middle
+    // one", as though it were the worst turn at the middle width.
     expect(text).toContain(
-      "every turn found it with 20 or more points agreeing at 4 of 5 widths, 58 at the middle one",
+      "every turn found it with 20 or more points agreeing at 4 of 5 widths, and with at least 58 at three of them",
+    );
+    expect(text).toContain(
+      "maps onto itself      no: the most one move carries onto look-alikes is 5 of its 300 places",
     );
   });
 
@@ -73,7 +78,7 @@ describe("formatReportLines", () => {
         featureCount: 12,
         areasWithFeatures: 4,
         areas: 16,
-        repetition: 0.1,
+        repetition: { places: 0, of: 12, move: null },
         analysisWidth: 1200,
         smallestUsableScale: 0.5,
         minimumWidthMm: 62,
@@ -86,7 +91,9 @@ describe("formatReportLines", () => {
     expect(text).toContain("too few features");
     expect(text).toContain("concentrated");
     expect(text).toContain("not ready");
-    expect(text).toContain("not asked, because the artwork did not get that far");
+    // Without a cause, which is in the reasons: a distance past the widest piece a manifest can
+    // declare stops it here too, and "the artwork did not get that far" blamed the artwork.
+    expect(text).toContain("not asked, for the reason below");
   });
 });
 

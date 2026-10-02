@@ -29,7 +29,14 @@ export interface CompiledTarget {
 /** Turn artwork into everything a runtime and a printer need to know about it. */
 export async function compileTarget(artwork: Buffer, options: CompileOptions): Promise<CompiledTarget> {
   const image = await loadGrayscale(artwork);
-  const features = buildTrackingFeatures(image, { perScale: options.perScale ?? 300 });
+  // One size at a time, going back to the event loop between them. Described in one call, the
+  // four sizes held a console's loop for 650 to 810 ms in one piece, longer than any look the
+  // recogniser takes, and every other request waited for it.
+  const features: TargetFeature[] = [];
+  for (const scale of DEFAULT_SCALES) {
+    await new Promise((settle) => setImmediate(settle));
+    features.push(...buildTrackingFeatures(image, { scales: [scale], perScale: options.perScale ?? 300 }));
+  }
 
   // Grouped by the size each feature was found at, so the report can say how small the
   // artwork can get and still hold up. Nothing is recomputed here. The report sees only
@@ -48,7 +55,7 @@ export async function compileTarget(artwork: Buffer, options: CompileOptions): P
       scale,
       corners: features.filter((feature) => feature.scale === scale),
     })),
-    described: features.filter((feature) => feature.scale === 1),
+    features,
     scanDistanceMm: options.scanDistanceMm,
     recognises: recognitionOf(image, features),
   });
