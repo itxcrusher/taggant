@@ -21,7 +21,7 @@ describe("manifest schema", () => {
     // A bound in a schema that the format document does not carry is a bound an author
     // meets as a validation error instead of reading beforehand. Each number is looked for
     // in the table row that names its own field, because the first version of this looked
-    // for both numbers anywhere in the file: an adversarial pass swapped them, so the
+    // for both numbers anywhere in the file: with the two swapped, the
     // document told an author the reverse of the truth, and this passed.
     const { readFile } = await import("node:fs/promises");
     const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");

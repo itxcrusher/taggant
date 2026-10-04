@@ -273,7 +273,7 @@ not finished`;
   });
 
   it("survives publishing a drawing built to take the renderer down with it", async () => {
-    // The adversarial pass over the rendering design found two documents the renderer
+    // There are two documents the renderer
     // cannot survive: a dilate filter that held it for four and a half minutes, and a
     // convolution matrix that killed the process with an illegal instruction. The bundler
     // renders in a child process for exactly this reason, and the security policy said the
@@ -311,8 +311,8 @@ not finished`;
 
   it("holds both ceilings under two requests at once, and orphans neither upload", async () => {
     // The check that matters is the one inside the turn that writes, and it had no test:
-    // an adversarial pass deleted it and the suite stayed green, then submitted two forms
-    // at once at one below each ceiling and got both accepted, with the loser's upload
+    // with it deleted the suite stayed green, and two forms submitted
+    // at once at one below each ceiling were both accepted, with the loser's upload
     // left on disk named by nothing while its operator was told the ceiling was reached.
     // Two requests, no timing work, because the read and the store both sit outside the
     // per-experience queue.

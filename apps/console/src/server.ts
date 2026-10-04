@@ -1,9 +1,9 @@
 /**
  * The console's HTTP server.
  *
- * A plain `node:http` server rendering HTML, the same shape as `services/resolver`, for
- * the reasons in D-018. Everything that matters happens on this side of the wire anyway:
- * the compiler is a native module and publishing is filesystem work.
+ * A plain `node:http` server rendering HTML, the same shape as `services/resolver`, so it
+ * costs nothing new to learn or to ship. Everything that matters happens on this side of the
+ * wire anyway: the compiler is a native module and publishing is filesystem work.
  *
  * This server has no authentication and is not meant to be reachable from anywhere. It
  * binds to the loopback address unless told otherwise and says so loudly when it is told
@@ -833,7 +833,7 @@ export function createConsole(options: ConsoleOptions): Server {
   return createServer((request, response) => {
     handle(request, response).catch((error) => {
       // Whatever went wrong goes to the log, not to the browser. A stack trace in a page
-      // is how the resolver leaked its internals before an adversarial pass caught it.
+      // is how the resolver once leaked its internals.
       process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
       if (response.headersSent) {
         response.end();

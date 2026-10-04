@@ -60,8 +60,8 @@ jobs:
           # and colour codes in them are noise wherever they are read.
           NO_COLOR: "1"
       # The README states how many tests there are and says it is the number this job runs.
-      # That sentence had been corrected by hand every round and had been wrong twice in a
-      # week, which is the shape of every other defect found this month: a figure in a
+      # That sentence had been corrected by hand again and again and had been wrong twice in
+      # a week, which is the shape of every other defect found this month: a figure in a
       # document with nothing over it. It is checked here rather than in a test because the
       # claim is about this run, and because listing the suite from inside itself takes
       # nearly two minutes where the totals are already on screen.

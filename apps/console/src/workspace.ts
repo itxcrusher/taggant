@@ -3,7 +3,7 @@
  *
  * An experience is a manifest plus the files it names. That is already what the bundler
  * consumes and what every other package in this repository speaks, so there is nothing
- * here translating between a database and the format (D-018). One folder per experience:
+ * here translating between a database and the format. One folder per experience:
  *
  *     <root>/<id>/manifest.json      the experience
  *     <root>/<id>/artwork/           artwork a target is compiled from
@@ -419,8 +419,8 @@ export function createWorkspace(root: string, options: WorkspaceOptions = {}): W
    *
    * `directoryFor` compares paths as text, which cannot see a symbolic link or a Windows
    * junction: the operator's own store is a directory they can put anything in, and an
-   * upload written through a link goes wherever the link points. The bundler shipped
-   * exactly this defect and it took an adversarial pass to find it.
+   * upload written through a link goes wherever the link points. The bundler once shipped
+   * exactly this defect.
    */
   const inside = async (lexical: string, what: string): Promise<string> => {
     await mkdir(lexical, { recursive: true });
@@ -609,7 +609,7 @@ export function createWorkspace(root: string, options: WorkspaceOptions = {}): W
       // it. Measured: two add-target forms posted in one `Promise.all` with the same
       // filename left one file and two targets pointing at it, both operators told theirs
       // was added. The sequential case `freeName` was written for is the case its test
-      // drives, which is why this survived a round.
+      // drives, which is why nothing caught this.
       return await inTurn(id, async () => {
         mayWrite();
         const directory = await realFolder(id, folder);

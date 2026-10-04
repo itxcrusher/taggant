@@ -84,9 +84,9 @@ export const LARGEST_DECLARED_EDGE = 96 * RASTER_EDGE;
  * rendered to a PNG, and anything else is refused by name.
  *
  * **This replaces two attempts at reading SVG and deciding what was safe in it, and the
- * reason is the whole design.** The first matched patterns in the text, and an adversarial
- * pass produced five bypasses, one executing. The second read the document with a
- * tokeniser and an allowlist, and the next pass produced seven, ten payloads executing or
+ * reason is the whole design.** The first matched patterns in the text and was bypassed
+ * five ways, one executing. The second read the document with a
+ * tokeniser and an allowlist and was bypassed seven ways, ten payloads executing or
  * fetching in two browsers: a UTF-16 encoding made the text invisible to it, a self-closing
  * metadata element switched it off for the rest of the file, a closing angle bracket inside
  * a quoted attribute hid every attribute after it, a stylesheet inside CDATA was blanked
@@ -302,7 +302,7 @@ export const RENDER_BUDGET_MS = 120_000;
  * and the pipe together cost about three times the file (a 64 MB document took the
  * publishing process from 54 to 194 MB of resident memory, linearly, with no blowup).
  *
- * It is also not where this path fails first, and an adversarial pass measured that: a
+ * It is also not where this path fails first, which is measured: a
  * single run of text inside one `text` element exhausts the twenty-second render clock at
  * 16 KB, and at every size tried from there to 7.9 MB, while 6 MB of base64 in an `image`
  * element renders in ten seconds. So for text the clock bites four orders of magnitude

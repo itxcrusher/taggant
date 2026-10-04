@@ -252,9 +252,9 @@ describe("what an orchestrator can ask", () => {
 
     // And no counter is a second name for a number already published. The first version of
     // this filtered out every line containing a brace and then mapped the values away, so
-    // it pinned unlabelled names and nothing else: an adversarial pass reintroduced the
-    // deleted counter as `taggant_answered_total{kind="all"}` and as
-    // `resolver_answered_total` and this passed both times, while the comment above it
+    // it pinned unlabelled names and nothing else: the deleted counter, put back
+    // as `taggant_answered_total{kind="all"}` and as
+    // `resolver_answered_total`, passed both times, while the comment above it
     // claimed every value was compared against the scan sum. Both halves are real now.
     const series = (await (await get("/metrics")).text())
       .split("\n")
@@ -292,7 +292,7 @@ describe("what an orchestrator can ask", () => {
 describe("what a stranger can put in a header", () => {
   it("publishes nothing of the path the caller wrote in front of the identifier", async () => {
     // This used to check that the prefix was encoded when it was published, which it was.
-    // An adversarial pass pointed out what encoding it does not fix: the prefix is the
+    // What encoding does not fix: the prefix is the
     // caller's, so `/attacker/chosen/stem/01/09520123456788` published
     // `<origin>/attacker/chosen/stem/01/09520123456788` as that product's identity, under
     // `owl:sameAs`, with an origin configured and doing nothing about it. It is not in the
@@ -315,8 +315,8 @@ describe("what a stranger can put in a header", () => {
 
   it("publishes nothing a Host header says, over a raw socket that can actually send one", async () => {
     // `fetch` silently replaces a caller-set `host`, which is why the test this replaces
-    // could not fail for its own reason: an adversarial pass proved the header never left
-    // the client, and then sent it raw and found `Host: evil.example` published as the
+    // could not fail for its own reason: the header never left
+    // the client, and sent raw, `Host: evil.example` was published as the
     // linkset anchor, in all three `Link` references including `owl:sameAs`, and as
     // `resolverRoot` in the description file. A socket, therefore, not `fetch`.
     const raw = async (path: string, host: string): Promise<string> => {

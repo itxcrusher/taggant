@@ -5,8 +5,7 @@ import { LARGEST_DECLARED_EDGE, LARGEST_SVG_BYTES, RASTER_EDGE, prepareAsset } f
 /**
  * What the bundler decides about a file from its bytes, and what it says when it refuses.
  *
- * Every case here came from the adversarial pass over the rendering design
- * (`ADVERSARIAL_REVIEW_2026-09-15-raster.md`), and each is a thing an ordinary handed-over
+ * Each case here is a thing an ordinary handed-over
  * asset does rather than something an attacker made: a phone's video, a licence comment
  * before the root element, an embedded photograph, a drawing sized in millimetres. The
  * refusals matter as much as the acceptances, because a refusal is what an author reads,

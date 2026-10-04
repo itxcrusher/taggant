@@ -10,7 +10,7 @@ import { createConsole } from "../src/server.js";
 import { type Workspace, createWorkspace, safeFilename } from "../src/workspace.js";
 
 /**
- * The findings of the fourth adversarial pass, each pinned by the case that produced it.
+ * Hostile and unlucky inputs to the console, each pinned by the case that showed the defect.
  *
  * Every one of these was reproduced against the running console before it was fixed. They
  * are here so that the fix is what is tested, rather than the intention behind it.

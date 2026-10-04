@@ -19,14 +19,14 @@ const RUNTIME_DIST = join(here, "../../runtime/dist");
  * A published bundle carries no document, so nothing in it can run or fetch.
  *
  * Two versions of this file guarded two versions of an SVG sanitiser, and each sanitiser
- * was broken by the next adversarial pass: five bypasses against pattern matching, seven
+ * was broken: five bypasses against pattern matching, seven
  * against a tokeniser and an allowlist, ten payloads executing or fetching in two browsers.
  * The bundler now renders every SVG to a PNG and refuses anything whose own bytes are not
  * an image, a video or an audio file. So this file no longer asks whether a sanitiser
  * caught something; it asks the only question that matters, which is whether anything a
  * browser would treat as a document ever lands in the folder.
  *
- * Every payload below is one the reviews produced against the earlier controls. Each has
+ * Every payload below was written against the earlier controls. Each has
  * one of two acceptable outcomes: it is refused, or it ships as a PNG whose bytes say PNG.
  * Neither outcome puts a document at an address.
  */
@@ -368,8 +368,8 @@ describe("a published bundle", () => {
     //
     // The second group would apply a local stylesheet, which draws no file content and so
     // cannot be seen by counting pixels at all. The first version of this test claimed a
-    // stylesheet route it did not have, and could not have observed one if it did, which
-    // an adversarial pass found. These documents draw a rectangle with `fill="none"` and
+    // stylesheet route it did not have, and could not have observed one if it did.
+    // These documents draw a rectangle with `fill="none"` and
     // the stylesheet sets a fill, so the paint itself is the measurement: the `data:`
     // control paints, and a stylesheet on disk must not.
     //
@@ -444,7 +444,7 @@ describe("a published bundle", () => {
         `${open}<image width="400" height="100" href="data:image/svg+xml;utf8,${nested}"/></svg>`,
       ],
       // A font whose source is a local file is deliberately not here. It was driven twice,
-      // by me and by the adversarial pass, and the pixels it produces are the document's
+      // and the pixels it produces are the document's
       // own letters rendered in a fallback face, not anything from the file: a font can
       // only become the shapes of characters the document already chose to draw, so it
       // cannot put a file's text in the picture and this instrument cannot see whether the
