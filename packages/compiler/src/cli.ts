@@ -4,7 +4,7 @@ import { realpathSync, statSync } from "node:fs";
 import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import process, { argv, stderr, stdout } from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { type CompiledTarget, compileTarget, toTargetJson } from "./compile.js";
 import { type Report, SCAN_DISTANCE_MM, describeRepetition, describeWidth } from "./report.js";
 
@@ -183,10 +183,23 @@ export async function main(args: string[]): Promise<number> {
   return target.report.pass ? EXIT.ok : EXIT.artworkNotReady;
 }
 
-// argv[1] is a filesystem path, and on Windows it uses backslashes, so it has to be
-// converted to a URL before it can be compared with import.meta.url.
-const invokedDirectly = argv[1] !== undefined && import.meta.url === pathToFileURL(argv[1]).href;
-if (invokedDirectly) {
+/**
+ * Whether this file is the program that was run, rather than a module something imported.
+ *
+ * Compared as the files the two paths name. Compared as text, a command line reached through a
+ * link, which is how a package manager puts one on the path and how pnpm lays out a workspace,
+ * had `argv[1]` naming the link and `import.meta.url` naming the file, so it did nothing at all
+ * and exited 0.
+ */
+function invokedDirectly(): boolean {
+  if (argv[1] === undefined) return false;
+  try {
+    return realpathSync.native(argv[1]) === realpathSync.native(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+if (invokedDirectly()) {
   // exitCode rather than exit(), so node finishes flushing stdout before it goes. On
   // Windows a write to a pipe is asynchronous, and exit() mid write truncates the report.
   main(argv.slice(2)).then((code) => {

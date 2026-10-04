@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import process, { argv, stderr, stdout } from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { parseTable } from "./links.js";
 import { createResolver } from "./server.js";
 import { stampFor, watchTable } from "./table-source.js";
@@ -170,8 +171,19 @@ export async function main(args: string[]): Promise<number> {
   return EXIT.ok;
 }
 
-const invokedDirectly = argv[1] !== undefined && import.meta.url === pathToFileURL(argv[1]).href;
-if (invokedDirectly) {
+/**
+ * Whether this file is the program that was run, compared as the files the two paths name. As
+ * text, a command line reached through a link did nothing at all and exited 0.
+ */
+function invokedDirectly(): boolean {
+  if (argv[1] === undefined) return false;
+  try {
+    return realpathSync.native(argv[1]) === realpathSync.native(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+if (invokedDirectly()) {
   main(argv.slice(2)).then((code) => {
     if (code !== EXIT.ok) process.exitCode = code;
   });

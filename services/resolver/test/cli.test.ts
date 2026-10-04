@@ -48,3 +48,28 @@ async function withStderr(into: string[], run: () => Promise<number>): Promise<n
     stderr.write = original;
   }
 }
+
+describe("the command line reached through a link", () => {
+  it("runs, as it does when a package manager puts it on the path", async () => {
+    // It compared argv[1] with its own module address as text, and through a link the first names
+    // the link and the second the file, so it did nothing at all and exited 0. A package manager
+    // puts a command line on the path through a link, and pnpm lays out a workspace with them.
+    const { spawnSync } = await import("node:child_process");
+    const { mkdtemp, rm, rmdir, symlink, unlink } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const dir = await mkdtemp(join(tmpdir(), "linked-cli-"));
+    const link = join(dir, "dist");
+    await symlink(fileURLToPath(new URL("../dist", import.meta.url)), link, "junction");
+    try {
+      const run = spawnSync(process.execPath, [join(link, "cli.js"), "--help"], { encoding: "utf8" });
+      expect(`${run.stdout}${run.stderr}`, "said nothing through the link").toContain("usage:");
+      expect(run.status).toBe(0);
+    } finally {
+      // The link alone, never what it points at.
+      await unlink(link).catch(() => rmdir(link));
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
