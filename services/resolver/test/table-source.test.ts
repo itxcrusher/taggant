@@ -1,9 +1,19 @@
 import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parseTable } from "../src/links.js";
 import { watchTable } from "../src/table-source.js";
+
+/** Every folder a test makes, removed after it, or each run leaves one per test behind. */
+const made: string[] = [];
+
+afterEach(async () => {
+  // Best effort: a folder Windows has not let go of yet is not a test failure.
+  for (const folder of made.splice(0)) {
+    await rm(folder, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+  }
+});
 
 /**
  * The two ways noticing a changed file goes wrong.
@@ -15,7 +25,9 @@ import { watchTable } from "../src/table-source.js";
  */
 
 async function scratch(): Promise<string> {
-  return join(await mkdtemp(join(tmpdir(), "table-source-")), "links.json");
+  const folder = await mkdtemp(join(tmpdir(), "table-source-"));
+  made.push(folder);
+  return join(folder, "links.json");
 }
 
 /** Wait for a condition rather than for a duration, so this is not a race. */
@@ -79,7 +91,7 @@ describe("noticing that the table changed", () => {
     // produced no event inside the container, so the watch is a fast path and the timer is
     // the mechanism. Here the watch is never allowed to help: the file is created after the
     // source is already watching a directory that does not exist.
-    const path = join(await mkdtemp(join(tmpdir(), "table-source-")), "absent", "links.json");
+    const path = join(await scratch(), "..", "absent", "links.json");
     let changes = 0;
     const source = await watchTable(path, {
       pollMs: 50,

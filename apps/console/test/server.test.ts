@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -50,8 +50,12 @@ let workspace: Workspace;
 let publishRoot = "";
 let linkTable = "";
 
+/** Every folder this file makes, removed when it finishes. */
+const made: string[] = [];
+
 beforeAll(async () => {
   const root = await mkdtemp(join(tmpdir(), "console-http-"));
+  made.push(root);
   publishRoot = join(root, "bundles");
   linkTable = join(root, "links.json");
   workspace = createWorkspace(join(root, "workspace"));
@@ -62,6 +66,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise<void>((done) => server.close(() => done()));
+  // Best effort: a folder Windows has not let go of yet is not a test failure.
+  for (const folder of made.splice(0)) {
+    await rm(folder, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+  }
 });
 
 /** A form post from the console's own pages, which is what the browser sends. */
@@ -204,7 +212,9 @@ describe("what it refuses", () => {
   });
 
   it("will not write over a link table it cannot read, because that would lose every other code", async () => {
-    const broken = join(await mkdtemp(join(tmpdir(), "console-table-")), "links.json");
+    const tableFolder = await mkdtemp(join(tmpdir(), "console-table-"));
+    made.push(tableFolder);
+    const broken = join(tableFolder, "links.json");
     await writeFile(broken, "{ this is not json");
     const other = createConsole({
       workspace,

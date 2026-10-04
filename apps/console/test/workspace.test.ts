@@ -28,8 +28,12 @@ async function workspace() {
   return createWorkspace(root);
 }
 
-afterEach(() => {
-  made.length = 0;
+afterEach(async () => {
+  // Every folder a test made goes with it, or each run leaves a folder per test in the temp
+  // directory. Best effort: a folder Windows has not let go of yet is not a test failure.
+  for (const root of made.splice(0)) {
+    await rm(root, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+  }
 });
 
 describe("what an id may be", () => {
@@ -327,6 +331,7 @@ describe("writing", () => {
     const store = await workspace();
     await store.create("pack", "Pack");
     const outside = await mkdtemp(join(tmpdir(), "taggant-outside-"));
+    made.push(outside);
     let linked = true;
     try {
       // A junction on Windows needs no elevation; a symlink to a directory may.

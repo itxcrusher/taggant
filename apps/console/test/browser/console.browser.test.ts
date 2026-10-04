@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -85,6 +85,10 @@ beforeAll(async () => {
 afterAll(async () => {
   await browser?.close();
   await new Promise<void>((done) => server.close(() => done()));
+  // Best effort: a folder Windows has not let go of yet is not a test failure.
+  if (scratch !== "") {
+    await rm(scratch, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+  }
 });
 
 describe("the console in a browser", () => {

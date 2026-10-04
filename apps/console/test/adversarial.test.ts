@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -21,8 +21,12 @@ let origin = "";
 let workspace: Workspace;
 let root = "";
 
+/** Every folder this file makes, removed when it finishes. */
+const made: string[] = [];
+
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), "console-adversarial-"));
+  made.push(root);
   workspace = createWorkspace(join(root, "workspace"));
   server = createConsole({
     workspace,
@@ -35,6 +39,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise<void>((done) => server.close(() => done()));
+  // Best effort: a folder Windows has not let go of yet is not a test failure. A link the
+  // workspace holds is removed as a link, never followed.
+  for (const folder of made.splice(0)) {
+    await rm(folder, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+  }
 });
 
 function post(path: string, body: FormData | URLSearchParams, headers: Record<string, string> = {}) {
@@ -383,6 +392,7 @@ describe("H6: the Host header", () => {
 describe("M1: links inside the workspace", () => {
   it("will not write a manifest through a link that leaves the workspace", async () => {
     const outside = await mkdtemp(join(tmpdir(), "console-outside-"));
+    made.push(outside);
     let linked = true;
     try {
       await symlink(outside, join(workspace.root, "escaped"), "junction");
