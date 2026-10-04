@@ -12,6 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
+import { MIMEType } from "node:util";
 import { type Report, carriesItsDistance, isCurrentReport } from "@taggant/compiler";
 import { manifestSchema } from "@taggant/manifest";
 import { DEFAULT_SCAN_DISTANCE_MM, bundleDirFor, compile, publish, registerCode } from "./operations.js";
@@ -339,10 +340,18 @@ const MOST_HEADER_BYTES = 16 * 1024;
  * limit is for and keeps it.
  */
 function checkMultipart(body: Buffer, contentType: string): void {
-  const found = contentType.match(/boundary=(?:"([^"]+)"|([^;\s]+))/i);
-  const boundary = found?.[1] ?? found?.[2];
-  // No boundary is a body the parser refuses, in its own words.
-  if (boundary === undefined) return;
+  // Read by the same rules the platform's parser reads it by (WHATWG MIME types), so the parts
+  // counted here are the parts it would read. A pattern search took a parameter whose name only
+  // ended in "boundary" for the boundary, counted nothing, and let every part through.
+  let boundary: string | null = null;
+  try {
+    boundary = new MIMEType(contentType).params.get("boundary");
+  } catch {
+    boundary = null;
+  }
+  if (boundary === null || boundary === "") {
+    throw new WorkspaceError("that form does not say where its parts begin and end, so it was not read");
+  }
   const delimiter = Buffer.from(`--${boundary}`, "latin1");
   let at = body.indexOf(delimiter);
   let parts = 0;
@@ -376,6 +385,13 @@ function checkMultipart(body: Buffer, contentType: string): void {
       }
     }
     at = next;
+  }
+  // Every form here has at least one field. None counted means the boundary named is not the one
+  // the parts are divided by, and anything that read them some other way would read them unchecked.
+  if (parts === 0) {
+    throw new WorkspaceError(
+      "that form's parts could not be found by the boundary it names, so it was not read",
+    );
   }
 }
 

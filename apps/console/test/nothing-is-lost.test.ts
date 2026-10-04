@@ -563,6 +563,20 @@ describe("an internal failure said as a sentence", () => {
     const many = Array.from({ length: 40 }, (_, i) => part(`f${i}`, "x")).join("") + end;
     expect(await told(await post("/e/parts/targets", many, headers))).toContain("more than 16 parts");
 
+    // The boundary is read the way the platform's parser reads it. Found by a pattern search, a
+    // parameter whose name only ended in "boundary" was taken for it, no part was counted, and
+    // the parser then read every part with the real one.
+    const decoy = { "content-type": `multipart/form-data; xboundary=elsewhere; boundary=${boundary}` };
+    expect(await told(await post("/e/parts/targets", many, decoy))).toContain("more than 16 parts");
+    // And a form that names no boundary, or one its parts are not divided by, is refused here in
+    // a sentence rather than handed to the parser to read some other way.
+    const unnamed = { "content-type": "multipart/form-data" };
+    expect(await told(await post("/e/parts/targets", many, unnamed))).toContain(
+      "does not say where its parts",
+    );
+    const elsewhere = { "content-type": "multipart/form-data; boundary=not-in-this-body" };
+    expect(await told(await post("/e/parts/targets", many, elsewhere))).toContain("could not be found");
+
     const long = part("targetId", "a".repeat(100 * 1024)) + end;
     expect(await told(await post("/e/parts/targets", long, headers))).toContain("a field of 100 KB");
 
