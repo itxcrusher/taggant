@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,32 +10,52 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
  * rename on Windows and does nothing on Linux, and a test that only fails on one of the two
  * is a test half the runs do not have.
  */
-const failing = vi.hoisted(() => ({ rename: null as null | ((from: string, to: string) => string | null) }));
+const failing = vi.hoisted(() => ({
+  rename: null as null | ((from: string, to: string) => string | null),
+  /** Runs after a rename that succeeded, to do what another publish would at that moment. */
+  afterRename: null as null | ((from: string, to: string) => Promise<void>),
+  stat: null as null | ((path: string) => string | null),
+  rm: null as null | ((path: string) => string | null),
+}));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const refuse = (code: string, what: string) =>
+    Object.assign(new Error(`${code}: operation refused for the test, ${what}`), { code });
   return {
     ...actual,
     rename: async (from: string, to: string) => {
       const code = failing.rename?.(String(from), String(to)) ?? null;
-      if (code !== null) {
-        throw Object.assign(
-          new Error(`${code}: operation refused for the test, rename '${from}' -> '${to}'`),
-          {
-            code,
-          },
-        );
-      }
-      return actual.rename(from, to);
+      if (code !== null) throw refuse(code, `rename '${from}' -> '${to}'`);
+      await actual.rename(from, to);
+      await failing.afterRename?.(String(from), String(to));
+    },
+    stat: async (...args: Parameters<typeof actual.stat>) => {
+      const code = failing.stat?.(String(args[0])) ?? null;
+      if (code !== null) throw refuse(code, `stat '${String(args[0])}'`);
+      return actual.stat(...args);
+    },
+    rm: async (...args: Parameters<typeof actual.rm>) => {
+      const code = failing.rm?.(String(args[0])) ?? null;
+      if (code !== null) throw refuse(code, `rm '${String(args[0])}'`);
+      return actual.rm(...args);
     },
   };
 });
 
 const { bundle } = await import("../src/bundle.js");
+const { currentReport } = await import("./current-report.js");
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNTIME_DIST = join(here, "../../runtime/dist");
 const FEATURE = { x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] };
-const TARGET = { formatVersion: 2, id: "front", width: 100, height: 100, features: [FEATURE] };
+const TARGET = {
+  formatVersion: 2,
+  id: "front",
+  width: 100,
+  height: 100,
+  features: [FEATURE],
+  report: await currentReport(),
+};
 const OVERLAY =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#c33" /></svg>';
 const OTHER =
@@ -54,6 +74,9 @@ afterAll(async () => {
 });
 afterEach(() => {
   failing.rename = null;
+  failing.afterRename = null;
+  failing.stat = null;
+  failing.rm = null;
 });
 
 async function scratch(): Promise<{ sourceDir: string; outDir: string; parent: string }> {
@@ -152,6 +175,87 @@ describe("replacing a published bundle", () => {
     expect(kept).toHaveLength(1);
     expect(kept[0]).toMatch(/^swap\.replaced-[0-9a-f]{8}$/);
     expect(await live(join(parent, kept[0] ?? ""))).toEqual({ title: "first", whole: true });
+  });
+
+  it("lets one swap of a destination finish before the next starts, within a process", async () => {
+    // Two renames of one folder can both succeed on Windows, so two publishes swapping at once
+    // could each believe they had set the live version aside; with three, one put back the
+    // version all three replaced and another deleted a bundle its operator was told was live.
+    // The first swap here is held for a second after it moves the live folder aside, which is
+    // when the second one would find nothing to move if it did not wait its turn.
+    const { sourceDir, outDir, parent } = await scratch();
+    await publish(sourceDir, outDir, "first");
+    failing.afterRename = async (from, to) => {
+      if (from !== outDir || !basename(to).startsWith("swap.replaced-")) return;
+      failing.afterRename = null;
+      await new Promise((settle) => setTimeout(settle, 1_000));
+    };
+    const outcomes = await Promise.all(
+      ["second", "third"].map((title) =>
+        publish(sourceDir, outDir, title).then(
+          () => "published",
+          (error: Error) => error.message,
+        ),
+      ),
+    );
+    expect(outcomes).toEqual(["published", "published"]);
+    expect(["second", "third"]).toContain((await live(outDir)).title);
+    expect(await besides(parent)).toEqual([]);
+  });
+
+  it("gives up when another publish took the folder it moved aside, and says so", async () => {
+    // On Windows two renames of one folder to two names can both succeed, the second moving the
+    // folder from where the first put it, so both publishes believed they had set the live
+    // version aside. A publish that finds nothing where it put the folder lost that race.
+    const { sourceDir, outDir, parent } = await scratch();
+    await publish(sourceDir, outDir, "first");
+    failing.afterRename = async (from, to) => {
+      if (from !== outDir || !basename(to).startsWith("swap.replaced-")) return;
+      failing.afterRename = null;
+      // What the other publish's rename did at the same moment.
+      await rename(to, join(parent, "swap.replaced-0ther0ne"));
+    };
+    const refused = await publish(sourceDir, outDir, "second").then(
+      () => null,
+      (error: Error) => error.message,
+    );
+    expect(refused).toContain("was replacing it at the same moment");
+    // Nothing of this publish is left, and the version that was live is where the other put it.
+    expect(await besides(parent)).toEqual(["swap.replaced-0ther0ne"]);
+  });
+
+  it("goes on with the swap when the check of the moved folder fails for another reason", async () => {
+    // Only nothing there means another publish took it. Giving up on any failed look left what
+    // was live set aside with nothing in its place.
+    const { sourceDir, outDir, parent } = await scratch();
+    await publish(sourceDir, outDir, "first");
+    failing.stat = (path) => (basename(path).startsWith("swap.replaced-") ? "EPERM" : null);
+    await publish(sourceDir, outDir, "second");
+    failing.stat = null;
+    expect(await live(outDir)).toEqual({ title: "second", whole: true });
+    expect(await besides(parent)).toEqual([]);
+  });
+
+  it("says where an unfinished bundle is when it cannot be removed, rather than a raw EBUSY", async () => {
+    // A scanner holding one freshly written file made the removal fail, and its EBUSY replaced
+    // the sentence it was cleaning up after, while the unfinished bundle stayed in the served tree.
+    const { sourceDir, outDir } = await scratch();
+    await publish(sourceDir, outDir, "first");
+    failing.rename = (from, to) =>
+      to === outDir && basename(from).includes(".publishing-") ? "EPERM" : null;
+    failing.rm = (path) => (basename(path).includes(".publishing-") ? "EBUSY" : null);
+    const refused = await publish(sourceDir, outDir, "second").then(
+      () => null,
+      (error: Error) => error.message,
+    );
+    expect(refused).toContain("the version that was live is unchanged");
+    expect(refused).toMatch(
+      /The unfinished bundle could not be removed \(EBUSY\) and is at .*swap\.publishing-[0-9a-f]{8}/,
+    );
+    expect(refused).not.toContain("operation refused for the test");
+    failing.rename = null;
+    failing.rm = null;
+    expect(await live(outDir)).toEqual({ title: "first", whole: true });
   });
 
   it("removes what an earlier publish left beside it, once that is old enough to be nobody's", async () => {

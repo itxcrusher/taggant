@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { within } from "../src/assets.js";
 import { bundle } from "../src/bundle.js";
-import { currentReport } from "./current-report.js";
+import { currentReport, reportAskingFor } from "./current-report.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNTIME_DIST = join(here, "../../runtime/dist");
@@ -29,7 +29,16 @@ const MANIFEST = {
 // points a camera at a page and can never answer, which is worth refusing even though it
 // costs every fixture a line.
 const FEATURE = { x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] };
-const TARGET = { formatVersion: 2, id: "front", width: 100, height: 100, features: [FEATURE] };
+// And a report as the compiler writes one. A target with none is refused, because removing that
+// one key from a target file was the way past every readiness check the gate makes.
+const TARGET = {
+  formatVersion: 2,
+  id: "front",
+  width: 100,
+  height: 100,
+  features: [FEATURE],
+  report: await currentReport(),
+};
 
 /** Every directory this file made, so the run can take them away again. */
 const scratchRoots: string[] = [];
@@ -176,14 +185,14 @@ describe("bundle", () => {
         targets: {
           front: {
             ...TARGET,
-            report: await currentReport({ minimumWidthMm: 70 }, 150),
+            report: await reportAskingFor(70),
           },
         },
         sourceDir,
         outDir,
         runtimeDir: RUNTIME_DIST,
       }),
-    ).rejects.toThrow(/declared 20 mm wide, and its artwork needs at least 70 mm to be read at 150 mm/);
+    ).rejects.toThrow(/declared 20 mm wide, and its artwork needs at least 70 mm to be read at \d+ mm/);
   });
 
   it("publishes when the piece is wide enough", async () => {
@@ -194,7 +203,7 @@ describe("bundle", () => {
         targets: {
           front: {
             ...TARGET,
-            report: await currentReport({ minimumWidthMm: 70 }, 150),
+            report: await reportAskingFor(70),
           },
         },
         sourceDir,

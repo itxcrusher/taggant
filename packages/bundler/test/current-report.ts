@@ -16,8 +16,25 @@ export async function currentReport(changes: Partial<Report> = {}, scanDistanceM
   const report = await buildReport({
     image: { width: 640, height: 452 },
     levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners })),
+    // Measured over no features, which nothing repeats in: the report says so as one written for
+    // artwork that does not repeat itself would.
+    features: [],
     scanDistanceMm,
     recognises: () => [{ found: true, inliers: 58, misplaced: false }],
   });
   return { ...JSON.parse(JSON.stringify(report)), ...changes };
+}
+
+/**
+ * The scan distance at which this report asks for a given width, for a test that needs the
+ * width to be a particular number. The width is worked out from the distance and checked
+ * against it, so editing the width alone now makes a report this build does not stand behind.
+ */
+export async function reportAskingFor(widthMm: number): Promise<Report> {
+  for (let distance = 50; distance <= 10_000; distance++) {
+    const report = await currentReport({}, distance);
+    if (report.minimumWidthMm === widthMm) return report;
+    if ((report.minimumWidthMm ?? 0) > widthMm) break;
+  }
+  throw new Error(`no scan distance gives this fixture a minimum width of ${widthMm} mm`);
 }

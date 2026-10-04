@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import { bundle } from "../src/bundle.js";
-import { currentReport } from "./current-report.js";
+import { currentReport, reportAskingFor } from "./current-report.js";
 
 const RUNTIME_DIST = join(dirname(fileURLToPath(import.meta.url)), "../../runtime/dist");
 
@@ -81,10 +81,33 @@ describe("a compiled target from an older build", () => {
   it("names the distance when it refuses a piece printed too small", async () => {
     // A refusal that says a piece needs more width without saying at what distance leaves
     // the operator with two ways to act on it and no way to tell which is meant.
-    const current = { ...features, report: await currentReport({ minimumWidthMm: 300 }) };
+    const report = await reportAskingFor(300);
+    const current = { ...features, report };
     await expect(bundle({ manifest, targets: { front: current }, ...(await scratch()) })).rejects.toThrow(
-      /at least 300 mm to be read at 190 mm/,
+      `at least 300 mm to be read at ${report.scanDistanceMm} mm`,
     );
+  });
+
+  it("is refused when its report was written before the design was checked for repeating itself", async () => {
+    // The build before this one settled a design printed twice by whether one look in twenty
+    // landed on the wrong copy, which turned on the export width, and its report held a number
+    // where this build writes the repetition measured.
+    const good = await currentReport();
+    const before = { ...features, report: { ...good, repetition: 0.36 } };
+    await expect(bundle({ manifest, targets: { front: before }, ...(await scratch()) })).rejects.toThrow(
+      /before readiness checked whether the design repeats itself/,
+    );
+  });
+
+  it("says a target that is not one is not one, rather than failing on it", async () => {
+    // `null` reached the report checks and threw a TypeError naming the `in` operator, where the
+    // build before gave the runtime's own sentence.
+    for (const target of [null, "text", 7, true]) {
+      await expect(
+        bundle({ manifest, targets: { front: target }, ...(await scratch()) }),
+        String(target),
+      ).rejects.toThrow(/cannot be read by the runtime/);
+    }
   });
 
   it("is refused when its report never asked the recogniser", async () => {
@@ -142,6 +165,44 @@ describe("a compiled target from an older build", () => {
         "a pass with a look in the wrong place",
         { ...good, recognition: { ...good.recognition, misplaced: 2 } },
       ],
+      // Shapes no build writes, each accepted before these checks: each read as ready for press,
+      // published, and showed on the console's page as ready.
+      [
+        "decided on one width of one",
+        { ...good, recognition: { ...good.recognition, widths: 1, widthsAgreed: 1, views: 4 } },
+      ],
+      [
+        "decided on two widths of two",
+        { ...good, recognition: { ...good.recognition, widths: 2, widthsAgreed: 2, views: 8 } },
+      ],
+      [
+        "three of five widths agreeing from no looks",
+        { ...good, recognition: { ...good.recognition, views: 0 } },
+      ],
+      [
+        "no points needed and none found",
+        { ...good, recognition: { ...good.recognition, needed: 0, inliers: 0 } },
+      ],
+      ["a pass scoring 10", { ...good, score: 10 }],
+      ["a score of 1000", { ...good, score: 1000 }],
+      ["a pass with three features", { ...good, featureCount: 3 }],
+      ["a smallest size that is a word", { ...good, smallestUsableScale: "x" }],
+      ["no analysed width", { ...good, analysisWidth: undefined }],
+      ["minus five pixels across", { ...good, recognition: { ...good.recognition, pixelsAcross: -5 } }],
+      ["a width edited to 1 mm", { ...good, minimumWidthMm: 1 }],
+      ["a width edited up by a millimetre", { ...good, minimumWidthMm: (good.minimumWidthMm ?? 0) + 1 }],
+      ["no reasons", { ...good, reasons: undefined }],
+      ["reasons that are a word", { ...good, reasons: "abc" }],
+      ["a pass with a reason against it", { ...good, reasons: ["too few features to track reliably"] }],
+      ["no repetition measured", { ...good, repetition: null }],
+      [
+        "a pass for a design that repeats itself",
+        {
+          ...good,
+          repetition: { places: 120, of: 400, move: { across: 0.5, down: 0, turnDegrees: 0, scale: 1 } },
+        },
+      ],
+      ["more places repeating than there are", { ...good, repetition: { places: 5, of: 3, move: null } }],
     ];
     for (const [label, report] of shapes) {
       await expect(
@@ -167,11 +228,16 @@ describe("a compiled target from an older build", () => {
     );
   });
 
-  it("still says nothing about a target that never carried a report", async () => {
-    // The gate has an opinion about widths, not about targets. Something built by the
-    // vision package directly has no report and never claimed to have been checked;
-    // refusing it would break every caller that compiles without the print advice.
-    const result = await bundle({ manifest, targets: { front: features }, ...(await scratch()) });
-    expect(result.targets).toContain("front");
+  it("refuses a target that carries no report, which was the way past every check", async () => {
+    // A target with no report was let through as never claimed to have been checked, so removing
+    // one key from a target file published a sheet the compiler had refused, while the console's
+    // own page said the target was not compiled yet.
+    const refused = { ...features, report: { ...(await currentReport()), pass: false } };
+    await expect(bundle({ manifest, targets: { front: refused }, ...(await scratch()) })).rejects.toThrow(
+      /Compile it again|did not pass/,
+    );
+    await expect(bundle({ manifest, targets: { front: features }, ...(await scratch()) })).rejects.toThrow(
+      /carries no print readiness report/,
+    );
   });
 });

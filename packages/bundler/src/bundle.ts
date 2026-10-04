@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import process from "node:process";
 import { carriesItsDistance, isCurrentReport } from "@taggant/compiler";
 import { validateManifest } from "@taggant/manifest";
 import { fromTargetFile } from "@taggant/vision";
@@ -163,7 +164,17 @@ async function sweepLeftovers(outDir: string): Promise<void> {
  * all, and the new one is renamed into its place; the old one is deleted only after that. A
  * folder that cannot be moved is left exactly as it was. A swap that loses to another publish
  * puts back what it moved, or, when the other publish's bundle is already in place, leaves that
- * one live and says so. Either way nothing of this publish is left behind.
+ * one live and says so. Either way nothing of this publish is left behind, or the sentence says
+ * where it was left.
+ *
+ * Swaps of one destination run one at a time within a process. On Windows two renames of one
+ * folder to two names can both succeed, the second moving the folder from where the first put
+ * it, so two publishes each believed they had set the live version aside; with a third publish
+ * in between, one put back the version all three had replaced and another deleted a bundle its
+ * operator had been told was published. Measured, three publishes in one process went wrong in
+ * 6 rounds of 100 and two publishes never did. Across processes the same swap is
+ * what decides it, and the check that the folder is where this publish put it is what notices
+ * the rename that moved it.
  */
 async function swapIn(staging: string, outDir: string, replacing: boolean, suffix: string): Promise<void> {
   const aside = `${outDir}.${ASIDE}${suffix}`;
@@ -173,17 +184,29 @@ async function swapIn(staging: string, outDir: string, replacing: boolean, suffi
   };
   await mkdir(dirname(outDir), { recursive: true });
   if (replacing) {
+    let moved = true;
     try {
       await rename(outDir, aside);
     } catch (error) {
-      await rm(staging, { recursive: true, force: true });
-      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
         throw new Error(
-          `another publish of ${basename(outDir)} was replacing it at the same moment, so this one was not published. Publish again if this version should be the live one.`,
+          `the published folder at ${outDir} could not be moved aside to be replaced (${reason(error)}), so it was left exactly as it was and nothing was published. Something has that folder or a file in it open; close it and publish again.${await discard(staging)}`,
         );
       }
+      moved = false;
+    }
+    // A rename that succeeded and left nothing where it said: another publish's rename of the
+    // same folder took it from here. Only nothing there means that. A look that fails some other
+    // way says nothing about where the folder is, and giving up then would leave what was live
+    // set aside with nothing in its place.
+    if (moved)
+      moved = await stat(aside).then(
+        () => true,
+        (error: NodeJS.ErrnoException) => error?.code !== "ENOENT",
+      );
+    if (!moved) {
       throw new Error(
-        `the published folder at ${outDir} could not be moved aside to be replaced (${reason(error)}), so it was left exactly as it was and nothing was published. Something has that folder or a file in it open; close it and publish again.`,
+        `another publish of ${basename(outDir)} was replacing it at the same moment, so this one was not published. Publish again if this version should be the live one.${await discard(staging)}`,
       );
     }
   }
@@ -197,7 +220,7 @@ async function swapIn(staging: string, outDir: string, replacing: boolean, suffi
         () => false,
       );
     }
-    await rm(staging, { recursive: true, force: true });
+    const left = await discard(staging);
     const anotherIsLive =
       !restored &&
       (await readdir(outDir).then(
@@ -208,18 +231,130 @@ async function swapIn(staging: string, outDir: string, replacing: boolean, suffi
       // The copy moved aside is older than the bundle now live, and is nobody's to keep.
       if (replacing) await rm(aside, { recursive: true, force: true }).catch(() => undefined);
       throw new Error(
-        `another publish of ${basename(outDir)} finished at the same moment, and its version is the live one, so this one was not published. Publish again if this version should be the live one.`,
+        `another publish of ${basename(outDir)} finished at the same moment, and its version is the live one, so this one was not published. Publish again if this version should be the live one.${left}`,
       );
     }
     throw new Error(
-      replacing && !restored
-        ? `the new bundle could not be moved into ${outDir} (${reason(error)}), and the version that was live could not be put back either: it is at ${aside}. Rename it back to ${basename(outDir)} to restore it.`
-        : `the new bundle could not be moved into ${outDir} (${reason(error)}), so nothing was published${replacing ? " and the version that was live is unchanged" : ""}.`,
+      `${
+        replacing && !restored
+          ? `the new bundle could not be moved into ${outDir} (${reason(error)}), and the version that was live could not be put back either: it is at ${aside}. Rename it back to ${basename(outDir)} to restore it.`
+          : `the new bundle could not be moved into ${outDir} (${reason(error)}), so nothing was published${replacing ? " and the version that was live is unchanged" : ""}.`
+      }${left}`,
     );
   }
   if (replacing) {
     // Best effort. A copy that cannot be deleted now is swept by a later publish.
     await rm(aside, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * Remove an unfinished bundle, saying where it was left when it could not be.
+ *
+ * Unguarded, a removal that failed replaced the sentence it was cleaning up after: a scanner
+ * holding one freshly written file turned "nothing was published" into a raw EBUSY naming an
+ * internal path, and the unfinished bundle stayed in the served tree.
+ */
+async function discard(staging: string): Promise<string> {
+  try {
+    // Retried, because what holds a new file on Windows usually lets go within a moment.
+    await rm(staging, { recursive: true, force: true, maxRetries: 4, retryDelay: 100 });
+    return "";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code ?? "";
+    return ` The unfinished bundle could not be removed${code === "" ? "" : ` (${code})`} and is at ${staging}; a later publish of this experience removes it once it is an hour old.`;
+  }
+}
+
+/** Swaps waiting on one another, one queue per destination. */
+const swaps = new Map<string, Promise<void>>();
+
+/** Run a swap after every earlier swap of the same destination in this process. */
+function inTurnForSwap<T>(outDir: string, work: () => Promise<T>): Promise<T> {
+  const absolute = resolve(outDir);
+  const key =
+    process.platform === "win32" || process.platform === "darwin" ? absolute.toLowerCase() : absolute;
+  const previous = swaps.get(key) ?? Promise.resolve();
+  const result = previous.then(work, work);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  swaps.set(key, settled);
+  void settled.then(() => {
+    if (swaps.get(key) === settled) swaps.delete(key);
+  });
+  return result;
+}
+
+/**
+ * Refuse a target whose stored report does not say it can be printed at the width the manifest
+ * declares. Everything is held to `isCurrentReport`, which the console's rebuild uses too; the
+ * checks before it say which earlier build wrote a report, in words an operator can act on.
+ */
+function checkReadiness(target: { id: string; physicalWidthMm: number }, report: unknown): void {
+  // A report that is not an object, `null` among them, reached the checks below as a raw
+  // TypeError naming a property of null.
+  const fields =
+    typeof report === "object" && report !== null && !Array.isArray(report)
+      ? (report as Record<string, unknown>)
+      : null;
+  if (fields === null) {
+    throw new Error(
+      `${target.id} carries a print readiness report that is not one at all. Compile it again before publishing.`,
+    );
+  }
+  // A report with no distance was written by the build whose width was computed against the
+  // sensor's pixels rather than the recogniser's, so the width in it is about four times
+  // too small and this comparison would pass a piece that cannot be read. A gate that is
+  // four times too lenient is worse than an absent one, because it reads as a gate.
+  if (!carriesItsDistance(fields)) {
+    throw new Error(
+      `${target.id} was compiled by an older build, whose minimum print width was too small to trust. Compile it again before publishing.`,
+    );
+  }
+  // A report that never asked the recogniser is from the build whose readiness was inferred
+  // from how often features had look-alikes, a figure that fell as a design repeated: it
+  // called a sheet of sixteen identical postcards ready for press at a width where it is not
+  // found. Its pass is not a pass this gate can stand behind.
+  if (fields.recognition === undefined) {
+    throw new Error(
+      `${target.id} was compiled before readiness was checked against the recogniser, and its verdict cannot be trusted. Compile it again before publishing.`,
+    );
+  }
+  // A report without the repetition measure is from the build that settled a design printed
+  // twice by whether one look in twenty landed on the wrong copy, which turned on the export
+  // width: the same postcard printed twice was ready at eleven of seventeen.
+  if (typeof fields.repetition !== "object" || fields.repetition === null) {
+    throw new Error(
+      `${target.id} was compiled before readiness checked whether the design repeats itself, when a design printed twice could be called ready for press. Compile it again before publishing.`,
+    );
+  }
+  // A passing report with no width has nothing for the comparison below to compare, and
+  // was how a NaN width got through: written to JSON it is null, and a gate that only
+  // compares numbers read that as nothing to say.
+  if (fields.pass === true && !(typeof fields.minimumWidthMm === "number" && fields.minimumWidthMm > 0)) {
+    throw new Error(
+      `${target.id} claims to be ready for press and carries no print width, so nothing says how small it can be printed. Compile it again.`,
+    );
+  }
+  if (!isCurrentReport(fields)) {
+    throw new Error(
+      `${target.id} carries a print readiness report this build does not stand behind: written by an earlier build, whose verdict could turn on a millimetre of scan distance, or edited by hand. Compile it again before publishing.`,
+    );
+  }
+  // Refused before the width is looked at, because a failing report has no width: it is
+  // null, and comparing against null compares nothing.
+  if (!fields.pass) {
+    throw new Error(
+      `${target.id} did not pass its print readiness check, so it cannot be published. Compile it again and read what it says about the artwork.`,
+    );
+  }
+  const needs = fields.minimumWidthMm as number;
+  if (target.physicalWidthMm < needs) {
+    throw new Error(
+      `${target.id} is declared ${target.physicalWidthMm} mm wide, and its artwork needs at least ${needs} mm to be read at ${fields.scanDistanceMm} mm, the distance it was compiled for`,
+    );
   }
 }
 
@@ -244,6 +379,16 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   // manifest states the width it will actually be printed at. Nothing else in the system
   // sees both numbers.
   for (const target of manifest.targets) {
+    // Read the way the published page will read it, before anything else is asked of it, so a
+    // target that is not a target at all is refused with the runtime's own sentence. `null`
+    // reached the report checks below and threw a TypeError naming the `in` operator.
+    try {
+      fromTargetFile(options.targets[target.id]);
+    } catch (error) {
+      throw new Error(
+        `the compiled target for ${target.id} cannot be read by the runtime, so publishing it would ship a bundle that recognises nothing: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     const compiled = options.targets[target.id] as {
       features?: unknown[];
       report?: unknown;
@@ -251,71 +396,21 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     // Nothing to recognise with. The parser accepts an empty list, because an array of zero
     // is a legal array, so a target truncated in a copy or built from artwork that produced
     // nothing publishes a bundle that points a camera at a page and can never answer.
-    if (Array.isArray(compiled?.features) && compiled.features.length === 0) {
+    if (Array.isArray(compiled.features) && compiled.features.length === 0) {
       throw new Error(
         `${target.id} has no features in it, so nothing in a camera frame could ever match it. Compile it again.`,
       );
     }
-    // A target with no report at all was never claimed to have been checked, and this gate
-    // has nothing to say about it. Everything else is held to `isCurrentReport`, the one
-    // definition the console's rebuild also uses: this gate had its own reading of the fields,
-    // and the two disagreed on ten of seventeen shapes a stored report can take, so a target the
-    // console would have rebuilt was published as it stood.
-    if (compiled !== undefined && "report" in compiled && compiled.report !== undefined) {
-      const report = compiled.report as Record<string, unknown> | null;
-      const fields = typeof report === "object" && report !== null ? report : null;
-      // A report that is not an object, `null` among them, reached the checks below as a raw
-      // TypeError naming a property of null.
-      if (fields === null) {
-        throw new Error(
-          `${target.id} carries a print readiness report that is not one at all. Compile it again before publishing.`,
-        );
-      }
-      // A report with no distance was written by the build whose width was computed against the
-      // sensor's pixels rather than the recogniser's, so the width in it is about four times
-      // too small and this comparison would pass a piece that cannot be read. A gate that is
-      // four times too lenient is worse than an absent one, because it reads as a gate.
-      if (!carriesItsDistance(fields)) {
-        throw new Error(
-          `${target.id} was compiled by an older build, whose minimum print width was too small to trust. Compile it again before publishing.`,
-        );
-      }
-      // A report that never asked the recogniser is from the build whose readiness was inferred
-      // from how often features had look-alikes, a figure that fell as a design repeated: it
-      // called a sheet of sixteen identical postcards ready for press at a width where it is not
-      // found. Its pass is not a pass this gate can stand behind.
-      if (fields.recognition === undefined) {
-        throw new Error(
-          `${target.id} was compiled before readiness was checked against the recogniser, and its verdict cannot be trusted. Compile it again before publishing.`,
-        );
-      }
-      // A passing report with no width has nothing for the comparison below to compare, and
-      // was how a NaN width got through: written to JSON it is null, and a gate that only
-      // compares numbers read that as nothing to say.
-      if (fields.pass === true && !(typeof fields.minimumWidthMm === "number" && fields.minimumWidthMm > 0)) {
-        throw new Error(
-          `${target.id} claims to be ready for press and carries no print width, so nothing says how small it can be printed. Compile it again.`,
-        );
-      }
-      if (!isCurrentReport(fields)) {
-        throw new Error(
-          `${target.id} carries a print readiness report this build does not stand behind: written by an earlier build, whose verdict could turn on a millimetre of scan distance, or edited by hand. Compile it again before publishing.`,
-        );
-      }
-      // Refused before the width is looked at, because a failing report has no width: it is
-      // null, and comparing against null compares nothing.
-      if (!fields.pass) {
-        throw new Error(
-          `${target.id} did not pass its print readiness check, so it cannot be published. Compile it again and read what it says about the artwork.`,
-        );
-      }
-      const needs = fields.minimumWidthMm as number;
-      if (target.physicalWidthMm < needs) {
-        throw new Error(
-          `${target.id} is declared ${target.physicalWidthMm} mm wide, and its artwork needs at least ${needs} mm to be read at ${fields.scanDistanceMm} mm, the distance it was compiled for`,
-        );
-      }
+    // A target with no report was let through, as never claimed to have been checked, and that
+    // made removing one key from a target file the way past every check below: a sheet the
+    // compiler refused published clean. Everything is held to `isCurrentReport`, the one
+    // definition the console's rebuild also uses.
+    if (compiled.report === undefined) {
+      throw new Error(
+        `${target.id} carries no print readiness report, so nothing says its artwork was checked against the width it is declared at. Compile it again before publishing.`,
+      );
     }
+    checkReadiness(target, compiled.report);
   }
 
   const assets: CopiedAsset[] = [];
@@ -354,10 +449,22 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   try {
     await write(staging);
   } catch (error) {
-    await rm(staging, { recursive: true, force: true });
+    // The build's own reason first, with where its leftovers are if they could not be removed.
+    const left = await discard(staging);
+    if (left !== "" && error instanceof Error) error.message += left;
     throw error;
   }
-  await swapIn(staging, options.outDir, replacing, suffix);
+  await inTurnForSwap(options.outDir, async () => {
+    // Asked again in turn: a publish of the same destination that swapped in while this one was
+    // building has put a bundle there, which this one now replaces rather than collides with.
+    const now =
+      replacing ||
+      (await readdir(options.outDir).then(
+        () => true,
+        () => false,
+      ));
+    await swapIn(staging, options.outDir, now, suffix);
+  });
 
   return result;
 
