@@ -9,7 +9,7 @@ import { bundle } from "../src/bundle.js";
 import { currentReport } from "./current-report.js";
 
 /** A report the compiler writes, so the publish gate lets the probes through to what they test. */
-const REPORT = await currentReport({ minimumWidthMm: 100 });
+const REPORT = await currentReport();
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO = join(here, "../../..");
@@ -242,6 +242,7 @@ describe("a published bundle", () => {
 
   it("ships nothing a browser would treat as a document, whatever was handed to it", async () => {
     const outcomes: string[] = [];
+    const refusals: Array<[string, string]> = [];
     for (const [name, label, content] of PAYLOADS) {
       const started = Date.now();
       const result = await publish(name, content);
@@ -255,6 +256,7 @@ describe("a published bundle", () => {
       expect(took, `${label}: publishing took ${took} ms`).toBeLessThan(RENDER_TIMEOUT_MS + 10_000);
       if ("refused" in result) {
         outcomes.push(`refused   ${name.padEnd(14)} ${label}`);
+        refusals.push([name, result.refused]);
         continue;
       }
       const documents: string[] = [];
@@ -272,6 +274,18 @@ describe("a published bundle", () => {
     }
     // Printed so the run shows what happened to each, rather than only that nothing broke.
     console.log(outcomes.join("\n"));
+    // A refusal counts only when it is about the file. When the gate refused the fixture's
+    // report, every payload here read as refused and this passed, testing nothing at all; so the
+    // ordinary exports must ship, and no refusal may be the report's.
+    for (const [name, reason] of refusals) {
+      expect(reason, `${name} was refused for something other than itself`).not.toContain(
+        "print readiness report",
+      );
+    }
+    for (const name of ["inkscape.svg", "affinity.svg"]) {
+      const shipped = outcomes.some((line) => line.startsWith(`rendered  ${name} `));
+      expect(shipped, `${name} did not ship`).toBe(true);
+    }
   }, 240_000);
 
   it("renders the example overlay to a PNG that still holds the drawing", async () => {
