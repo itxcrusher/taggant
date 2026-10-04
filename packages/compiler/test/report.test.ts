@@ -894,10 +894,7 @@ describe("what a stored report has to hold before it is trusted", () => {
       ["a smallest size larger than the artwork", { ...failing, smallestUsableScale: 1.5 }],
       ["no points needed", { ...report, recognition: { ...recognition, needed: 0 } }],
       ["more widths agreeing than shown", { ...report, recognition: { ...recognition, widthsAgreed: 6 } }],
-      [
-        "more widths than are ever shown",
-        { ...failing, recognition: { ...failing.recognition, widths: 6 } },
-      ],
+      ["more widths than are ever shown", { ...failing, recognition: { ...failing.recognition, widths: 6 } }],
       [
         "more looks in the wrong place than looks",
         {
