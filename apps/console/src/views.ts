@@ -7,7 +7,7 @@
  * this quietly in the background, so it is done here and it is done everywhere.
  */
 
-import type { Report } from "@taggant/compiler";
+import { type Report, SCAN_DISTANCE_MM, describeRepetition } from "@taggant/compiler";
 import { manifestSchema } from "@taggant/manifest";
 import { DEFAULT_SCAN_DISTANCE_MM } from "./operations.js";
 
@@ -132,20 +132,23 @@ function reportRecord(report: Report): string {
     ["areas reached", `${report.areasWithFeatures} of ${report.areas}`],
     ["analysed at", `${report.analysisWidth} px across`],
     // Only for artwork that passed. A refused report still carries what the corners said, and it
-    // read "50% of that" beside a recogniser that found nothing at any size.
+    // read "50% of that" beside a recogniser that found nothing at any size. Said without a
+    // cause, which is in the reasons: "not ready at any size" sat beside "Read it from closer"
+    // for a postcard that is ready from closer.
     [
       "smallest usable size",
       report.pass
         ? `${Math.round(report.smallestUsableScale * 100)}% of that`
-        : "none, it is not ready at any size",
+        : "none, for the reasons above",
     ],
-    // What decided the verdict, in place of the repetition figure that used to sit here: it
-    // fell as a design repeated, so it was a measurement of the wrong thing beside the
-    // sentence it did not decide.
+    ["maps onto itself", describeRepetition(report)],
+    // What decided the verdict, in place of the figure that used to sit here: it fell as a
+    // design repeated, so it was a measurement of the wrong thing beside the sentence it did
+    // not decide.
     [
       "recognised",
       report.recognition === null
-        ? "not asked, the artwork did not get that far"
+        ? "not asked, for the reasons above"
         : `every turn found it with ${report.recognition.needed} or more points agreeing at ${report.recognition.widthsAgreed} of ${report.recognition.widths} widths${report.pass ? "" : " at the size that came closest"}, ${report.recognition.misplaced === 0 ? "none in the wrong place" : `${report.recognition.misplaced} looks in the wrong place`}`,
     ],
     ["score", `${report.score} of 100, passing at 60`],
@@ -170,10 +173,12 @@ function reportRecord(report: Report): string {
 export function verdict(report: Report): string {
   // Two different sentences rather than one with a hole in it. Artwork that does not pass
   // has no width, and the hole was filled with a phrase that read, in full, "Print it at
-  // least no width, because no width would fix it."
+  // least no width, because no width would fix it." Not "the artwork has to change", which it
+  // said: a distance past the widest piece a manifest can declare is refused too, and the fix
+  // there is to read it from closer.
   const line =
     report.minimumWidthMm === null
-      ? "No print width would fix this. The artwork has to change."
+      ? "Not printable until it passes. The reasons are below."
       : `Print it at least ${report.minimumWidthMm} mm wide to be read from ${
           report.scanDistanceMm
         } mm away, being ${Math.round(report.smallestUsableScale * report.analysisWidth)} px across the artwork from left to right.`;
@@ -199,10 +204,12 @@ export interface TargetView {
   scanDistanceMm?: number | undefined;
   /**
    * Set when a compiled target exists and its report is not one this build stands behind:
-   * `width` when it was written before the width carried its distance, and was about four times
-   * too small; `verdict` when the width is sound and the verdict came from a check since replaced.
+   * `broken` when the report is not an object at all, or the target is not; `width` when it was
+   * written before the width carried its distance, and was about four times too small; `verdict`
+   * for anything else, an earlier build's or a hand-edited report, whose verdict this build does
+   * not stand behind. It said the width was sound there, which a corrupt width made false.
    */
-  staleReport?: "width" | "verdict" | undefined;
+  staleReport?: "broken" | "width" | "verdict" | undefined;
   /** Set when the compiled target asks for more width than the manifest says it is printed at. */
   tooSmall?: string | undefined;
 }
@@ -229,18 +236,20 @@ export function experiencePage(view: ExperienceView): string {
   ${
     target.report
       ? verdict(target.report)
-      : target.staleReport === "width"
-        ? `<div class="notice gap-md"><p>Compiled by an older build, whose minimum print width was too small to trust. Compile it again to see what this artwork needs.</p></div>`
-        : target.staleReport === "verdict"
-          ? `<div class="notice gap-md"><p>Compiled by an earlier build, whose verdict on this artwork came from a check that has since been replaced. Compile it again to see what this artwork needs.</p></div>`
-          : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
+      : target.staleReport === "broken"
+        ? `<div class="notice gap-md"><p>The compiled target carries a print readiness report that is not one at all. Compile it again to see what this artwork needs.</p></div>`
+        : target.staleReport === "width"
+          ? `<div class="notice gap-md"><p>Compiled by an older build, whose minimum print width was too small to trust. Compile it again to see what this artwork needs.</p></div>`
+          : target.staleReport === "verdict"
+            ? `<div class="notice gap-md"><p>Compiled by an earlier build, or changed since, and this build does not stand behind its verdict. Compile it again to see what this artwork needs.</p></div>`
+            : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
   }
   ${target.tooSmall ? `<div class="notice bad gap-md"><p>${esc(target.tooSmall)}</p></div>` : ""}
   <form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/compile" class="gap-md">
     <div class="row bottom">
       <div class="field narrow">
         <label for="d-${esc(target.id)}">Read from, mm</label>
-        <input id="d-${esc(target.id)}" name="scanDistanceMm" type="number" min="50" max="5000" step="10" value="${esc(target.scanDistanceMm ?? target.report?.scanDistanceMm ?? DEFAULT_SCAN_DISTANCE_MM)}">
+        <input id="d-${esc(target.id)}" name="scanDistanceMm" type="number" min="${SCAN_DISTANCE_MM.nearest}" max="${SCAN_DISTANCE_MM.furthest}" step="10" value="${esc(target.scanDistanceMm ?? target.report?.scanDistanceMm ?? DEFAULT_SCAN_DISTANCE_MM)}">
       </div>
       <button type="submit">${target.report || target.staleReport ? "Compile again" : "Compile"}</button>
     </div>

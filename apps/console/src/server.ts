@@ -12,7 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
-import { carriesItsDistance, isCurrentReport } from "@taggant/compiler";
+import { type Report, carriesItsDistance, isCurrentReport } from "@taggant/compiler";
 import { manifestSchema } from "@taggant/manifest";
 import { DEFAULT_SCAN_DISTANCE_MM, bundleDirFor, compile, publish, registerCode } from "./operations.js";
 import { STYLESHEET } from "./style.js";
@@ -97,10 +97,31 @@ const MOST_NOTICES = 1000;
  */
 const LONGEST_NOTICE = 2000;
 
-const shortened = (text: string): string =>
-  text.length <= LONGEST_NOTICE
-    ? text
-    : `${text.slice(0, LONGEST_NOTICE / 2)} [${text.length - LONGEST_NOTICE} characters not shown] ${text.slice(-LONGEST_NOTICE / 2)}`;
+function shortened(text: string): string {
+  if (text.length <= LONGEST_NOTICE) return copied(text);
+  let head = LONGEST_NOTICE / 2;
+  let tail = text.length - LONGEST_NOTICE / 2;
+  // Never between the two halves of a character written as a pair, which shows as a mark that
+  // stands for nothing.
+  if (isFirstHalf(text.charCodeAt(head - 1))) head--;
+  if (isSecondHalf(text.charCodeAt(tail))) tail++;
+  return copied(`${text.slice(0, head)} [${tail - head} characters not shown] ${text.slice(tail)}`);
+}
+
+const isFirstHalf = (code: number): boolean => code >= 0xd800 && code <= 0xdbff;
+const isSecondHalf = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
+
+/**
+ * A copy of the text that holds nothing else.
+ *
+ * A slice can be a view of the string it was cut from, and a view keeps all of that string alive:
+ * the cut above kept 2000 characters on screen and the whole posted value in memory, so five
+ * refused 100 MB fields took the heap from 10 to 509 MB, which is what the cut was for. Encoding
+ * and decoding makes a string of its own.
+ */
+function copied(text: string): string {
+  return Buffer.from(text, "utf16le").toString("utf16le");
+}
 
 /**
  * A one-shot message shown after a redirect.
@@ -135,6 +156,9 @@ class Notices {
   }
 
   take(token: string | null): Notice | undefined {
+    // Swept here as well, so expired notices go when pages are read and not only when another
+    // notice is made.
+    this.sweep();
     if (!token) return undefined;
     const found = this.held.get(token);
     this.held.delete(token);
@@ -276,6 +300,7 @@ async function readForm(
   // had been refused at 64 KB in a tenth of one.
   const body = await readBody(request, carries === "a file" && multipart ? MAX_BODY_BYTES : MAX_FORM_BYTES);
   if (multipart) {
+    checkMultipart(body, type);
     try {
       return await new Request("http://console.invalid/", {
         method: "POST",
@@ -294,6 +319,64 @@ async function readForm(
   const form = new FormData();
   for (const [key, value] of new URLSearchParams(body.toString("utf8"))) form.append(key, value);
   return form;
+}
+
+/** The most parts a multipart form may have. Every form here sends four at most. */
+const MOST_PARTS = 16;
+
+/** The longest a part's headers may run, in bytes; a browser's are a few hundred. */
+const MOST_HEADER_BYTES = 16 * 1024;
+
+/**
+ * Refuse a multipart body shaped to hold the console up, before the parser sees it.
+ *
+ * `Request.formData()` parses a whole body in one synchronous step, and the large limit went to
+ * any multipart body on a route that takes a file. Urlencoded text had been stopped there and the
+ * same text sent as multipart went through: 250 MB as five million tiny parts held every other
+ * request for 29.7 s, long enough for a second console to take this one's lock as abandoned, and
+ * as a single field for 4.0 s. So the parts are counted, and a part with no file in it is held to
+ * the limit a form without a file has, in one pass over the body. A file part is what the large
+ * limit is for and keeps it.
+ */
+function checkMultipart(body: Buffer, contentType: string): void {
+  const found = contentType.match(/boundary=(?:"([^"]+)"|([^;\s]+))/i);
+  const boundary = found?.[1] ?? found?.[2];
+  // No boundary is a body the parser refuses, in its own words.
+  if (boundary === undefined) return;
+  const delimiter = Buffer.from(`--${boundary}`, "latin1");
+  let at = body.indexOf(delimiter);
+  let parts = 0;
+  while (at !== -1) {
+    const next = body.indexOf(delimiter, at + delimiter.length);
+    if (next === -1) break;
+    parts++;
+    if (parts > MOST_PARTS) {
+      throw new WorkspaceError(
+        `that form has more than ${MOST_PARTS} parts, and no form here sends more than four`,
+      );
+    }
+    // Searched within this part only, so a part with no end to its headers costs its own length.
+    const part = body.subarray(at, next);
+    const headersEnd = part.indexOf("\r\n\r\n");
+    // A part's headers are a few hundred bytes from any browser. Read as text whatever their
+    // length, a part whose headers ran to the end of a 250 MB body became one 250 MB string.
+    if (headersEnd > MOST_HEADER_BYTES) {
+      throw new WorkspaceError(
+        `that form has a part whose headers run to ${describeSize(headersEnd)}, where a browser sends a few hundred bytes`,
+      );
+    }
+    if (headersEnd !== -1) {
+      const carriesFile = /filename\*?=/i.test(part.subarray(0, headersEnd).toString("latin1"));
+      // The two bytes before the next delimiter end the part rather than belonging to it.
+      const length = part.length - (headersEnd + 4) - 2;
+      if (!carriesFile && length > MAX_FORM_BYTES) {
+        throw new WorkspaceError(
+          `a field of ${describeSize(length)} was sent where a few words are expected; a field without a file is limited to ${describeSize(MAX_FORM_BYTES)}`,
+        );
+      }
+    }
+    at = next;
+  }
 }
 
 /**
@@ -355,23 +438,29 @@ export function createConsole(options: ConsoleOptions): Server {
         contentCount: target.content.length,
       };
       if (await workspace.hasTarget(experience.id, target.id)) {
-        const compiled = (await workspace.readTarget(experience.id, target.id)) as {
-          report?: TargetView["report"];
-          scanDistanceMm?: number;
-        };
+        // A target file that cannot be read is said so on its own card, rather than taking the
+        // whole page with it.
+        const compiled = await workspace.readTarget(experience.id, target.id).catch(() => null);
+        const isObject = (value: unknown): value is Record<string, unknown> =>
+          typeof value === "object" && value !== null && !Array.isArray(value);
+        const report = isObject(compiled) ? compiled.report : undefined;
         // Shown only when this build would stand behind it. An older one holds a width about
         // four times too small, or a readiness inferred from a figure that called a sheet of
         // identical labels ready for press, and the page presents both as the instruction a
         // printer follows, so displaying it is worse than displaying nothing.
-        if (compiled.report && !isCurrentReport(compiled.report)) {
-          // Said by what is wrong with it. Every stale report was called too small to trust,
-          // which is true of the oldest and false of one whose width was right and whose
-          // verdict came from a check this build replaced.
-          view.staleReport = carriesItsDistance(compiled.report) ? "verdict" : "width";
-        } else if (compiled.report) {
-          view.report = compiled.report;
-          const needed = compiled.report.minimumWidthMm;
-          if (compiled.report.pass && needed !== null && target.physicalWidthMm < needed) {
+        //
+        // Said by what is wrong with it, and decided by whether the key is there rather than by
+        // whether its value is truthy: `null`, `0`, `false` and `""` read as not compiled yet,
+        // and a string read as a width too small to trust. No report at all is not compiled by
+        // anything this build stands behind, and publishing compiles it first, as the page says.
+        if (!isObject(compiled)) {
+          view.staleReport = "broken";
+        } else if (report !== undefined && !isCurrentReport(report)) {
+          view.staleReport = !isObject(report) ? "broken" : carriesItsDistance(report) ? "verdict" : "width";
+        } else if (report !== undefined) {
+          view.report = report as Report;
+          const needed = view.report.minimumWidthMm;
+          if (view.report.pass && needed !== null && target.physicalWidthMm < needed) {
             // The one thing a person can get wrong here that a press run makes permanent.
             view.tooSmall = `This target is set to print ${target.physicalWidthMm} mm wide and the compile says it needs at least ${needed} mm at that reading distance. Printed as it stands it will not be recognised.`;
           }

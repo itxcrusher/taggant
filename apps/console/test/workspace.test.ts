@@ -1,7 +1,9 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 import { afterEach, describe, expect, it } from "vitest";
+import { canonical, queueKey } from "../src/in-turn.js";
 import {
   ID_PATTERN,
   ID_PATTERN_ATTRIBUTE,
@@ -229,6 +231,63 @@ describe("writing", () => {
     expect(stored.sort()).toEqual(["logo-2.png", "logo.png"]);
   });
 
+  it("gives a new upload its own name when the manifest holds that name in escaped form", async () => {
+    // The bundler decodes a manifest's paths before it reads them, so `artwork/logo%2Epng` is
+    // `artwork/logo.png` to it. Compared undecoded, an upload was stored as `logo.png` while a
+    // target named it escaped, and the bundler gave that target the new upload.
+    const store = await workspace();
+    await store.create("pack", "Pack");
+    await store.save("pack", {
+      schemaVersion: "1.0.0",
+      id: "pack",
+      targets: [{ id: "front", source: "artwork/logo%2Epng", physicalWidthMm: 120, content: [] }],
+    });
+    const stored = await store.storeFile("pack", "artwork", "logo.png", new Uint8Array([1]));
+    expect(stored).toBe("artwork/logo-2.png");
+  });
+
+  it("waits out a reader holding the manifest open, rather than failing the write", async () => {
+    // On Windows a rename onto a file another handle holds is refused, even when the holder is
+    // only reading it, and a page view reads the manifest: a write made while one was being
+    // viewed was a 500 with an EPERM stack. Elsewhere this cannot fail, and passes there.
+    const store = await workspace();
+    await store.create("pack", "Pack");
+    const reader = await open(join(store.root, "pack", "manifest.json"), "r");
+    const letGo = setTimeout(() => void reader.close(), 150);
+    try {
+      await store.update("pack", (manifest) => ({ ...manifest, title: "Changed" }));
+    } finally {
+      clearTimeout(letGo);
+      await reader.close().catch(() => undefined);
+    }
+    expect(JSON.parse(await readFile(join(store.root, "pack", "manifest.json"), "utf8")).title).toBe(
+      "Changed",
+    );
+  });
+
+  it("says so in a sentence when a reader holds it open for longer than it waits", async (context) => {
+    // Only Windows refuses the rename, so only there is there anything to wait out.
+    if (process.platform !== "win32") {
+      context.skip();
+      return;
+    }
+    const store = await workspace();
+    await store.create("pack", "Pack");
+    const reader = await open(join(store.root, "pack", "manifest.json"), "r");
+    try {
+      await expect(store.update("pack", (manifest) => ({ ...manifest, title: "Changed" }))).rejects.toThrow(
+        WorkspaceError,
+      );
+      await expect(store.update("pack", (manifest) => ({ ...manifest, title: "Changed" }))).rejects.toThrow(
+        /held it open for over a second/,
+      );
+    } finally {
+      await reader.close();
+    }
+    const left = await readdir(join(store.root, "pack"));
+    expect(left.filter((name) => name.includes(".writing-"))).toEqual([]);
+  });
+
   it("leaves nothing behind when a write fails", async () => {
     const store = await workspace();
     await store.create("pack", "Pack");
@@ -236,9 +295,32 @@ describe("writing", () => {
     // The staging file it built beside it must not survive that.
     await rm(join(store.root, "pack", "manifest.json"));
     await mkdir(join(store.root, "pack", "manifest.json"), { recursive: true });
-    await expect(store.save("pack", { schemaVersion: "1.0.0", id: "pack", targets: [] })).rejects.toThrow();
+    const refused = await store.save("pack", { schemaVersion: "1.0.0", id: "pack", targets: [] }).then(
+      () => null,
+      (error: Error) => error.message,
+    );
+    expect(refused, "a write onto a folder succeeded").not.toBeNull();
+    // A folder where the file goes is not another program holding it, however the refusal reads
+    // on Windows, where it is the same code a reader causes; waiting would not change it.
+    expect(refused).not.toContain("held it open");
     const left = await readdir(join(store.root, "pack"));
     expect(left.filter((name) => name.includes(".writing-"))).toEqual([]);
+  });
+
+  it("names a file that does not exist yet as Windows will store it", async (context) => {
+    // Windows drops trailing dots and spaces from a name it creates, so `links.json.` is written
+    // to `links.json`, and before it existed its lock was taken under the name as typed: a
+    // console given each spelling opened the same table with a lock each.
+    if (process.platform !== "win32") {
+      context.skip();
+      return;
+    }
+    const folder = await mkdtemp(join(tmpdir(), "taggant-names-"));
+    made.push(folder);
+    const plain = canonical(join(folder, "links.json"));
+    expect(canonical(join(folder, "links.json."))).toBe(plain);
+    expect(canonical(join(folder, "links.json. ."))).toBe(plain);
+    expect(queueKey(join(folder, "links.json."))).toBe(queueKey(join(folder, "links.json")));
   });
 
   it("refuses to write through a link that leaves the workspace", async () => {

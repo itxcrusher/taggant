@@ -7,11 +7,13 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { bundle, realWithin } from "@taggant/bundler";
 import {
+  ArtworkError,
   type Report,
+  SCAN_DISTANCE_MM,
   carriesItsDistance,
   compileTarget,
   distanceBehind,
@@ -27,7 +29,7 @@ import {
 } from "@taggant/resolver";
 import { fromTargetFile } from "@taggant/vision";
 import { canonical, inTurn, queueKey } from "./in-turn.js";
-import { type Experience, type Workspace, WorkspaceError, publishable } from "./workspace.js";
+import { type Experience, type Workspace, WorkspaceError, publishable, replaceFile } from "./workspace.js";
 
 /**
  * Distance a person is expected to hold the camera from the print, in millimetres.
@@ -68,11 +70,35 @@ export async function compile(
   if (!target) {
     throw new WorkspaceError(`${experience.id} has no target called ${targetId}`);
   }
-  if (!Number.isFinite(scanDistanceMm) || scanDistanceMm < 50 || scanDistanceMm > 5000) {
+  // The compiler's range, not one of this console's own. It was 5000 here and 10000 on the
+  // command line, so a target compiled at six metres could not be published from here: the
+  // publish found it needed compiling again and this refused the distance it was compiled at.
+  const { nearest, furthest } = SCAN_DISTANCE_MM;
+  if (!Number.isFinite(scanDistanceMm) || scanDistanceMm < nearest || scanDistanceMm > furthest) {
     throw new WorkspaceError(
-      `a scan distance of ${scanDistanceMm} mm is not one a person could hold: 50 to 5000`,
+      `a scan distance of ${scanDistanceMm} mm is not one a person could hold: ${nearest} to ${furthest}`,
     );
   }
+  // One compile of a target at a time, in the order they were asked for. The recogniser hands
+  // the event loop back between looks, so two compiles of one target interleave, and the one
+  // that finished last was the one stored: a compile at 5000 mm sent after one at 190 needs
+  // fewer looks, finished first, and was overwritten, so the operator's last choice was undone
+  // with nothing saying so, and it did in five tries out of five.
+  return await inTurn(compileQueues, `${queueKey(experience.directory)}\u0000${targetId}`, () =>
+    compileNow(workspace, experience, target, scanDistanceMm),
+  );
+}
+
+/** Compiled targets being written, one queue per target, so the last asked for is the last kept. */
+const compileQueues = new Map<string, Promise<void>>();
+
+async function compileNow(
+  workspace: Workspace,
+  experience: Experience,
+  target: { id: string; source: string },
+  scanDistanceMm: number,
+): Promise<CompileOutcome> {
+  const targetId = target.id;
   // Resolved the way the bundler resolves it, so artwork that compiles here is artwork
   // that publishes. `realWithin` refuses a path that leaves the experience even through
   // a link.
@@ -94,16 +120,18 @@ export async function compile(
   }
   // And the compile itself, which is where a file that is not an image is found out: the
   // decoder's own error reached the operator as a 500 with a stack trace, from a form whose
-  // upload had been accepted a moment before.
+  // upload had been accepted a moment before. Only the artwork's own faults become a sentence,
+  // told apart by the compiler's type for them rather than by the decoder's wording, which has
+  // more forms than a pattern here knew. Anything else is a fault and goes to the log.
   let compiled: Awaited<ReturnType<typeof compileTarget>>;
   try {
     compiled = await compileTarget(artwork, { id: targetId, scanDistanceMm });
   } catch (error) {
-    const said = error instanceof Error ? error.message : String(error);
+    if (!(error instanceof ArtworkError)) throw error;
     throw new WorkspaceError(
-      /unsupported image format|corrupt|premature end|bad seek/i.test(said)
+      error.kind === "unreadable"
         ? `${targetId} points at ${target.source}, which is not an image the compiler can read. Upload the artwork again as a PNG, JPEG or WebP file.`
-        : `${targetId} could not be compiled from ${target.source}: ${said}`,
+        : `${targetId} could not be compiled from ${target.source}: ${error.message}`,
     );
   }
   const path = await workspace.writeTarget(experience.id, targetId, toTargetJson(compiled));
@@ -210,8 +238,11 @@ async function publishOnce(
         // model that divided by the sensor's pixels instead of the recogniser's, and the
         // bundler compares the declared print width against exactly that number. Left
         // alone it publishes with a gate that is four times too lenient.
+        // A target with no report at all counts too. It was published as it stood, which skipped
+        // every readiness check the bundler makes, while this console's own page called it not
+        // compiled yet; it is compiled first, as anything not compiled yet is.
         const report = (stored as { report?: unknown }).report;
-        if (report !== undefined && !isCurrentReport(report)) {
+        if (!isCurrentReport(report)) {
           stored = undefined;
           // Rebuilt at the distance that report was computed for, which the old model's
           // own arithmetic gives back exactly. Falling back to the default instead was
@@ -420,9 +451,10 @@ async function writeCode(
     // path: a 500, a stack trace in the log, and nothing said about the folder.
     await mkdir(dirname(tablePath), { recursive: true });
     await writeFile(staging, `${JSON.stringify(next, null, 2)}\n`);
-    await rename(staging, tablePath);
+    // Waiting out a reader, which the resolver is: it reads this table whenever it changes.
+    await replaceFile(staging, tablePath);
   } catch (error) {
-    await rm(staging, { force: true });
+    await rm(staging, { force: true }).catch(() => undefined);
     throw new WorkspaceError(
       `the link table at ${tablePath} could not be written, so the code was not registered: ${
         error instanceof Error ? error.message : String(error)

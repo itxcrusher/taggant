@@ -201,6 +201,41 @@ describe("a target on disk from a build whose print widths were wrong", () => {
   }, 60_000);
 });
 
+describe("a target on disk with no report at all", () => {
+  it("is compiled before publishing, as anything not compiled yet is", async () => {
+    // Published as it stood, which skipped every readiness check the bundler makes, while this
+    // console's own page called the target not compiled yet. Removing one key from a target
+    // file was the way to publish a design the compiler had refused.
+    const { compile, publish } = await import("../src/operations.js");
+    const { readFile: read, writeFile: write } = await import("node:fs/promises");
+    const artwork = fileURLToPath(new URL("../../../examples/postcard/artwork.png", import.meta.url));
+    const overlay = fileURLToPath(new URL("../../../examples/postcard/overlay.svg", import.meta.url));
+    const runtimeDir = fileURLToPath(new URL("../../../packages/runtime/dist", import.meta.url));
+
+    const created = await workspace.create("no-report", "No report");
+    const source = await workspace.storeFile(created.id, "artwork", "artwork.png", await read(artwork));
+    const media = await workspace.storeFile(created.id, "media", "overlay.svg", await read(overlay));
+    await workspace.save(created.id, {
+      ...created.manifest,
+      targets: [{ id: "front", source, physicalWidthMm: 148, content: [{ type: "image", src: media }] }],
+    });
+    const outcome = await compile(workspace, await workspace.read(created.id), "front", 190);
+    const path = join(workspace.directoryFor(created.id), outcome.path);
+    const { report: _removed, ...unreported } = JSON.parse(await read(path, "utf8"));
+    await write(path, JSON.stringify(unreported));
+
+    const rebuilt: string[] = [];
+    const out = join(root, "no-report-out");
+    await publish(workspace, await workspace.read(created.id), out, {
+      runtimeDir,
+      onRebuild: (id: string) => rebuilt.push(id),
+    });
+    expect(rebuilt, "a target with no report was published as it stood").toEqual(["front"]);
+    const shipped = JSON.parse(await read(join(out, "targets", "front.json"), "utf8"));
+    expect(shipped.report?.pass).toBe(true);
+  }, 120_000);
+});
+
 describe("H5: registering a code", () => {
   it("leaves every other link on that code alone", async () => {
     // The shape this repository ships as its worked example: an English page, a French

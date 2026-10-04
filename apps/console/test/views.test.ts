@@ -50,7 +50,7 @@ describe("escaping", () => {
 });
 
 describe("what a stored report is said to be", () => {
-  const page = (staleReport: "width" | "verdict") =>
+  const page = (staleReport: "broken" | "width" | "verdict") =>
     experiencePage({
       id: "botanica-500",
       manifest: MANIFEST as never,
@@ -65,7 +65,14 @@ describe("what a stored report is said to be", () => {
     // and whose verdict came from a check since replaced.
     expect(page("width")).toContain("too small to trust");
     expect(page("verdict")).not.toContain("too small to trust");
-    expect(page("verdict")).toContain("a check that has since been replaced");
+    // And without claiming the width was sound, which a report with a corrupt width and a valid
+    // distance also lands here with.
+    expect(page("verdict")).toContain("this build does not stand behind its verdict");
+    // A report that is not an object at all is said to be that, not "not compiled yet", which
+    // `null`, `0`, `false` and `""` read as, nor a width too small to trust, which a string did.
+    expect(page("broken")).toContain("not one at all");
+    expect(page("broken")).not.toContain("Not compiled yet");
+    expect(page("broken")).not.toContain("too small to trust");
   });
 
   it("offers no printable size for artwork that is not ready at any size", () => {
@@ -94,7 +101,10 @@ describe("what a stored report is said to be", () => {
       },
       reasons: ["the recogniser did not find it"],
     });
-    expect(refused).toContain("none, it is not ready at any size");
+    expect(refused).toContain("none, for the reasons above");
     expect(refused).not.toContain("50% of that");
+    // Nor that the artwork must change, which is not true of a refusal for distance.
+    expect(refused).not.toContain("The artwork has to change");
+    expect(refused).toContain("Not printable until it passes");
   });
 });

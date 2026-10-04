@@ -22,7 +22,8 @@ import process from "node:process";
  * table itself to `LINKS~1.JSO`, so the resolver's file was gone. The native lookup is the one
  * that answers this: Node's other `realpath` resolves links and leaves a short name as typed.
  *
- * A path that does not exist yet is named through its folder, which usually does.
+ * A path that does not exist yet is named through its folder, which usually does, and by the
+ * name the file will have once it does.
  */
 export function canonical(path: string): string {
   const absolute = resolve(path);
@@ -30,11 +31,24 @@ export function canonical(path: string): string {
     return realpathSync.native(absolute);
   } catch {
     try {
-      return join(realpathSync.native(dirname(absolute)), basename(absolute));
+      return join(realpathSync.native(dirname(absolute)), asStored(basename(absolute)));
     } catch {
       return absolute;
     }
   }
+}
+
+/**
+ * A file name as Windows will store it, which is without trailing dots or spaces.
+ *
+ * A link table given as `links.json.` is written to `links.json`, and before it existed its lock
+ * was taken under the name as typed: a console given each spelling opened the same table, each
+ * with its own lock, and forty codes registered through the two left twenty in the table.
+ */
+function asStored(name: string): string {
+  if (process.platform !== "win32") return name;
+  const stored = name.replace(/[. ]+$/, "");
+  return stored === "" ? name : stored;
 }
 
 /**

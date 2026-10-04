@@ -19,6 +19,7 @@ import { hostname, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { type Report, buildReport } from "@taggant/compiler";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import { EXIT, FLAGS, USAGE, main } from "../src/cli.js";
@@ -50,6 +51,21 @@ async function artwork(size = 600, blobs = 200, radius = 18): Promise<Buffer> {
   return sharp(pixels, { raw: { width: size, height: size, channels: 1 } })
     .png()
     .toBuffer();
+}
+
+/** A report as the compiler writes it today, built by the compiler rather than by hand. */
+async function currentReport(): Promise<Report> {
+  const corners: { x: number; y: number; strength: number }[] = [];
+  for (let y = 40; y < 452; y += 40)
+    for (let x = 40; x < 640; x += 40) corners.push({ x, y, strength: 1000 });
+  const report = await buildReport({
+    image: { width: 640, height: 452 },
+    levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners })),
+    features: [],
+    scanDistanceMm: 190,
+    recognises: () => [{ found: true, inliers: 58, misplaced: false }],
+  });
+  return JSON.parse(JSON.stringify(report));
 }
 
 /** The bytes say MP4, which is what the bundler reads to decide what ships. */
@@ -453,6 +469,26 @@ describe("an internal failure said as a sentence", () => {
     expect(answer.status, line).toBeLessThan(500);
     expect(line).toContain("not an image the compiler can read");
     expect(line).toContain("artwork/front.png");
+
+    // Cut short, too. The decoder words a PNG cut short as "end of stream" or "libspng read
+    // error", which the pattern the console matched did not know, so the operator read libvips's
+    // words where every other unreadable file got the sentence.
+    const png = await artwork();
+    for (const [name, bytes] of [
+      ["cut to 100 bytes", png.subarray(0, 100)],
+      ["cut in half", png.subarray(0, Math.floor(png.length / 2))],
+    ] as const) {
+      const id = name.replace(/[^a-z0-9]+/g, "-");
+      await post("/experiences", new URLSearchParams({ id, title: name }));
+      await post(`/e/${id}/targets`, target("front", "front.png", Buffer.from(bytes)));
+      const cut = await post(
+        `/e/${id}/targets/front/compile`,
+        new URLSearchParams({ scanDistanceMm: "150" }),
+      );
+      const said = await told(cut);
+      expect(cut.status, `${name}: ${said}`).toBeLessThan(500);
+      expect(said, name).toContain("Upload the artwork again");
+    }
   });
 
   it("creates the link table's folder rather than failing on it", async () => {
@@ -509,6 +545,127 @@ describe("an internal failure said as a sentence", () => {
       expect(said, route).toContain("the limit is 64 KB");
     }
   });
+
+  it("refuses a multipart body of many parts, or a long field with no file, before parsing it", async () => {
+    // The platform's parser reads a whole body in one step, and the large limit went to any
+    // multipart body on a file route: five million tiny parts held every other request for
+    // 29.7 s, long enough for another console to take this one's lock as abandoned, and one
+    // 250 MB field for 4. Both are refused before the parser sees them, here at a size a test
+    // can send.
+    const { post, told } = await drive();
+    await post("/experiences", new URLSearchParams({ id: "parts", title: "Parts" }));
+    const boundary = "taggant-test-boundary";
+    const headers = { "content-type": `multipart/form-data; boundary=${boundary}` };
+    const part = (name: string, value: string, filename?: string) =>
+      `--${boundary}\r\nContent-Disposition: form-data; name="${name}"${filename === undefined ? "" : `; filename="${filename}"`}\r\n\r\n${value}\r\n`;
+    const end = `--${boundary}--\r\n`;
+
+    const many = Array.from({ length: 40 }, (_, i) => part(`f${i}`, "x")).join("") + end;
+    expect(await told(await post("/e/parts/targets", many, headers))).toContain("more than 16 parts");
+
+    const long = part("targetId", "a".repeat(100 * 1024)) + end;
+    expect(await told(await post("/e/parts/targets", long, headers))).toContain("a field of 100 KB");
+
+    // Headers that run on: read as text whatever their length, they were one string the size
+    // of the body.
+    const runOn = `--${boundary}\r\nContent-Disposition: form-data; name="targetId"\r\nX-Padding: ${"p".repeat(20 * 1024)}\r\n\r\nfront\r\n${end}`;
+    expect(await told(await post("/e/parts/targets", runOn, headers))).toContain("whose headers run to");
+
+    // The control: a file part as large is what the large limit is for, and it is the target
+    // added, whatever its bytes are.
+    const withFile =
+      part("targetId", "front") +
+      part("physicalWidthMm", "120") +
+      part("artwork", "a".repeat(100 * 1024), "front.png") +
+      end;
+    expect(await told(await post("/e/parts/targets", withFile, headers))).toContain("front added");
+  });
+
+  it("keeps a notice of its own, cut between characters and never through one", async () => {
+    // A notice repeats the value it refused. Cut at a fixed index, a character written as two
+    // halves was split at each cut and the page showed marks that stand for nothing; and the
+    // cut kept a view of the whole posted value alive, so five refused 100 MB fields took the
+    // heap from 10 MB to 509.
+    const { post, told } = await drive();
+    await post("/experiences", new URLSearchParams({ id: "wide", title: "Wide" }));
+    const form = new FormData();
+    form.append("targetId", "front");
+    // One ordinary character first, so every cut at an even index falls between two halves.
+    form.append("physicalWidthMm", `1${"\u{1F600}".repeat(10_000)}`);
+    form.append("artwork", new Blob([Buffer.from("x")], { type: "image/png" }), "front.png");
+    const said = await told(await post("/e/wide/targets", form));
+    expect(said).toContain("characters not shown");
+    expect(said).toContain("is not a printed width");
+    expect(said.length).toBeLessThan(3000);
+    expect(said).not.toContain("�");
+    expect(said).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  });
+
+  it("says what is wrong with a stored report on its card, and keeps the page", async () => {
+    // A report with no list of reasons took the page down with a TypeError, as a 404; `null`,
+    // `0`, `false` and `""` read as not compiled yet, and a string as a width too small to trust.
+    const { post, workspace, port } = await drive();
+    await post("/experiences", new URLSearchParams({ id: "kept", title: "Kept" }));
+    await post("/e/kept/targets", target("front", "front.png", await artwork()));
+    const good = await currentReport();
+    const { reasons: _reasons, ...noReasons } = good;
+    const cases: Array<[string, unknown, string]> = [
+      ["null", null, "not one at all"],
+      ["0", 0, "not one at all"],
+      ["false", false, "not one at all"],
+      ["an empty string", "", "not one at all"],
+      ["a string", "text", "not one at all"],
+      ["a report with no reasons", noReasons, "does not stand behind its verdict"],
+      ["reasons that are a word", { ...good, reasons: "abc" }, "does not stand behind its verdict"],
+    ];
+    for (const [name, report, expected] of cases) {
+      await workspace.writeTarget("kept", "front", {
+        formatVersion: 2,
+        id: "front",
+        width: 640,
+        height: 452,
+        features: [],
+        report,
+      });
+      const page = await fetch(`http://127.0.0.1:${port}/e/kept`);
+      const body = await page.text();
+      expect(page.status, name).toBe(200);
+      expect(body, name).toContain(expected);
+      expect(body, name).not.toContain("Not compiled yet");
+    }
+  });
+
+  it("keeps the compile asked for last, not the one that finished last", async () => {
+    // The recogniser hands the event loop back between looks, so two compiles of one target
+    // interleave, and the later request did less work, finished first and was overwritten: the
+    // operator's last choice undone with nothing said. From ten metres this target's smallest
+    // size is wider than any manifest can declare, so that compile asks the recogniser nothing.
+    const { post, workspace } = await drive();
+    await post("/experiences", new URLSearchParams({ id: "twice", title: "Twice" }));
+    await post("/e/twice/targets", target("front", "front.png", await artwork()));
+    const first = post("/e/twice/targets/front/compile", new URLSearchParams({ scanDistanceMm: "190" }));
+    await new Promise((settle) => setTimeout(settle, 50));
+    const second = post("/e/twice/targets/front/compile", new URLSearchParams({ scanDistanceMm: "10000" }));
+    await Promise.all([first, second]);
+    const stored = (await workspace.readTarget("twice", "front")) as { report: { scanDistanceMm: number } };
+    expect(stored.report.scanDistanceMm, "the earlier compile was kept").toBe(10_000);
+  }, 240_000);
+
+  it("compiles at any distance the compiler takes, and refuses one past it in the same words", async () => {
+    // The console took up to five metres and the command line ten, so a target compiled at six
+    // could not be published from here: its rebuild was refused the distance it was made at.
+    const { post, told } = await drive();
+    await post("/experiences", new URLSearchParams({ id: "far", title: "Far" }));
+    await post("/e/far/targets", target("front", "front.png", await artwork()));
+    const far = await told(
+      await post("/e/far/targets/front/compile", new URLSearchParams({ scanDistanceMm: "6000" })),
+    );
+    expect(far).not.toContain("not one a person could hold");
+    const past = await told(
+      await post("/e/far/targets/front/compile", new URLSearchParams({ scanDistanceMm: "10001" })),
+    );
+    expect(past).toContain("50 to 10000");
+  }, 240_000);
 });
 
 describe("one console at a time", () => {
@@ -1137,12 +1294,20 @@ describe("what it writes down, and how much it holds", () => {
     const { post, told } = await drive();
     await post("/experiences", new URLSearchParams({ id: "wide", title: "Wide" }));
     const form = target("front", "front.png", Buffer.from("PNG"));
-    form.set("physicalWidthMm", "9".repeat(1_000_000));
+    // Under the limit a field without a file has, which a longer one is refused at before it
+    // is parsed, so this is the longest value that reaches the width's own refusal.
+    form.set("physicalWidthMm", "9".repeat(60_000));
     const line = await told(await post("/e/wide/targets", form));
     expect(line.length, "the notice carried the whole field").toBeLessThan(3_000);
     expect(line).toContain("characters not shown");
     // And still says what was wrong, which comes after the value it repeats.
     expect(line).toContain("is not a printed width");
+
+    // The million characters this used to send are refused before any of that, in a sentence.
+    form.set("physicalWidthMm", "9".repeat(1_000_000));
+    expect(await told(await post("/e/wide/targets", form))).toContain(
+      "a field without a file is limited to 64 KB",
+    );
   });
 
   it("says what is wrong with a stored report it will not show, rather than one reason for all", async () => {
@@ -1161,7 +1326,7 @@ describe("what it writes down, and how much it holds", () => {
       recognition: { pixelsAcross: 322, found: true, inliers: 58, needed: 20 },
     };
     await workspace.writeTarget("stored", "front", { formatVersion: 2, features: [], report: oneWidth });
-    expect(await page()).toContain("a check that has since been replaced");
+    expect(await page()).toContain("this build does not stand behind its verdict");
     expect(await page()).not.toContain("too small to trust");
 
     await workspace.writeTarget("stored", "front", {

@@ -242,6 +242,16 @@ function foldedName(name: string): string {
   return process.platform === "win32" || process.platform === "darwin" ? name.toLowerCase() : name;
 }
 
+/** A manifest path with its percent escapes decoded, as the bundler reads it, or as written. */
+function decodedPath(path: string): string {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    // The bundler refuses a path it cannot decode, so this spelling names no file it would read.
+    return path;
+  }
+}
+
 function reasonFor(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -257,10 +267,53 @@ async function writeAtomic(path: string, contents: string | Uint8Array): Promise
   const staging = `${path}.writing-${randomBytes(4).toString("hex")}`;
   try {
     await writeFile(staging, contents);
-    await rename(staging, path);
+    await replaceFile(staging, path);
   } catch (error) {
-    await rm(staging, { force: true });
+    // Its failure must not replace the reason the write failed.
+    await rm(staging, { force: true }).catch(() => undefined);
     throw error;
+  }
+}
+
+/**
+ * How many times a rename onto a file someone is reading is tried, waiting twice as long each
+ * time from 5 ms: about 1.3 seconds in all.
+ */
+const RENAME_ATTEMPTS = 9;
+
+/**
+ * Move a finished file over the one it replaces, waiting out a reader that has it open.
+ *
+ * On Windows a rename onto a file another handle holds open is refused, even when the holder is
+ * only reading it, and a page view reads the manifest and every compiled target. With three
+ * clients viewing the page, 10 of 15 compiles and 16 of 30 additions came back as a 500 with an
+ * EPERM stack. Readers let go within milliseconds, so the rename is
+ * tried again before it gives up, and then it says so in a sentence. Elsewhere a rename replaces
+ * an open file, and a refusal there is not something waiting would change.
+ */
+export async function replaceFile(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // A folder where the file goes is refused with the same code, and no wait changes that.
+      const held =
+        process.platform === "win32" &&
+        (code === "EPERM" || code === "EACCES" || code === "EBUSY") &&
+        !(await stat(to).then(
+          (info) => info.isDirectory(),
+          () => false,
+        ));
+      if (!held) throw error;
+      if (attempt >= RENAME_ATTEMPTS - 1) {
+        throw new WorkspaceError(
+          `${to} could not be replaced, because another program held it open for over a second (${code}). Nothing was changed; try again.`,
+        );
+      }
+      await new Promise((settle) => setTimeout(settle, 5 * 2 ** attempt));
+    }
   }
 }
 
@@ -458,11 +511,14 @@ export function createWorkspace(root: string, options: WorkspaceOptions = {}): W
         const content = experience.manifest.targets.flatMap((target) =>
           target.content.map((item) => item.src),
         );
-        // A hand-edited manifest may spell a path `./artwork/x.png`; it is the same file.
+        // A hand-edited manifest may spell a path `./artwork/x.png`, or `artwork/x%2Epng`; each
+        // is the same file, and the bundler reads both that way, decoding before it resolves.
+        // Undecoded here, an upload was stored under the name a manifest entry already held in
+        // escaped form, and the bundler then gave that entry the new upload.
         return new Set(
           [...sources, ...content]
             .filter((path): path is string => typeof path === "string")
-            .map((path) => foldedName(posix.normalize(path))),
+            .map((path) => foldedName(posix.normalize(decodedPath(path)))),
         );
       })
       .catch(() => new Set<string>());
