@@ -11,52 +11,53 @@
  *
  * So the arrangement is one console per resource, and this is what notices when it is not:
  * a lock file per resource, which the console holding it touches every few seconds for as
- * long as it runs. A lock touched recently belongs to a running console and is refused; a
- * lock nobody has touched for longer than the stale interval was left by a console that is
- * not running, and is taken over with the takeover printed.
+ * long as it runs, and checks before every write it makes.
  *
  * The publish folder has no lock, and that is deliberate rather than an omission: the static
  * host serves everything in it, so a lock file there is a file anyone can download. What
  * protects a published experience is the bundler's swap, which replaces it by renames and
  * leaves it whole whichever of two publishes finishes first.
  *
- * **It used to ask whether the process the lock named was alive**, and three things were
- * wrong with that, all found by an adversarial pass. A process id means nothing off the
- * machine that wrote it, so a lock from a container that no longer exists was refused for
- * ever with a sentence naming a file to delete. Inside a container the console is process 1
- * every time, so a container restarted after an unclean stop found a lock naming its own
- * pid, asked whether process 1 was alive, got yes from itself, and refused to start on every
- * restart. And a Windows machine and a WSL distribution on it report one hostname with two
- * process tables, so a lock from one was checked against the other's processes. A heartbeat
- * asks the only question that matters, whether the holder is still running, and asks it the
- * same way on every machine that can see the file.
+ * **When a lock is taken over.** A lock is evidence of a console, and how good the evidence is
+ * depends on where the console was:
  *
- * **Two consoles starting at the same instant** were able to both believe they held it: the
- * lock was created empty and then written, and a second claimant reading the empty file in
- * between took it for a lock that named nobody. A fresh file is now held whatever is in it,
- * and every claim is confirmed by reading the lock back after a moment: it carries a value
- * only this claim knows, and a claim that reads back somebody else's has lost and says so.
+ * - On this machine, the process it names is asked whether it is running. If it is, the lock is
+ *   its own whatever its age: a console stopped with Ctrl+Z, held by a debugger, or busy for
+ *   twenty seconds in one synchronous step stops touching its lock without stopping being a
+ *   console, and taking its lock while it went on writing lost sixteen codes of forty.
+ * - A lock touched recently, by this machine's clock, is refused as a running console's.
+ * - Anything else is watched for one heartbeat. A running console touches its lock whatever its
+ *   clock says, so a lock that changes while it is watched is refused, and one that does not
+ *   was left behind. Judged by the clock alone, a console on a mount shared with a machine whose
+ *   clock ran thirty seconds behind had its lock taken while it ran.
  *
- * **Two consoles taking over one stale lock** were the race after that, and the read-back
- * did not close it. Each one looked at the lock's age and then at what it held, as two
- * steps, and removed it by name: between the two looks the other could replace the stale
- * lock with its own fresh one, so the age read was the old file's and the removal took the
- * new file. Driven as two processes started in the same millisecond, sixty rounds, one round
- * ended with both holding the workspace, because the removal came after the first had
- * already confirmed. Now the age and the contents come from one open file, and a takeover
- * happens only while holding a second file that one claimant at a time can create, inside
- * which the stale lock is looked at again before it is removed.
+ * A lock naming this very process with a value it is not holding is an earlier run of it, which
+ * is every container restarted after an unclean stop, or another process with the same id in
+ * another namespace, which two containers on the host's network are. It is watched too, and
+ * only the first is taken over.
+ *
+ * **Taking one over** happens under a marker that one claimant at a time can create, named for
+ * the lock being taken over and numbered: a marker left by a takeover that stopped part way is
+ * stepped past by creating the next number, never removed by name while anyone might be using
+ * it. Removing an old marker by name let a claimant remove the fresh marker another had just
+ * made, and then both were inside the takeover and both held the lock. Under its marker the lock
+ * is looked at again, moved aside under a name only this claim knows, and deleted only if what
+ * moved is what was judged.
+ *
+ * **A console that loses its lock** says so for every lock it loses, and refuses every write
+ * after that: `check` is what the console's writes ask first. It used to say so once, for the
+ * first lock, and go on writing.
  *
  * The command line is what claims these, not `createConsole`. A server handed a workspace
  * object is a library call, and taking a lock underneath one would be a surprise: the tests
  * stand several consoles up at once on purpose. Anything embedding the server can call
  * `claim` itself, which is why it is exported from the package.
  */
-import { randomBytes } from "node:crypto";
-import { readFileSync, statSync, unlinkSync, utimesSync } from "node:fs";
-import { mkdir, open, rm, stat, writeFile } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { linkSync, readFileSync, renameSync, unlinkSync, utimesSync } from "node:fs";
+import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { hostname } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import process from "node:process";
 
 /** A resource that may only have one console on it, and where its lock file goes. */
@@ -85,24 +86,33 @@ export interface Claim {
    * awaited and the work is silently dropped.
    */
   release(): void;
+  /**
+   * Null while every lock is still this claim's; otherwise the sentence saying which is not and
+   * who holds it. Asked before every write, so a console whose lock was taken writes nothing.
+   */
+  check(): string | null;
 }
 
 export interface ClaimOptions {
   /** How often a held lock is touched. */
   heartbeatMs?: number;
-  /** How long since the last touch before a lock counts as left behind. */
+  /** How long since the last touch, by this machine's clock, before a lock is watched. */
   staleAfterMs?: number;
+  /** How long a lock that looks left behind is watched for a touch before it is taken over. */
+  watchMs?: number;
   /** How long to wait before reading a fresh lock back to confirm it. */
   settleMs?: number;
   /**
-   * Called once if a held lock stops carrying this claim's value, which means another
-   * console took it over. The command line prints it; nothing else here can act on it.
+   * Called once for each held lock that stops carrying this claim's value, which means another
+   * console took it over. The command line prints it.
    */
   onLost?: (sentence: string) => void;
+  /** Called before a lock is watched, since watching makes a start take seconds. */
+  onWait?: (sentence: string) => void;
 }
 
 /**
- * Touched every five seconds, and left behind once twenty have passed with no touch.
+ * Touched every five seconds, and watched once twenty have passed with no touch.
  *
  * Twenty rather than ten, because the time compared is the file's modification time against
  * this machine's clock, and a lock on a mount shared with a container or a network share can
@@ -111,12 +121,14 @@ export interface ClaimOptions {
 export const HEARTBEAT_MS = 5_000;
 export const STALE_AFTER_MS = 20_000;
 
+/** Watched for a heartbeat and a half, so a running holder touches it at least once. */
+export const WATCH_MS = 7_500;
+
 /**
  * How long a takeover may hold its marker before the marker itself counts as left behind.
  *
- * A takeover is a look, a removal and a create, which is milliseconds. A marker older than
- * this was left by a console that stopped part way through one, and leaving it would refuse
- * every takeover of that lock for ever.
+ * A takeover is a look, a move and a create, which is milliseconds. A marker older than this
+ * was left by a console that stopped part way through one, and the next number is taken.
  */
 const TAKEOVER_STALE_MS = 10_000;
 
@@ -125,6 +137,16 @@ export function lockFor(resource: Exclusive): string {
   return resource.kind === "directory"
     ? join(resource.path, ".console-lock")
     : `${resource.path}.console-lock`;
+}
+
+/**
+ * The start of the name every takeover marker for this lock, as it read, takes: the lock's own
+ * name, then a digest of exactly what it held, then the attempt's number. A lock rewritten by
+ * anyone holds something else, so its takeover is a different set of markers.
+ */
+export function markerPrefix(lock: string, held: string): string {
+  const digest = createHash("sha256").update(held, "utf8").digest("hex").slice(0, 16);
+  return `${basename(lock)}.taking-over-${digest}-`;
 }
 
 interface Held {
@@ -155,11 +177,23 @@ function describeHolder(held: Partial<Held> | null): string {
   return `process ${held.pid}${where}${since}`;
 }
 
+/** Whether a process with this id is running on this machine. */
+function running(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // Running, and not ours to signal.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 /** What is at a lock's path, read through one open file so the age and the contents agree. */
 type Seen =
   | { kind: "gone" }
   | { kind: "folder" }
-  | { kind: "lock"; held: Partial<Held> | null; ageMs: number };
+  | { kind: "lock"; text: string; held: Partial<Held> | null; ageMs: number; mtimeMs: number };
 
 async function look(lock: string): Promise<Seen> {
   let handle: Awaited<ReturnType<typeof open>>;
@@ -185,9 +219,48 @@ async function look(lock: string): Promise<Seen> {
     const info = await handle.stat();
     if (info.isDirectory()) return { kind: "folder" };
     const text = await handle.readFile("utf8");
-    return { kind: "lock", held: parseHeld(text), ageMs: Date.now() - info.mtimeMs };
+    return {
+      kind: "lock",
+      text,
+      held: parseHeld(text),
+      ageMs: Date.now() - info.mtimeMs,
+      mtimeMs: info.mtimeMs,
+    };
   } finally {
     await handle.close();
+  }
+}
+
+/**
+ * Create a file only if nothing is at its name.
+ *
+ * On Windows a name whose file is being deleted refuses a new file with EPERM until the delete
+ * completes, which is a moment, and a claim racing another's takeover lands there: it exited
+ * with the code for a lock that cannot be made, sending the operator to look at permissions. So
+ * EPERM is waited out, and if it stays, a file of another name in the same folder tells a folder
+ * that refuses files from a name that is busy.
+ */
+async function createOnly(path: string, contents: string): Promise<"made" | "taken" | Error> {
+  let refusal: Error | undefined;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      await writeFile(path, contents, { flag: "wx" });
+      return "made";
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EEXIST") return "taken";
+      if (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY") return error as Error;
+      refusal = error as Error;
+      await new Promise((settle) => setTimeout(settle, 15 * (attempt + 1)));
+    }
+  }
+  const probe = `${path}.probe-${randomBytes(4).toString("hex")}`;
+  try {
+    await writeFile(probe, "", { flag: "wx" });
+    await unlink(probe).catch(() => undefined);
+    return "taken";
+  } catch {
+    return refusal ?? new Error(`${path} could not be created`);
   }
 }
 
@@ -205,15 +278,16 @@ export async function claim(
 ): Promise<{ ok: true; claim: Claim; notes: string[] } | Refused> {
   const heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
   const staleAfterMs = options.staleAfterMs ?? STALE_AFTER_MS;
+  const watchMs = options.watchMs ?? WATCH_MS;
   const settleMs = options.settleMs ?? 40;
   const nonce = randomBytes(12).toString("hex");
   // Registered before anything is created, so a second claim in this process reads this one's
   // lock as live rather than as left behind by an earlier run.
   holding.add(nonce);
   const taken: string[] = [];
+  const lost = new Map<string, string>();
   const notes: string[] = [];
   let timer: ReturnType<typeof setInterval> | undefined;
-  let lostReported = false;
 
   const ours = (lock: string): boolean => {
     try {
@@ -227,13 +301,25 @@ export async function claim(
     timer = undefined;
     holding.delete(nonce);
     for (const lock of taken) {
-      // Only ours. A lock another console has taken over is not this one's to delete.
-      if (!ours(lock)) continue;
+      // Only ours, and checked after it has been moved out of the way rather than before it is
+      // deleted by name: a lock taken over between the check and the delete was another
+      // console's, and deleting it by name is how one console removes another's.
+      const away = `${lock}.releasing-${nonce}`;
       try {
-        unlinkSync(lock);
+        renameSync(lock, away);
       } catch {
-        // Nothing to do about a lock that cannot be removed, and an exit handler is not the
-        // place to throw. It goes stale on its own once nobody touches it.
+        // Gone, or held open; either way not something an exit handler can wait on. A lock left
+        // here is watched and taken over by the next console.
+        continue;
+      }
+      try {
+        if (parseHeld(readFileSync(away, "utf8"))?.nonce === nonce) {
+          unlinkSync(away);
+        } else {
+          putBack(away, lock);
+        }
+      } catch {
+        // Nothing to do in an exit handler about a file that cannot be read or removed.
       }
     }
     taken.length = 0;
@@ -248,70 +334,131 @@ export async function claim(
     `${JSON.stringify({ pid: process.pid, host: hostname(), since: new Date().toISOString(), what, nonce }, null, 2)}\n`;
 
   /**
-   * Whether a lock that is there belongs to a console that is running.
-   *
-   * A lock naming this very process and host, with a value this process is not holding, was
-   * written by an earlier run of it. In a container the console is process 1 on every restart,
-   * so that is the ordinary case after an unclean stop, not a coincidence.
+   * Watch a lock for a heartbeat: `touched` when its holder touches it, `changed` when it is
+   * replaced or removed while watched, `untouched` when nothing happens to it for `watchMs`.
    */
-  const live = (seen: { held: Partial<Held> | null; ageMs: number }): boolean => {
-    const earlierRunOfThis =
-      seen.held?.pid === process.pid &&
-      seen.held?.host === hostname() &&
-      !holding.has(String(seen.held?.nonce));
-    return seen.ageMs < staleAfterMs && !earlierRunOfThis;
+  const watch = async (
+    lock: string,
+    judged: Extract<Seen, { kind: "lock" }>,
+  ): Promise<"touched" | "changed" | "untouched"> => {
+    const until = Date.now() + watchMs;
+    while (Date.now() < until) {
+      await new Promise((settle) => setTimeout(settle, Math.min(250, Math.max(10, until - Date.now()))));
+      const now = await look(lock).catch(() => ({ kind: "gone" }) as const);
+      if (now.kind !== "lock" || now.text !== judged.text) return "changed";
+      if (now.mtimeMs !== judged.mtimeMs) return "touched";
+    }
+    return "untouched";
+  };
+
+  /** Whether the console a lock names is running, and why, as the refusal will say it. */
+  const judge = async (
+    lock: string,
+    what: string,
+    seen: Extract<Seen, { kind: "lock" }>,
+  ): Promise<{ live: false } | { live: true; because: string } | { changed: true }> => {
+    const held = seen.held;
+    const here = held?.host === hostname();
+    const seconds = Math.max(0, Math.round(seen.ageMs / 1000));
+    const holder = describeHolder(held);
+    if (here && held?.pid === process.pid) {
+      // This very process: either a claim it is making now, or an earlier run or a namespace
+      // twin, which only a heartbeat tells apart.
+      if (holding.has(String(held?.nonce))) {
+        return {
+          live: true,
+          because: `${holder}, which is this console starting on it a second time; the lock is ${lock}`,
+        };
+      }
+    } else if (seen.ageMs < staleAfterMs) {
+      // Fresh first, so a console that is simply running is described as one.
+      return {
+        live: true,
+        because: `${holder}, last seen ${seconds} s ago. If no console is running, ${lock} is taken over once ${Math.round(staleAfterMs / 1000)} s pass without a sign of life`,
+      };
+    } else if (here && typeof held?.pid === "number" && running(held.pid)) {
+      return {
+        live: true,
+        because: `${holder}, which is running on this machine and last touched the lock ${seconds} s ago. A console that is paused, held by a debugger or busy stops touching its lock without stopping; if process ${held.pid} is not a console, remove ${lock} and start again`,
+      };
+    }
+    options.onWait?.(
+      `the ${what}'s lock at ${lock} names ${holder}, untouched for ${seconds} s; watching it for ${Math.round(watchMs / 1000)} s to see whether that console is still running`,
+    );
+    const watched = await watch(lock, seen);
+    if (watched === "changed") return { changed: true };
+    if (watched === "touched") {
+      return {
+        live: true,
+        because: `${holder}, which touched the lock at ${lock} while this console watched it, so it is running, whatever its clock says`,
+      };
+    }
+    return { live: false };
   };
 
   /**
    * Remove a lock judged left behind and create this claim's, as one claimant at a time.
    *
-   * Under a marker only one claimant can create, the lock is looked at again, and removed only
-   * if it is still the one that was judged: the same value and still untouched. Anything else
-   * means another claimant got there first, and that one is now the holder.
+   * Under a marker only one claimant can create, the lock is looked at again, moved aside under a
+   * name only this claim knows, and deleted only if what moved is still exactly what was judged.
+   * Anything else means another claimant got there first, and that one is now the holder.
    */
   const takeOver = async (
     lock: string,
-    judged: Partial<Held> | null,
+    judged: Extract<Seen, { kind: "lock" }>,
     what: string,
   ): Promise<"ours" | "busy" | "changed" | Refused> => {
-    const marker = `${lock}.taking-over`;
-    try {
-      await writeFile(marker, nonce, { flag: "wx" });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-        return refuse(
-          `the lock at ${lock} was left behind and could not be taken over: ${reason(error)}`,
-          false,
-        );
-      }
-      const left = await stat(marker).catch(() => null);
-      if (left !== null && Date.now() - left.mtimeMs > TAKEOVER_STALE_MS) {
-        await rm(marker, { force: true }).catch(() => undefined);
-        return "changed";
-      }
-      return "busy";
+    const folder = dirname(lock);
+    const prefix = markerPrefix(lock, judged.text);
+    const numbers = (await readdir(folder))
+      .filter((name) => name.startsWith(prefix))
+      .map((name) => Number(name.slice(prefix.length)))
+      .filter((number) => Number.isInteger(number) && number > 0);
+    const last = numbers.length === 0 ? 0 : Math.max(...numbers);
+    if (last > 0) {
+      const left = await stat(join(folder, `${prefix}${last}`)).catch(() => null);
+      // Fresh: another console is taking this lock over now. Gone between the listing and here:
+      // that takeover finished, so the lock is not what was judged any more.
+      if (left === null) return "changed";
+      if (Date.now() - left.mtimeMs <= TAKEOVER_STALE_MS) return "busy";
     }
+    const marker = join(folder, `${prefix}${last + 1}`);
+    const made = await createOnly(marker, nonce);
+    if (made === "taken") return "busy";
+    if (made instanceof Error) {
+      return refuse(
+        `the lock at ${lock} was left behind and could not be taken over: ${reason(made)}`,
+        false,
+      );
+    }
+
+    let outcome: "ours" | "changed" = "changed";
+    let judgedGone = false;
     try {
       const again = await look(lock);
       if (again.kind === "folder") return "changed";
       if (again.kind === "lock") {
-        if (again.held?.nonce !== judged?.nonce || live(again)) return "changed";
-        await rm(lock, { force: true });
+        if (again.text !== judged.text || again.mtimeMs !== judged.mtimeMs) return "changed";
+        const away = `${lock}.removing-${nonce}`;
+        await moveAside(lock, away);
+        const moved = await readFile(away, "utf8").catch(() => null);
+        if (moved !== null && moved !== judged.text) {
+          // Not the lock that was judged: another claimant replaced it between the look and the
+          // move. It goes back, and that claimant holds it.
+          putBack(away, lock);
+          return "changed";
+        }
+        if (moved !== null) await unlink(away).catch(() => undefined);
       }
-      try {
-        await writeFile(lock, mine(what), { flag: "wx" });
-        return "ours";
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") return "changed";
-        throw error;
-      }
+      judgedGone = true;
+      const created = await createOnly(lock, mine(what));
+      if (created instanceof Error) throw created;
+      outcome = created === "made" ? "ours" : "changed";
+      return outcome;
     } finally {
-      // Only our own marker. One left by a takeover that stopped part way is removed above.
-      try {
-        if (readFileSync(marker, "utf8") === nonce) unlinkSync(marker);
-      } catch {
-        // Already gone.
-      }
+      // Once the lock that was judged is gone, nobody will take it over again, and every marker
+      // made for it is litter: removed, whoever made it. Until then only this claim's own goes.
+      await clearMarkers(folder, prefix, judgedGone ? null : nonce);
     }
   };
 
@@ -331,18 +478,17 @@ export async function claim(
 
     let created = false;
     for (let attempt = 0; attempt < 4 && !created; attempt++) {
-      try {
-        // Exclusive create, so of two claims at the same instant only one creates the file.
-        await writeFile(lock, mine(resource.what), { flag: "wx" });
+      // Exclusive create, so of two claims at the same instant only one creates the file.
+      const made = await createOnly(lock, mine(resource.what));
+      if (made === "made") {
         created = true;
         break;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-          return refuse(
-            `the ${resource.what} at ${resource.path} could not be locked, so this console will not open it: ${reason(error)}`,
-            false,
-          );
-        }
+      }
+      if (made instanceof Error) {
+        return refuse(
+          `the ${resource.what} at ${resource.path} could not be locked, so this console will not open it: ${reason(made)}`,
+          false,
+        );
       }
       let seen: Seen;
       try {
@@ -359,16 +505,17 @@ export async function claim(
           false,
         );
       }
-      if (live(seen)) {
-        const seconds = Math.max(0, Math.round(seen.ageMs / 1000));
+      const verdict = await judge(lock, resource.what, seen);
+      if ("changed" in verdict) continue;
+      if (verdict.live) {
         return refuse(
-          `another console is already open on the ${resource.what} at ${resource.path}: ${describeHolder(seen.held)}, last seen ${seconds} s ago. Two consoles on one ${resource.what} can lose an edit, and both operators are told it was saved. Close that one, or point this one somewhere else. If no console is running, ${lock} is taken over once ${Math.round(staleAfterMs / 1000)} s pass without a sign of life.`,
+          `another console is already open on the ${resource.what} at ${resource.path}: ${verdict.because}. Two consoles on one ${resource.what} can lose an edit, and both operators are told it was saved. Close that one, or point this one somewhere else.`,
           true,
         );
       }
       let outcome: Awaited<ReturnType<typeof takeOver>>;
       try {
-        outcome = await takeOver(lock, seen.held, resource.what);
+        outcome = await takeOver(lock, seen, resource.what);
       } catch (error) {
         return refuse(
           `the lock at ${lock} was left behind and could not be taken over: ${reason(error)}`,
@@ -378,7 +525,7 @@ export async function claim(
       if (typeof outcome === "object") return outcome;
       if (outcome === "busy") {
         return refuse(
-          `another console is starting on the ${resource.what} at ${resource.path} at this moment, and is taking over the lock an earlier one left. Only one of them can run.`,
+          `another console is starting on the ${resource.what} at ${resource.path} at this moment, and is taking over the lock at ${lock} that an earlier one left. Only one of them can run.`,
           true,
         );
       }
@@ -387,7 +534,7 @@ export async function claim(
         notes.push(
           earlierRunOfThis
             ? `took over ${lock}, left by an earlier run of this console`
-            : `took over ${lock}, left by ${describeHolder(seen.held)}, untouched for ${Math.round(seen.ageMs / 1000)} s`,
+            : `took over ${lock}, left by ${describeHolder(seen.held)}, untouched for ${Math.round(seen.ageMs / 1000)} s and not touched while watched`,
         );
         created = true;
       }
@@ -395,7 +542,7 @@ export async function claim(
     }
     if (!created) {
       return refuse(
-        `the ${resource.what} at ${resource.path} could not be locked after four attempts.`,
+        `the ${resource.what} at ${resource.path} could not be locked after four attempts, because other consoles kept taking the lock at ${lock}.`,
         true,
       );
     }
@@ -406,14 +553,52 @@ export async function claim(
       taken.push(lock);
     } else {
       return refuse(
-        `another console started on the ${resource.what} at ${resource.path} at the same moment and took it. Only one of them can run.`,
+        `another console started on the ${resource.what} at ${resource.path} at the same moment and took the lock at ${lock}. Only one of them can run.`,
         true,
       );
     }
   }
 
+  /** Note a lock that is no longer this claim's, once, and say so. */
+  /** Ticks a taken lock has read as not yet a lock, while its new holder writes it. */
+  const unreadable = new Map<string, number>();
+  const noticeIfTaken = (lock: string): void => {
+    if (lost.has(lock) || ours(lock)) return;
+    let text: string | null = null;
+    try {
+      text = readFileSync(lock, "utf8");
+    } catch {
+      // Gone: said as such.
+    }
+    const held = text === null ? null : parseHeld(text);
+    // A lock is created and then written, so the console that took this one can be caught
+    // between the two, and the sentence named nobody for good. Said once it reads, or after a
+    // few ticks of not reading, which is a lock that is not one.
+    if (text !== null && held === null && (unreadable.get(lock) ?? 0) < 3) {
+      unreadable.set(lock, (unreadable.get(lock) ?? 0) + 1);
+      return;
+    }
+    const holder = text === null ? "nobody, because the lock file is gone" : describeHolder(held);
+    const sentence = `this console no longer holds ${lock}: it is held by ${holder}. Nothing more is written from here; close this console and use the other one.`;
+    lost.set(lock, sentence);
+    options.onLost?.(sentence);
+  };
+  const check = (): string | null => {
+    for (const lock of taken) noticeIfTaken(lock);
+    for (const lock of taken) {
+      const sentence = lost.get(lock);
+      if (sentence !== undefined) return sentence;
+      // Refused whether or not the holder can be named yet: a write is not the place to wait.
+      if (!ours(lock)) {
+        return `this console no longer holds ${lock}. Nothing more is written from here; close this console and use the other one.`;
+      }
+    }
+    return null;
+  };
+
   timer = setInterval(() => {
     for (const lock of taken) {
+      if (lost.has(lock)) continue;
       if (ours(lock)) {
         try {
           const now = new Date();
@@ -423,22 +608,66 @@ export async function claim(
         }
         continue;
       }
-      if (!lostReported) {
-        lostReported = true;
-        let holder = "another console";
-        try {
-          holder = describeHolder(parseHeld(readFileSync(lock, "utf8")));
-          statSync(lock);
-        } catch {
-          holder = "nobody, because the lock file is gone";
-        }
-        options.onLost?.(
-          `this console no longer holds ${lock}: it is held by ${holder}. Another console may be editing the same files; stop one of them.`,
-        );
-      }
+      // Every lock that goes is said, not only the first: one flag for all of them named the
+      // workspace's and never the link table's.
+      noticeIfTaken(lock);
     }
   }, heartbeatMs);
   // The touches must not keep a process alive that has nothing else to do.
   timer.unref();
-  return { ok: true, claim: { release }, notes };
+  return { ok: true, claim: { release, check }, notes };
+}
+
+/**
+ * Move a lock out of the way, under a name only this claim uses. Already gone is fine. On
+ * Windows a file in the middle of being opened or touched refuses a rename for a moment, and
+ * that is waited out rather than reported as a lock that cannot be taken over.
+ */
+async function moveAside(lock: string, away: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(lock, away);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return;
+      if ((code !== "EPERM" && code !== "EACCES" && code !== "EBUSY") || attempt >= 5) throw error;
+      await new Promise((settle) => setTimeout(settle, 15 * (attempt + 1)));
+    }
+  }
+}
+
+/**
+ * Put a lock moved aside by mistake back where it was, if nothing has taken its place.
+ *
+ * A link rather than a rename, because a rename replaces whatever is at the name, and what might
+ * be there is a lock another console has just made.
+ */
+function putBack(away: string, lock: string): void {
+  try {
+    linkSync(away, lock);
+  } catch {
+    // Something holds the name now, or the filesystem cannot link. The lock that was moved
+    // belonged to a console that is about to find it gone and stop writing, which is the safe
+    // way for this to fail.
+  }
+  try {
+    unlinkSync(away);
+  } catch {
+    // Left beside the lock, named for this claim, where nothing reads it.
+  }
+}
+
+/** Remove the markers made for one lock, or only one claim's when `only` is given. */
+async function clearMarkers(folder: string, prefix: string, only: string | null): Promise<void> {
+  const names = await readdir(folder).catch(() => [] as string[]);
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue;
+    const path = join(folder, name);
+    if (only !== null) {
+      const holder = await readFile(path, "utf8").catch(() => null);
+      if (holder !== only) continue;
+    }
+    await unlink(path).catch(() => undefined);
+  }
 }

@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import { EXIT, FLAGS, USAGE, main } from "../src/cli.js";
-import { STALE_AFTER_MS, claim, lockFor } from "../src/one-console.js";
+import { STALE_AFTER_MS, claim, lockFor, markerPrefix } from "../src/one-console.js";
 import { createConsole } from "../src/server.js";
 import { type Workspace, createWorkspace } from "../src/workspace.js";
 
@@ -560,15 +560,16 @@ describe("one console at a time", () => {
     const longAgo = new Date(Date.now() - (STALE_AFTER_MS + 5_000));
     await utimes(lockFor(WORKSPACE(workspace)), longAgo, longAgo);
 
-    const held = await claim([WORKSPACE(workspace)]);
+    // Watched for a fifth of a second here, where a console watches for a heartbeat and a half.
+    const held = await claim([WORKSPACE(workspace)], { watchMs: 200 });
     expect(held.ok, "a lock nobody touched blocked the console").toBe(true);
     if (held.ok) {
-      expect(held.notes.join(" ")).toMatch(/took over .*untouched for/);
+      expect(held.notes.join(" ")).toMatch(/took over .*untouched for .* and not touched while watched/);
       held.claim.release();
     }
     // The marker a takeover holds is gone once it is done, or the next takeover of this lock
     // would be refused as another console starting.
-    expect(await readdir(workspace)).not.toContain(".console-lock.taking-over");
+    expect((await readdir(workspace)).filter((name) => name.includes("taking-over"))).toEqual([]);
     await rm(root, { recursive: true, force: true });
   });
 
@@ -591,33 +592,43 @@ describe("one console at a time", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("waits out another console's takeover, and clears a takeover that stopped part way", async () => {
-    // A takeover holds a marker only one claimant can create. A fresh marker is another console
-    // taking over the lock right now: refused, as another console. A marker nobody has touched
-    // for ten seconds was left by a takeover that died part way, and leaving it would refuse
-    // every takeover of that lock for ever.
+  it("waits out another console's takeover, and steps past one that stopped part way", async () => {
+    // A takeover holds a marker only one claimant can create, numbered, and named for the lock
+    // as it read. A fresh marker is another console taking over the lock right now: refused, as
+    // another console. One nobody has touched for ten seconds was left by a takeover that died
+    // part way, and the next number is taken past it. No claimant removes a marker by name while
+    // anyone may be using it: removing an old one by name let a claimant remove the fresh one
+    // another had just made, and then both took the lock.
     const root = await mkdtemp(join(tmpdir(), "console-marker-"));
     const workspace = join(root, "workspace");
     await mkdir(workspace, { recursive: true });
     const lock = lockFor(WORKSPACE(workspace));
-    const marker = `${lock}.taking-over`;
     const longAgo = new Date(Date.now() - (STALE_AFTER_MS + 5_000));
-    await writeFile(lock, JSON.stringify({ pid: 1, host: "gone", nonce: "old" }));
+    const text = JSON.stringify({ pid: 1, host: "gone", nonce: "old" });
+    await writeFile(lock, text);
     await utimes(lock, longAgo, longAgo);
+    const prefix = markerPrefix(lock, text);
+    const stopped = join(workspace, `${prefix}1`);
+    const running = join(workspace, `${prefix}2`);
+    await writeFile(stopped, "a takeover that died part way");
+    await utimes(stopped, longAgo, longAgo);
+    await writeFile(running, "a takeover happening now");
 
-    await writeFile(marker, "someone else's");
-    const waiting = await claim([WORKSPACE(workspace)]);
+    const waiting = await claim([WORKSPACE(workspace)], { watchMs: 200 });
     expect(waiting.ok, "took over a lock another console was taking over").toBe(false);
     if (!waiting.ok) {
       expect(waiting.because).toContain("is starting on the workspace");
       expect(waiting.heldByAnother).toBe(true);
     }
+    // Both markers where they were: the claim that waited removed neither.
+    expect(await readdir(workspace)).toEqual(expect.arrayContaining([`${prefix}1`, `${prefix}2`]));
 
-    await utimes(marker, longAgo, longAgo);
-    const cleared = await claim([WORKSPACE(workspace)]);
+    await utimes(running, longAgo, longAgo);
+    const cleared = await claim([WORKSPACE(workspace)], { watchMs: 200 });
     expect(cleared.ok, "a takeover that died part way blocked every later one").toBe(true);
     if (cleared.ok) cleared.claim.release();
-    expect(await readdir(workspace)).not.toContain(".console-lock.taking-over");
+    // Once the lock they were for is gone, every marker made for it is litter, and goes.
+    expect((await readdir(workspace)).filter((name) => name.includes("taking-over"))).toEqual([]);
     await rm(root, { recursive: true, force: true });
   });
 
@@ -660,7 +671,9 @@ describe("one console at a time", () => {
         nonce: "from-before",
       }),
     );
-    const held = await claim([WORKSPACE(workspace)]);
+    // Watched first, because the same process id on the same host is also what two containers
+    // on the host's network look like, and a heartbeat is the only thing that tells them apart.
+    const held = await claim([WORKSPACE(workspace)], { watchMs: 200 });
     expect(held.ok, "a restarted console was refused its own lock").toBe(true);
     if (held.ok) {
       expect(held.notes.join(" ")).toContain("left by an earlier run of this console");
@@ -708,7 +721,12 @@ describe("one console at a time", () => {
       const held = await first;
       expect(held.ok, `round ${round}: the first claim lost the lock it made`).toBe(true);
       expect(second.ok, `round ${round}: the second claim took a live lock`).toBe(false);
-      if (!second.ok) expect(second.because).toContain("already open");
+      // Refused at once, as this console a second time, rather than watched for seconds as a
+      // lock some earlier run left behind.
+      if (!second.ok) {
+        expect(second.because).toContain("already open");
+        expect(second.because).toContain("this console starting on it a second time");
+      }
       if (held.ok) held.claim.release();
       await rm(root, { recursive: true, force: true });
     }
@@ -727,12 +745,172 @@ describe("one console at a time", () => {
       const longAgo = new Date(Date.now() - (STALE_AFTER_MS + 5_000));
       await utimes(lock, longAgo, longAgo);
 
-      const both = await Promise.all([claim([WORKSPACE(workspace)]), claim([WORKSPACE(workspace)])]);
+      const both = await Promise.all([
+        claim([WORKSPACE(workspace)], { watchMs: 100 }),
+        claim([WORKSPACE(workspace)], { watchMs: 100 }),
+      ]);
       const holders = both.filter((one) => one.ok);
       expect(holders, `round ${round}: ${holders.length} claims held the lock`).toHaveLength(1);
       for (const one of both) if (one.ok) one.claim.release();
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("never takes a lock from a console running on this machine, however long since it touched it", async () => {
+    // A console stopped with Ctrl+Z, held by a debugger, or busy in one synchronous step stops
+    // touching its lock without stopping being a console. One multipart request held a console's
+    // loop for 29.7 s, a second console took its lock at 21, and the first went on writing:
+    // sixteen codes of forty were lost, and their operators told they pointed somewhere. A process
+    // this machine says is running is a console that is running.
+    const root = await mkdtemp(join(tmpdir(), "console-paused-"));
+    const workspace = join(root, "workspace");
+    await mkdir(workspace, { recursive: true });
+    const lock = lockFor(WORKSPACE(workspace));
+    await writeFile(
+      lock,
+      JSON.stringify({
+        pid: process.ppid,
+        host: hostname(),
+        since: "2026-10-02T00:00:00.000Z",
+        nonce: "paused",
+      }),
+    );
+    const longAgo = new Date(Date.now() - (STALE_AFTER_MS + 60_000));
+    await utimes(lock, longAgo, longAgo);
+    const held = await claim([WORKSPACE(workspace)], { watchMs: 200 });
+    expect(held.ok, "took the lock of a console running on this machine").toBe(false);
+    if (!held.ok) {
+      expect(held.because).toContain("running on this machine");
+      expect(held.because).toContain(lock);
+      expect(held.heldByAnother).toBe(true);
+    }
+    expect(JSON.parse(await readFile(lock, "utf8")).nonce).toBe("paused");
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("refuses a lock that looks left behind but is touched while it is watched, whatever the clocks say", async () => {
+    // A console whose clock runs thirty seconds behind stamps its lock thirty seconds in the past
+    // every time it touches it, so by this machine's clock it always looked left behind, and it
+    // was taken while it ran. And a lock naming this very process and host can be another
+    // console with the same process id in another namespace, which two containers on the host's
+    // network are. Both touch their locks, and a lock that changes while watched is running.
+    const root = await mkdtemp(join(tmpdir(), "console-watched-"));
+    const workspace = join(root, "workspace");
+    await mkdir(workspace, { recursive: true });
+    const lock = lockFor(WORKSPACE(workspace));
+    for (const holder of [
+      { pid: 4242, host: "clock-behind", nonce: "behind" },
+      { pid: process.pid, host: hostname(), nonce: "twin" },
+    ]) {
+      await writeFile(lock, JSON.stringify(holder));
+      const behind = () => new Date(Date.now() - 60_000);
+      await utimes(lock, behind(), behind());
+      const touching = setInterval(() => {
+        void utimes(lock, behind(), behind()).catch(() => undefined);
+      }, 40);
+      let held: Awaited<ReturnType<typeof claim>>;
+      try {
+        held = await claim([WORKSPACE(workspace)], { watchMs: 800 });
+      } finally {
+        clearInterval(touching);
+      }
+      expect(held.ok, `took a lock ${holder.host} was touching`).toBe(false);
+      if (!held.ok) {
+        expect(held.because).toContain(`touched the lock at ${lock} while this console watched it`);
+      }
+      expect(JSON.parse(await readFile(lock, "utf8")).nonce).toBe(holder.nonce);
+    }
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("says so for every lock it loses, and writes nothing after", async () => {
+    // One flag for every lock named the first lost and never the second, and the console went on
+    // writing to both: the edits of the console that took them and of this one were lost between
+    // them. Every write asks the lock first now.
+    const root = await mkdtemp(join(tmpdir(), "console-lost-"));
+    const workspace = join(root, "workspace");
+    const table = { what: "link table", path: join(root, "links.json"), kind: "file" as const };
+    const lost: string[] = [];
+    const held = await claim([WORKSPACE(workspace), table], {
+      heartbeatMs: 25,
+      onLost: (sentence) => lost.push(sentence),
+    });
+    expect(held.ok).toBe(true);
+    if (!held.ok) return;
+    expect(held.claim.check()).toBeNull();
+    const guarded = createWorkspace(workspace, { holds: held.claim.check });
+    await guarded.create("before", "Before");
+
+    await writeFile(
+      lockFor(WORKSPACE(workspace)),
+      JSON.stringify({ pid: 4242, host: "intruder", nonce: "a" }),
+    );
+    await writeFile(lockFor(table), JSON.stringify({ pid: 4243, host: "intruder", nonce: "b" }));
+    await new Promise((settle) => setTimeout(settle, 200));
+    expect(lost, "a lost lock was not said").toHaveLength(2);
+    expect(lost.join(" ")).toContain(lockFor(WORKSPACE(workspace)));
+    expect(lost.join(" ")).toContain(lockFor(table));
+    expect(held.claim.check()).toContain("no longer holds");
+
+    await expect(guarded.create("after", "After")).rejects.toThrow(/no longer holds/);
+    await expect(guarded.update("before", (manifest) => ({ ...manifest, title: "Changed" }))).rejects.toThrow(
+      /no longer holds/,
+    );
+    await expect(guarded.storeFile("before", "artwork", "x.png", new Uint8Array([1]))).rejects.toThrow(
+      /no longer holds/,
+    );
+    await expect(guarded.writeTarget("before", "front", { features: [] })).rejects.toThrow(/no longer holds/);
+    // And a cleanup leaves the file alone rather than refusing, because its refusal would replace
+    // the reason the upload was being taken back.
+    await mkdir(join(workspace, "before", "artwork"), { recursive: true });
+    await writeFile(join(workspace, "before", "artwork", "left.png"), "x");
+    await guarded.forgetFile("before", "artwork/left.png");
+    expect(await readdir(join(workspace, "before", "artwork"))).toContain("left.png");
+    // The folder is made with the experience; what must not be in it is a compiled target.
+    expect(await readdir(join(workspace, "before", "targets"))).toEqual([]);
+    const { registerCode } = await import("../src/operations.js");
+    await expect(
+      registerCode(
+        table.path,
+        { path: "/01/09520123456788", href: "https://example.invalid/a", title: "A" },
+        {
+          holds: held.claim.check,
+        },
+      ),
+    ).rejects.toThrow(/no longer holds/);
+    expect(await readdir(workspace)).not.toContain("after");
+    expect(JSON.parse(await readFile(join(workspace, "before", "manifest.json"), "utf8")).title).toBe(
+      "Before",
+    );
+    await expect(stat(table.path)).rejects.toThrow();
+    held.claim.release();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("names every lock it has lost at the write that finds out, not only the first", async () => {
+    // The heartbeat notices a lost lock within an interval. A write that finds one gone says so
+    // for every lock at that moment, so an operator is not told about the link table an interval
+    // after the workspace. The heartbeat here is ten minutes, so only the write can say it.
+    const root = await mkdtemp(join(tmpdir(), "console-lost-"));
+    const workspace = join(root, "workspace");
+    const table = { what: "link table", path: join(root, "links.json"), kind: "file" as const };
+    const lost: string[] = [];
+    const held = await claim([WORKSPACE(workspace), table], {
+      heartbeatMs: 600_000,
+      onLost: (sentence) => lost.push(sentence),
+    });
+    expect(held.ok).toBe(true);
+    if (!held.ok) return;
+    await writeFile(
+      lockFor(WORKSPACE(workspace)),
+      JSON.stringify({ pid: 4242, host: "intruder", nonce: "a" }),
+    );
+    await writeFile(lockFor(table), JSON.stringify({ pid: 4243, host: "intruder", nonce: "b" }));
+    expect(lost, "the heartbeat reported it, so this measured nothing").toEqual([]);
+    expect(held.claim.check()).toContain("no longer holds");
+    expect(lost, "a lost lock was not said at the write that found it").toHaveLength(2);
+    held.claim.release();
+    await rm(root, { recursive: true, force: true });
   });
 
   it("keeps its lock fresh while it holds it, and says so if another console takes it", async () => {

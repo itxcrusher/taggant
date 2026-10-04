@@ -67,6 +67,12 @@ export interface ConsoleOptions {
   runtimeDir?: string;
   /** Any further host names it should accept, when it is behind something. */
   hosts?: readonly string[];
+  /**
+   * Asked before the link table is written: null to go ahead, or the sentence the write is
+   * refused with. The command line answers it from its lock on the table; the workspace it is
+   * handed asks its own.
+   */
+  holdsTable?: () => string | null;
 }
 
 /**
@@ -626,11 +632,15 @@ export function createConsole(options: ConsoleOptions): Server {
       if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
         throw new WorkspaceError(`a code can only point at http or https, and this is ${parsed.protocol}`);
       }
-      const written = await registerCode(linkTablePath, {
-        path: field(form, "path"),
-        href,
-        title: `Experience ${id}`,
-      });
+      const written = await registerCode(
+        linkTablePath,
+        {
+          path: field(form, "path"),
+          href,
+          title: `Experience ${id}`,
+        },
+        options.holdsTable === undefined ? {} : { holds: options.holdsTable },
+      );
       redirect(response, `/e/${encodeURIComponent(id)}`, {
         tone: "good",
         message: [

@@ -133,7 +133,10 @@ export async function main(args: string[]): Promise<number> {
       { what: "workspace", path: root, kind: "directory" },
       { what: "link table", path: links, kind: "file" },
     ],
-    { onLost: (sentence) => stderr.write(`\n  WARNING: ${sentence}\n`) },
+    {
+      onLost: (sentence) => stderr.write(`\n  WARNING: ${sentence}\n`),
+      onWait: (sentence) => stderr.write(`  ${sentence}\n`),
+    },
   );
   if (!held.ok) {
     stderr.write(`${held.because}\n`);
@@ -150,7 +153,10 @@ export async function main(args: string[]): Promise<number> {
     });
   }
 
-  const workspace = createWorkspace(root);
+  // Every write asks the lock first. A console whose lock another console took over printed a
+  // warning and went on writing, and the two consoles' edits were lost between them.
+  const holds = (): string | null => held.claim.check();
+  const workspace = createWorkspace(root, { holds });
   const server = createConsole({
     workspace,
     publishRoot: publishTo,
@@ -159,6 +165,7 @@ export async function main(args: string[]): Promise<number> {
     // will not act on a form posted to a name it does not know, because Host is written by
     // whoever is asking and everything same-origin means is compared against it.
     hosts: parsed.arguments.hosts,
+    holdsTable: holds,
   });
 
   if (host !== "127.0.0.1" && host !== "localhost" && host !== "::1") {

@@ -312,18 +312,26 @@ const tableQueues = new Map<string, Promise<void>>();
 export async function registerCode(
   tablePath: string,
   entry: { path: string; href: string; title: string; linkType?: string; language?: string },
+  options: { holds?: () => string | null } = {},
 ): Promise<{ path: string; replaced: number; kept: number }> {
   // Written under the name the filesystem uses, not the one given, and that name is asked for
   // inside the turn, when the table the turn before wrote exists to be asked about. Given a
   // short name, the rename that puts a new table in place renamed the table itself, so the
   // file the resolver reads was gone and a table nobody reads held every code.
-  return await inTurn(tableQueues, queueKey(tablePath), () => writeCode(canonical(tablePath), entry));
+  return await inTurn(tableQueues, queueKey(tablePath), () =>
+    writeCode(canonical(tablePath), entry, options),
+  );
 }
 
 async function writeCode(
   tablePath: string,
   entry: { path: string; href: string; title: string; linkType?: string; language?: string },
+  options: { holds?: () => string | null },
 ): Promise<{ path: string; replaced: number; kept: number }> {
+  // Asked first, inside the turn, so a console whose lock on the table was taken over writes
+  // nothing: two consoles that both believed they held one table kept twenty codes of forty.
+  const refusal = options.holds?.() ?? null;
+  if (refusal !== null) throw new WorkspaceError(refusal);
   // The path is the key the resolver looks scans up by, so it is canonicalised here by
   // the resolver's own parser rather than taken as typed. A code written as an EAN-13
   // and a code written as a GTIN-14 are the same code, and a table holding both under

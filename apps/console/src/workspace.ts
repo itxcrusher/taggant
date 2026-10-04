@@ -316,8 +316,24 @@ export interface Workspace {
  */
 const experienceQueues = new Map<string, Promise<void>>();
 
-export function createWorkspace(root: string): Workspace {
+export interface WorkspaceOptions {
+  /**
+   * Asked immediately before every write: null to go ahead, or the sentence a write is refused
+   * with. The command line answers it from the lock, so a console whose lock was taken over by
+   * another writes nothing more; it went on writing, and of forty codes registered through two
+   * consoles that both believed they held the table, twenty were kept.
+   */
+  holds?: () => string | null;
+}
+
+export function createWorkspace(root: string, options: WorkspaceOptions = {}): Workspace {
   const base = resolve(root);
+
+  /** Refuse the write about to happen when this console no longer holds the workspace. */
+  const mayWrite = (): void => {
+    const refusal = options.holds?.() ?? null;
+    if (refusal !== null) throw new WorkspaceError(refusal);
+  };
 
   const inTurn = <T>(id: string, work: () => Promise<T>): Promise<T> =>
     inTurnFor(experienceQueues, queueKey(directoryFor(id)), work);
@@ -376,6 +392,7 @@ export function createWorkspace(root: string): Workspace {
     if (manifest.id !== id) {
       throw new WorkspaceError(`the manifest says its id is ${manifest.id}, and it is stored as ${id}`);
     }
+    mayWrite();
     const directory = await realDirectory(id);
     await writeAtomic(join(directory, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     return interpret(id, manifest);
@@ -499,6 +516,7 @@ export function createWorkspace(root: string): Workspace {
         if (await exists(id)) {
           throw new WorkspaceError(`${id} already exists`);
         }
+        mayWrite();
         // Through `realFolder`, so a link left in the workspace cannot put the manifest and
         // its folders somewhere else. That check was written for uploads and guarded only
         // those, so a junction named after an experience took the manifest write with it.
@@ -537,6 +555,7 @@ export function createWorkspace(root: string): Workspace {
       // was added. The sequential case `freeName` was written for is the case its test
       // drives, which is why this survived a round.
       return await inTurn(id, async () => {
+        mayWrite();
         const directory = await realFolder(id, folder);
         // Two names that reduce to one is the ordinary case, not a corner: `logo.png` and
         // `LOGO.PNG`, or `photo one.png` and `photo-one.png`. Writing the safe name blind
@@ -567,6 +586,9 @@ export function createWorkspace(root: string): Workspace {
       // closed where names are chosen, and this is the second lock, because a cleanup that
       // can delete a named file is one rename away from doing it again.
       await inTurn(id, async () => {
+        // Left where it is by a console that no longer holds the workspace, silently, because a
+        // refusal here would replace the reason the upload is being taken back.
+        if ((options.holds?.() ?? null) !== null) return;
         if ((await namedBy(id)).has(foldedName(`${folder}/${name}`))) return;
         await rm(join(directoryFor(id), folder, name), { force: true }).catch(() => undefined);
       });
@@ -580,6 +602,7 @@ export function createWorkspace(root: string): Workspace {
       // writes have no reason to wait for it; only the write is ordered, and the later of the
       // two is the one kept.
       return await inTurn(id, async () => {
+        mayWrite();
         const directory = await realFolder(id, "targets");
         const filename = targetFilename(targetId);
         await writeAtomic(join(directory, filename), `${JSON.stringify(target)}\n`);
