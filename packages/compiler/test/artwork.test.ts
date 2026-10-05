@@ -202,7 +202,7 @@ describe("the report against real artwork", { timeout: 120_000 }, () => {
     expect(compiled.report.reasons.join(" ")).toContain("it maps onto itself");
   });
 
-  it("refuses the postcard beside a copy of itself at another size, which sits under both lines", async () => {
+  it("refuses the postcard beside a copy of itself at another size, which the lines let through", async () => {
     // At 60 per cent the move carries 61 of 458 places and at 35 per cent 14 of 505: no line
     // refuses either, both were called ready for press, and a camera brought close to the small
     // copy settles on the large one. The 35 per cent copy pairs only through the smaller sizes the

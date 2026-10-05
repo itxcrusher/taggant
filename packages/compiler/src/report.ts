@@ -529,20 +529,25 @@ export const MISPLACED_BEYOND = 0.1;
  * and of the smaller sizes the compiler adds. Over 51 sheets of copies, the postcard printed
  * twice exported at seventeen widths, with gutters and margins of every size tried, in six
  * layouts, and a generated design twice, four times and beside itself turned half way round,
- * none came under 105 places or a share of 0.291. Over 138 pieces that repeat nothing, every
- * wallpaper on one machine with portrait and tall crops of each, and generated designs at seven
- * densities in three shapes, none came over 19 places, and of the 86 with sixty or more places
- * holding a feature, none came over a share of 0.114. Both lines sit in those gaps, and it takes
- * both: the most places a piece repeating nothing reached is one under the line, at a share of
- * 0.058. Without the smaller sizes the same pieces gave 101 and 0.268 against 11 and 0.104.
+ * none came under 105 places or a share of 0.291, and 72 more sheets of the postcard, two and
+ * three down and two by two with other gutters, margins and export widths, came as low as 0.280.
+ * Over 138 pieces that repeat nothing, every wallpaper on one machine with portrait and tall crops
+ * of each, and generated designs at seven densities in three shapes, none came over 19 places, and
+ * of the 86 with sixty or more places holding a feature, none came over a share of 0.114. Without
+ * the smaller sizes the same pieces gave 101 and 0.268 against 11 and 0.104. The share line sits
+ * in that gap, and the places line does not on its own: of 60 more generated designs repeating
+ * nothing, one reached 21 places, past it, at a share of 0.040, and is not refused.
  *
  * Twenty places, because that is the line a look's points are held to: a move carrying fewer
  * has fewer look-alikes to put behind the wrong pose than a look needs to count. A fifth, because
- * a part of a design printed twice, a logo on a label, is not the design repeating: a square a
- * quarter of a design's area copied elsewhere on it measured 114 places at 0.147, and was put in
- * the right place in every one of 1200 looks at two sizes. What this leaves to the recogniser's
- * own looks is a design less than a fifth of which repeats, and a periodic texture, whose many
- * moves each carry a part of it: a brick wall measured 124 places at 0.124 and a grid 66 at 0.192.
+ * a small part of a design printed twice, a logo on a label, is not the design repeating: a square
+ * a quarter of a generated design's area copied elsewhere on it measured 114 places at 0.147, and
+ * was put in the right place in every one of 1200 looks at two sizes, and squares a fifth of the
+ * postcard's area measured 0.128 to 0.152. A larger part can cross it: squares a quarter of the
+ * postcard's area measured 0.167 to 0.208 with where they were copied, and the last is refused.
+ * What this leaves to the recogniser's own looks is a design less than a fifth of which repeats,
+ * and a periodic texture, whose many moves each carry a part of it: a brick wall measured 124
+ * places at 0.124 and a grid 66 at 0.192.
  */
 export const REPEATS_FROM = { places: AGREEING_POINTS_NEEDED, share: 0.2 } as const;
 
