@@ -102,8 +102,17 @@ describe("the third-party licence inventory", () => {
     const named = new Set(rows.map(([, name, version]) => `${name} ${version}`));
     expect(named.size, "no rows were found in the inventory, so this checked nothing").toBeGreaterThan(5);
 
-    const platforms = /^@img\/sharp(?:-libvips)?-/;
-    const gone = [...named].filter((row) => !installed.has(row) && !platforms.test(row));
+    // The four platform rows by name. A pattern here exempted any row whose name began like
+    // one, so a row for a package that never existed, named under the same prefix, stayed.
+    const platforms = new Set([
+      "@img/sharp-<os>-<arch>",
+      "@img/sharp-win32-<arch>",
+      "@img/sharp-libvips-<os>-<arch>",
+      "@img/sharp-libvips-linux-arm",
+    ]);
+    const gone = [...named].filter(
+      (row) => !installed.has(row) && !platforms.has(row.slice(0, row.lastIndexOf(" "))),
+    );
     expect(gone, `named in the inventory and not installed: ${gone.join(", ")}`).toEqual([]);
   }, 120_000);
 
