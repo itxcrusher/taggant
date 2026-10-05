@@ -125,9 +125,49 @@ export function parseTable(value: unknown): LinkTable {
           `the title under ${path} holds a control character, which cannot go in a Link header`,
         );
       }
+
+      // The languages are searched for the one a phone asks in, which every browser sends, and
+      // they and the media type are published in the linkset as written. Neither was checked, so
+      // `"hreflang": "en"` was accepted, readiness said ready, and the first scan carrying
+      // `Accept-Language` at an identifier with two links of a type was a 500. A default written
+      // as the string `"true"` was no default at all, and a plain scan of the code answered that
+      // none was set.
+      if (link.hreflang !== undefined && !isLanguageList(link.hreflang)) {
+        throw new TypeError(
+          `the hreflang under ${path} is not a list of language tags, such as ["en"] or ["fr", "fr-CA"]`,
+        );
+      }
+      if (link.type !== undefined && !(typeof link.type === "string" && MEDIA_TYPE.test(link.type))) {
+        throw new TypeError(
+          `the type ${JSON.stringify(link.type)} under ${path} is not a media type, such as "text/html"`,
+        );
+      }
+      if (link.default !== undefined && typeof link.default !== "boolean") {
+        throw new TypeError(
+          `the default under ${path} is ${JSON.stringify(link.default)}, and has to be true or false`,
+        );
+      }
     }
   }
   return table as LinkTable;
+}
+
+/**
+ * A language tag as BCP 47 spells one: letters first, then subtags of up to eight letters or
+ * digits, joined by hyphens. Checked for its shape and not against the registry, which is enough
+ * to refuse a typo, a number or an underscore, and to accept every tag a browser sends.
+ */
+const LANGUAGE_TAG = /^[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*$/;
+
+/**
+ * A media type as RFC 6838 names one, with any parameters after it: `text/html` and
+ * `text/html; charset=utf-8`, and not `html`, `text/html;` or a number.
+ */
+const MEDIA_TYPE =
+  /^[A-Za-z0-9][\w!#$&^.+-]{0,126}\/[A-Za-z0-9][\w!#$&^.+-]{0,126}(?:\s*;\s*[\w!#$%&'*+.^`|~-]+=(?:[\w!#$%&'*+.^`|~-]+|"[ !#-[\]-~]*"))*$/;
+
+function isLanguageList(value: unknown): boolean {
+  return Array.isArray(value) && value.every((tag) => typeof tag === "string" && LANGUAGE_TAG.test(tag));
 }
 
 /**

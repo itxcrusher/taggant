@@ -222,4 +222,45 @@ describe("what a table may not say", () => {
       ).toThrow(/control character/);
     }
   });
+
+  it("refuses languages, a media type and a default that a scan could not be answered from", () => {
+    // The languages are searched for the one a phone asks in, and every browser sends one, so a
+    // list that was not a list of tags was a 500 on the commonest scan there is, at any identifier
+    // with two links of a type, while readiness said ready. A default written as a string was no
+    // default at all, so a plain scan of the code answered that none was set.
+    const link = { href: "https://a.example/", linkType: "gs1:pip", title: "A", default: true };
+    const table = (fields: Record<string, unknown>) => ({
+      version: 1,
+      entries: { "/01/09520123456788": [{ ...link, ...fields }] },
+    });
+    const refused: Array<[Record<string, unknown>, RegExp]> = [
+      [{ hreflang: "en" }, /not a list of language tags/],
+      [{ hreflang: [44] }, /not a list of language tags/],
+      [{ hreflang: [""] }, /not a list of language tags/],
+      [{ hreflang: ["en_US"] }, /not a list of language tags/],
+      [{ hreflang: ["en", null] }, /not a list of language tags/],
+      [{ hreflang: ["*"] }, /not a list of language tags/],
+      [{ type: 44 }, /not a media type/],
+      [{ type: "" }, /not a media type/],
+      [{ type: "html" }, /not a media type/],
+      [{ type: "text/html;" }, /not a media type/],
+      [{ default: "true" }, /true or false/],
+      [{ default: 1 }, /true or false/],
+    ];
+    for (const [fields, expected] of refused) {
+      expect(() => parseTable(table(fields)), JSON.stringify(fields)).toThrow(expected);
+    }
+    // And what a table does say is still read.
+    for (const fields of [
+      { hreflang: [] },
+      { hreflang: ["en", "fr-CA", "zh-Hant-TW", "es-419"] },
+      { type: "text/html" },
+      { type: "text/html; charset=utf-8" },
+      { type: 'text/html; charset="utf-8"' },
+      { type: "application/ld+json" },
+      { default: false },
+    ]) {
+      expect(() => parseTable(table(fields)), JSON.stringify(fields)).not.toThrow();
+    }
+  });
 });
