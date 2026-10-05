@@ -36,7 +36,7 @@ export interface CompiledTarget {
  * copy sees what it sees of the original from further back, and was put on the original in
  * every look. These continue the target's own sizes, each about a fifth smaller than the last,
  * and paired every copy measured down to three tenths of the design's size; copies at a quarter
- * and a fifth did not pair, and are not checked. The target does not hold these features,
+ * and a fifth paired too few places to be pointed at, and are not checked. The target does not hold these features,
  * because they are not what a camera is matched against.
  */
 const SMALLER_SCALES = [0.4, 0.32, 0.25, 0.2] as const;
