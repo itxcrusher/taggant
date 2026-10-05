@@ -60,15 +60,20 @@ export interface View {
   /** Matches that agreed with the pose it fitted; none when it was not found. */
   inliers: number;
   /**
-   * Found, with the pose putting the artwork more than a tenth of its own width from where it
-   * is: on another copy of a design that repeats, or nowhere near.
+   * Found somewhere other than where the artwork is: on another copy of a design that repeats, or
+   * nowhere near. A centred look is out when a corner is more than a tenth of the artwork's width
+   * from where it is (`MISPLACED_BEYOND`); a look pointed at a point is out when that point is, or
+   * when it found the artwork at another size, turned or mirrored (`POSED_WITHIN`).
    */
   misplaced: boolean;
 }
 
 /**
- * The recogniser pointed at the two ends of the move that carries the most places, at every size
- * the target covers: where the move takes its places from, and where it puts them.
+ * The recogniser pointed at the two ends of each move the rule picks (`movesToPoint`): the move
+ * carrying the most places, from `AIMED_FROM`, and the one only the smaller sizes make, from
+ * `AIMED_BEYOND_FROM`. Each end is where the move takes its places from or where it puts them;
+ * the larger end is looked at every size the target covers, and the smaller at those sizes grown
+ * by the move's change of size.
  */
 export interface Aimed {
   /**
@@ -82,8 +87,8 @@ export interface Aimed {
    */
   sizes: number;
   /**
-   * Looks taken, until one put the artwork in the wrong place: when none did, the same number at
-   * each end at each size.
+   * Looks taken, until one put the artwork in the wrong place: four turns at each end, so eight a
+   * size, and four fewer when the looks stopped at the larger end.
    */
   views: number;
   /** Of those, the looks that put the artwork somewhere other than where it is. */
@@ -630,14 +635,15 @@ export const TURNS = [0, 30, 60, 90] as const;
  * always wrong. The measure holds a pair to the same two figures to call it the same size and turn.
  *
  * A pose that settles on a copy of the design shows the copy's size, or its turn, or its other
- * hand, and a pose that is right shows none of them, however imprecise it is. Over the 781 looks
- * the compile points that found a design with no copy at another size, in 26 targets (seven
- * generated designs, one of them exported at ten more widths, and nine parts of the postcard
- * copied at their own size), the pose was within 5.2 per cent of the truth's size and 0.3 degrees
- * of its turn, found with as few as ten points. Over the 180 looks that settled on a copy at
- * another size, its size was off by 30 per cent or more. Judged by the error at the frame's own
- * corners instead, the worst of the first was 1.34 times the line and the least of the second
- * 1.35, which is no line at all.
+ * hand, and a pose that is right shows none of them, however imprecise it is. Over the 752 looks
+ * the compile points that found a design with no copy at another size, in 25 targets (seven
+ * generated designs, one of them exported at nine more widths that load to pixels of their own, and
+ * nine parts of the postcard copied at their own size), the pose, measured as this rule measures
+ * it, was within a factor of 1.049 of the truth's size and 1.2 degrees of its turn, found with as
+ * few as ten points, and over 209 such looks at photographs within 1.032 and 1.7 degrees. Over the
+ * 180 looks that settled on a copy at another size, its size was off by 30 per cent or more. Judged
+ * by the error at the frame's own corners instead, the worst of the first was 1.34 times the line
+ * and the least of the second 1.35, which is no line at all.
  */
 export const POSED_WITHIN = { scale: 1.15, turnDegrees: 20 } as const;
 
@@ -658,20 +664,22 @@ export const POSED_WITHIN = { scale: 1.15, turnDegrees: 20 } as const;
  * in that gap, and the places line does not on its own: of 60 more generated designs repeating
  * nothing, one reached 21 places, past it, at a share of 0.040, and is not refused.
  *
- * Twenty places, because that is the line a look's points are held to: a move carrying fewer
- * has fewer look-alikes to put behind the wrong pose than a look needs to count. A fifth, because
- * a small part of a design printed twice, a logo on a label, is not the design repeating: a square
- * a quarter of a generated design's area copied elsewhere on it measured 114 places at 0.147, and
- * was put in the right place in every one of 1200 looks at two sizes, and squares a fifth of the
- * postcard's area, copied between eight pairs of places, measured 0.110 to 0.152. A larger part
- * can cross it: squares a quarter of the postcard's area measured 0.128 to 0.208 over the same
- * eight, and one is refused. And a large part under it can still be put in the wrong place: with
- * the top 30 per cent of a generated design repeated at its bottom, the design measured 0.158 to
- * 0.170 at four export widths, and its looks put it in the wrong place at two of them and not at
- * the other two. The looks catch a part that large only sometimes, and nothing else catches it.
- * What this leaves to the recogniser's own looks is a design less than a fifth of which repeats,
- * and a periodic texture, whose many moves each carry a part of it: a brick wall measured 124
- * places at 0.124 and a grid 66 at 0.192.
+ * Twenty places, because that is the line a look's points are held to: a move carrying fewer has
+ * fewer look-alikes to put behind the wrong pose than a look needs to count. A fifth, because a
+ * small part of a design printed twice, a logo on a label, is not the design repeating while the
+ * rest of the design carries most of its places (a label that is mostly words, with a word or a
+ * line set twice, measured 0.20 to 0.26 and is refused, though the looks put it in the right
+ * place): a square a quarter of a generated design's area copied elsewhere on it measured 114
+ * places at 0.147, and was put in the right place in every one of 1200 looks at two sizes, and
+ * squares a fifth of the postcard's area, copied between eight pairs of places, measured 0.110 to
+ * 0.152. A larger part can cross it: squares a quarter of the postcard's area measured 0.128 to
+ * 0.208 over the same eight, and one is refused. And a large part under it can still be put in the
+ * wrong place: with the top 30 per cent of a generated design repeated at its bottom, the design
+ * measured 0.158 to 0.170 at four export widths, and its looks put it in the wrong place at two of
+ * them and not at the other two. The looks catch a part that large only sometimes, and nothing else
+ * catches it. What this leaves to the recogniser's own looks is a design less than a fifth of which
+ * repeats, and a periodic texture, whose many moves each carry a part of it: a brick wall measured
+ * 124 places at 0.124 and a grid 66 at 0.192.
  */
 export const REPEATS_FROM = { places: AGREEING_POINTS_NEEDED, share: 0.2 } as const;
 
@@ -696,12 +704,14 @@ export const REPEATS_FROM = { places: AGREEING_POINTS_NEEDED, share: 0.2 } as co
  *
  * Measured on the postcard and a generated design beside copies of themselves, at the side, below
  * and turned: copies at three tenths to three quarters of the design's size carried 14 to 111
- * places, none of them a fifth of its places, and every one was refused by these looks; a copy at
- * three quarters set 20 pixels below the postcard carries 131 of 641, a share of 0.204, and the
- * lines refuse it before any look. Twelve, because the 35 per cent copy carried 14. In other
- * layouts copies at three tenths to a third carried as few as 7, and smaller copies fewer still;
- * those are reached by `AIMED_BEYOND_FROM`. Of the 198 pieces repeating nothing above, twelve
- * carry twelve or more, up to 21, and are asked too, which costs them seconds.
+ * places, none of them a fifth of its places, and every one was refused by these looks. A copy at
+ * three quarters can carry more than a fifth, and the lines refuse it before any look: set 20
+ * pixels below the postcard it carries 131 of 641, a share of 0.204, turned beside the postcard
+ * 0.221 and 0.227, and beside, below or turned beside the generated design 0.215 to 0.251. Twelve,
+ * because the 35 per cent copy carried 14. In other layouts copies at three tenths to a third
+ * carried as few as 7, and smaller copies fewer still; those are reached by `AIMED_BEYOND_FROM`. Of
+ * the 198 pieces repeating nothing above, twelve carry twelve or more, up to 21, and are asked too,
+ * which costs them a second or two.
  */
 export const AIMED_FROM = 12;
 
@@ -743,7 +753,8 @@ export function repeats(repetition: Repetition): boolean {
  * four turns each: twenty looks, none of which the distance can move. The distance only turns
  * the size that passes into millimetres. Over 96 sizes of 24 pieces, the rule over one width
  * changed its verdict at 10 when the width moved by one per cent, and this one, over five,
- * changed at none. Each look is a few hundred milliseconds, so twenty is what stability costs.
+ * changed at none. Each look is tens of milliseconds, more on a busy machine, so twenty, about a
+ * second, is what stability costs.
  */
 const WIDTHS_SHOWN = [0.98, 0.99, 1, 1.01, 1.02] as const;
 

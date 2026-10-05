@@ -49,7 +49,8 @@ async function artwork(options: {
 // milliseconds. Stated here rather than left to the default, where they pass alone and
 // time out in a full run, which is the worst way for a test to fail. Two minutes, because a
 // compile shows the recogniser twenty looks at the size it confirms and more at the sizes it
-// refuses, a few hundred milliseconds each, and a sheet it refuses everywhere is the dearest.
+// refuses, tens of milliseconds each and more beside the rest of the suite, and a sheet it
+// refuses everywhere is the dearest.
 describe("the report against real artwork", { timeout: 120_000 }, () => {
   it("does not give bold artwork a bigger minimum print than fine artwork", async () => {
     const bold = await compileTarget(await artwork({ blobs: 40, radius: 40 }), {

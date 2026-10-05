@@ -26,7 +26,7 @@ describe("the artwork as the recogniser is shown it", () => {
   });
 
   it("goes back to the event loop between looks, so a server compiling answers in between", async () => {
-    // Each look is a few hundred milliseconds that cannot be divided, and a compile asks for
+    // Each look is tens of milliseconds that cannot be divided, and a compile asks for
     // twenty or more. Run back to back they held a console for eight seconds on a sheet of four
     // postcards while an unrelated page waited seventeen.
     //

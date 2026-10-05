@@ -34,10 +34,11 @@ import {
  * Says, for each turn, whether the artwork was found, with how many points agreeing, and whether
  * the pose put it somewhere other than where it is.
  *
- * Asynchronous because a server calls it. Each look is a few hundred milliseconds of work that
- * cannot be divided, and a compile asks for dozens of them; run back to back they held a console
- * for eight seconds on a sheet of four postcards, while an unrelated page waited seventeen. It
- * goes back to the event loop before each look, so nothing else waits longer than one.
+ * Asynchronous because a server calls it. Each look is tens of milliseconds of work that cannot
+ * be divided, more on a busy machine, and a compile asks for dozens of them; run back to back
+ * they held a console for eight seconds on a sheet of four postcards, while an unrelated page
+ * waited seventeen. It goes back to the event loop before each look, so nothing else waits longer
+ * than one.
  */
 export function recognitionOf(
   image: GrayscaleImage,
