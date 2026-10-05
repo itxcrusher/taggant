@@ -37,16 +37,6 @@ export interface BundleResult {
   files: string[];
 }
 
-/**
- * Turn a manifest and its assets into a folder that runs on its own.
- *
- * The rule the whole thing exists for is that nothing in the output reaches for the
- * network. The runtime is copied in rather than linked, assets are copied in under names
- * taken from their content, and the manifest inside the bundle points at those names. A
- * bundle written today keeps working when every service in this project is switched off,
- * which is the promise being made to anyone who prints a code on something that will
- * outlive a vendor.
- */
 /** Written into every bundle, so publishing again knows what it is allowed to replace. */
 const MARKER = ".taggant-bundle";
 
@@ -358,6 +348,16 @@ function checkReadiness(target: { id: string; physicalWidthMm: number }, report:
   }
 }
 
+/**
+ * Turn a manifest and its assets into a folder that runs on its own.
+ *
+ * The rule the whole thing exists for is that nothing in the output reaches for the
+ * network. The runtime is copied in rather than linked, assets are copied in under names
+ * taken from their content, and the manifest inside the bundle points at those names. A
+ * bundle written today keeps working when every service in this project is switched off,
+ * which is the promise being made to anyone who prints a code on something that will
+ * outlive a vendor.
+ */
 export async function bundle(options: BundleOptions): Promise<BundleResult> {
   const validated = validateManifest(options.manifest);
   if (!validated.ok) {

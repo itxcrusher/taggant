@@ -174,14 +174,6 @@ function checkDigitHolds(entry: Identifier, value: string): boolean {
 }
 
 /**
- * Read a Digital Link URI's path.
- *
- * The standard allows anything before the identifiers, so the first segment that names a
- * primary identifier is where the link starts and everything before it is the prefix.
- * A trailing slash is tolerated, which the standard asks for and which is the sort of
- * thing that quietly breaks a resolver otherwise.
- */
-/**
  * Longest path this will read.
  *
  * The stem is reflected into the Link header three times, so a request the server accepted
@@ -191,6 +183,14 @@ function checkDigitHolds(entry: Identifier, value: string): boolean {
  */
 const MAX_PATH_LENGTH = 512;
 
+/**
+ * Read a Digital Link URI's path.
+ *
+ * The standard allows anything before the identifiers, so the first segment that names a
+ * primary identifier is where the link starts and everything before it is the prefix.
+ * A trailing slash is tolerated, which the standard asks for and which is the sort of
+ * thing that quietly breaks a resolver otherwise.
+ */
 export function parseDigitalLink(pathname: string): DigitalLink {
   if (pathname.length > MAX_PATH_LENGTH) {
     throw new DigitalLinkError(

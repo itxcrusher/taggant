@@ -311,14 +311,6 @@ async function publishOnce(
 }
 
 /**
- * Point a printed code at a published bundle, by writing the resolver's own table.
- *
- * The console does not talk to the resolver and the resolver does not know the console
- * exists. The table is a file one writes and the other watches, which is the same
- * boundary the continuity claim rests on: a table that can only be changed by asking a
- * service is a table the operator does not own.
- */
-/**
  * One queue per link table, so a read and the write that follows it are not separated.
  *
  * Registering a code is read, change, write. Two registrations at the same moment both
@@ -340,6 +332,14 @@ async function publishOnce(
  */
 const tableQueues = new Map<string, Promise<void>>();
 
+/**
+ * Point a printed code at a published bundle, by writing the resolver's own table.
+ *
+ * The console does not talk to the resolver and the resolver does not know the console
+ * exists. The table is a file one writes and the other watches, which is the same
+ * boundary the continuity claim rests on: a table that can only be changed by asking a
+ * service is a table the operator does not own.
+ */
 export async function registerCode(
   tablePath: string,
   entry: { path: string; href: string; title: string; linkType?: string; language?: string },

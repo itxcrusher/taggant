@@ -559,9 +559,9 @@ export async function claim(
     }
   }
 
-  /** Note a lock that is no longer this claim's, once, and say so. */
   /** Ticks a taken lock has read as not yet a lock, while its new holder writes it. */
   const unreadable = new Map<string, number>();
+  /** Note a lock that is no longer this claim's, once, and say so. */
   const noticeIfTaken = (lock: string): void => {
     if (lost.has(lock) || ours(lock)) return;
     let text: string | null = null;
