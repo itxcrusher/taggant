@@ -11,9 +11,9 @@ export interface LoadOptions {
    * minimum print widths. It did, and the swing was three to one, which rewarded exporting
    * small: send a smaller file, be told you may print smaller, and get a worse target for
    * it. Some movement is left, because the raster is the same size and its pixels are not:
-   * one generated design came out 92 mm wide from six of ten export widths and 145 from the
-   * other four, the larger at 400, 500, 600 and 800 pixels across and the smaller between and
-   * beyond them, so in that design neither small nor large exports were favoured.
+   * one generated design, exported at fifteen widths from 300 to 1000 pixels across, came out
+   * 92 mm wide at eight of them, 145 at six and 116 at one, the wider ones scattered among the
+   * narrower, so in that design neither small nor large exports were favoured.
    *
    * The value is set by what a camera can deliver, not by what a file might hold. The
    * runtime recognises against a frame reduced to 480 px wide, and the smallest size in a

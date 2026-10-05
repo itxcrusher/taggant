@@ -647,8 +647,12 @@ export const POSED_WITHIN = { scale: 1.15, turnDegrees: 20 } as const;
  * a small part of a design printed twice, a logo on a label, is not the design repeating: a square
  * a quarter of a generated design's area copied elsewhere on it measured 114 places at 0.147, and
  * was put in the right place in every one of 1200 looks at two sizes, and squares a fifth of the
- * postcard's area measured 0.128 to 0.152. A larger part can cross it: squares a quarter of the
- * postcard's area measured 0.167 to 0.208 with where they were copied, and the last is refused.
+ * postcard's area, copied between eight pairs of places, measured 0.110 to 0.152. A larger part
+ * can cross it: squares a quarter of the postcard's area measured 0.128 to 0.208 over the same
+ * eight, and one is refused. And a large part under it can still be put in the wrong place: with
+ * the top 30 per cent of a generated design repeated at its bottom, the design measured 0.158 to
+ * 0.170 at four export widths, and its looks put it in the wrong place at two of them and not at
+ * the other two. The looks catch a part that large only sometimes, and nothing else catches it.
  * What this leaves to the recogniser's own looks is a design less than a fifth of which repeats,
  * and a periodic texture, whose many moves each carry a part of it: a brick wall measured 124
  * places at 0.124 and a grid 66 at 0.192.
@@ -664,13 +668,15 @@ export const REPEATS_FROM = { places: AGREEING_POINTS_NEEDED, share: 0.2 } as co
  * cross them: it pairs only through the sizes whose ratio matches its own, so its move carries a
  * fraction of the smaller copy's places, and the postcard beside a copy of itself at 60 per cent,
  * 61 places of 458, was called ready for press. A camera pointed at the small copy settles on the
- * large one and draws the content there. A part of a design copied at its own size can measure as
- * much and is not put in the wrong place, because the rest of the artwork outvotes it. The measure
- * cannot tell the two apart and the recogniser can, so for a move carrying this many places it is
- * asked, pointed where the move takes its places from and where it puts them. The smaller copy is
- * looked at the target's sizes grown by the move's change of size, which is the camera brought
- * close enough to it that it fills as much of the frame as the larger copy does from further
- * back: pointed at the plain sizes alone, nine of twelve such designs still passed.
+ * large one and draws the content there. A small part of a design copied at its own size can
+ * measure as much and is not put in the wrong place, because the rest of the artwork outvotes
+ * it; a large part can be, at some export widths and not at others (`REPEATS_FROM`). The measure
+ * cannot tell a copy at another size from a part at its own, and the recogniser can, so for a
+ * move carrying this many places it is asked, pointed where the move takes its places from and
+ * where it puts them. The smaller copy is looked at the target's sizes grown by the move's change
+ * of size, which is the camera brought close enough to it that it fills as much of the frame as
+ * the larger copy does from further back: pointed at the plain sizes alone, nine of twelve such
+ * designs still passed.
  *
  * Measured on the postcard and a generated design beside copies of themselves, at the side, below
  * and turned: copies at three tenths to three quarters of the design's size carried 14 to 111
