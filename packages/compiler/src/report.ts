@@ -1,5 +1,14 @@
-import { type Corner, type Repetition, type TargetFeature, measureRepetition } from "@taggant/vision";
+import {
+  type Corner,
+  DEFAULT_SCALES,
+  type Repetition,
+  type TargetFeature,
+  measureRepetition,
+} from "@taggant/vision";
 import { targetDigest } from "./digest.js";
+
+/** The largest size a compile describes the artwork at, as a multiple of the smallest. */
+const SIZES_SPAN = Math.max(...DEFAULT_SCALES) / Math.min(...DEFAULT_SCALES);
 
 /** One size the artwork was described at, with the features found there. */
 export interface Level {
@@ -62,7 +71,15 @@ export interface View {
  * the target covers: where the move takes its places from, and where it puts them.
  */
 export interface Aimed {
-  /** Sizes the target covers that were looked at, smallest first, until one put it in the wrong place. */
+  /**
+   * Moves pointed at, in the order the rule picks them (`movesToPoint`), until a look put the
+   * artwork in the wrong place: every one of them when none did.
+   */
+  moves: number;
+  /**
+   * Sizes looked at, summed over the moves pointed at, each move's smallest first, until a look
+   * put the artwork in the wrong place.
+   */
   sizes: number;
   /**
    * Looks taken, until one put the artwork in the wrong place: when none did, the same number at
@@ -335,6 +352,8 @@ export function isCurrentReport(report: unknown): report is Report {
     if ((widthsAgreed as number) > (widths as number) || (widths as number) > WIDTHS_SHOWN.length)
       return false;
     if ((misplaced as number) > (views as number)) return false;
+    // A size confirmed is one no look put in the wrong place.
+    if (found === true && misplaced !== 0) return false;
   }
 
   // Measured by every compile this build makes, so a report without it is from an earlier one:
@@ -352,7 +371,8 @@ export function isCurrentReport(report: unknown): report is Report {
   if (ends !== null && !onArtwork(ends)) return false;
   if ((move === null) !== (ends === null)) return false;
   // The move carrying the most places among those past the target's own sizes, which can be the
-  // move above and carries no more than it.
+  // move above, carries no more than it, and changes the artwork's size by more than those sizes
+  // span: a move within them is not one.
   const beyond = repeated.beyond;
   if (
     beyond !== null &&
@@ -362,46 +382,56 @@ export function isCurrentReport(report: unknown): report is Report {
       beyond.places > 0 &&
       beyond.places <= repeated.places &&
       isMove(beyond.move) &&
+      Math.abs(Math.log((beyond.move as { scale: number }).scale)) > Math.log(SIZES_SPAN) &&
       onArtwork(beyond.ends)
     )
   )
     return false;
-  // The recogniser pointed at those ends, at one size or more, until a look was in the wrong place.
+  // The recogniser pointed at those ends, move by move and size by size, until a look was in the
+  // wrong place: both ends at each size, four turns at each end, so eight looks a size, and four
+  // fewer when the larger end's looks were where it stopped.
   const aimed = repeated.aimed;
   if (
     aimed !== null &&
     !(
       isRecord(aimed) &&
+      isCount(aimed.moves) &&
       isCount(aimed.sizes) &&
       isCount(aimed.views) &&
       isCount(aimed.misplaced) &&
-      aimed.sizes > 0 &&
-      aimed.misplaced <= aimed.views
+      aimed.moves > 0 &&
+      aimed.sizes > (aimed.moves - 1) * DEFAULT_SCALES.length &&
+      aimed.sizes <= aimed.moves * DEFAULT_SCALES.length &&
+      aimed.misplaced <= TURNS.length &&
+      (aimed.views === aimed.sizes * 2 * TURNS.length ||
+        (aimed.misplaced > 0 && aimed.views === (aimed.sizes * 2 - 1) * TURNS.length))
     )
   )
     return false;
   // Pointed at only for the moves the rule picks, and only for a design that has passed everything
-  // else, which no line has refused; a refusal by the looks has a look in the wrong place.
+  // else, which no line has refused; a refusal by the looks has a look in the wrong place, and a
+  // refusal after a size was confirmed is one by the looks.
   const toPoint = movesToPoint(repeated as unknown as Repetition);
   if (aimed !== null) {
     if (toPoint.length === 0 || repeats(repeated as unknown as Repetition)) return false;
+    if ((aimed as unknown as Aimed).moves > toPoint.length) return false;
     if (!pass && (aimed as unknown as Aimed).misplaced === 0) return false;
   }
+  if (!pass && isRecord(seen) && seen.found === true && aimed === null) return false;
 
   if (pass) {
     if (featureCount < MIN_FEATURES || areasWithFeatures < MIN_AREAS) return false;
     if (repeats(repeated as unknown as Repetition)) return false;
     // Measured over places that hold features: a pass measured over none was never measured.
     if (repeated.of === 0) return false;
-    // Pointed at both ends of every move the rule picks, the same number of looks at each end at
-    // each size, and put in the right place every time; looks where it picks none are refused
-    // above, for every report.
-    // Only a pass has every look: a refusal stops at the first wrong one, which can be at either
-    // end of any size.
+    // Pointed at both ends of every move the rule picks, at every size, and put in the right place
+    // every time; looks where it picks none are refused above, for every report. Only a pass has
+    // every look: a refusal stops at the first wrong one, which can be at either end of any size.
     const pointed = aimed as Aimed | null;
     if (toPoint.length > 0) {
-      if (pointed === null || pointed.misplaced !== 0 || pointed.views === 0) return false;
-      if (pointed.views % (2 * pointed.sizes) !== 0) return false;
+      if (pointed === null || pointed.misplaced !== 0) return false;
+      if (pointed.moves !== toPoint.length || pointed.sizes !== pointed.moves * DEFAULT_SCALES.length)
+        return false;
     }
     // Asked, and agreed: at most of its widths, in every turn, never in the wrong place, and at
     // the size the report names.
@@ -573,7 +603,8 @@ export const MISPLACED_BEYOND = 0.1;
  * degrees, against a line of twenty that sat between them. A person holds a label, a bottle or
  * a card at whatever angle it comes to hand. And it is the turns that show a design put on the
  * wrong copy of itself: with two of these four instead of all of them, four of five sheets of
- * four identical designs were called ready.
+ * four identical designs were called ready. Here rather than with the recogniser, because the
+ * check of a stored report counts its looks by them.
  */
 export const TURNS = [0, 30, 60, 90] as const;
 
@@ -857,7 +888,7 @@ export async function buildReport(input: ReportInput): Promise<Report> {
   let aimed: Aimed | null = null;
   const toPoint = repetition === null ? [] : movesToPoint(repetition);
   if (pass && input.recognises !== undefined && toPoint.length > 0) {
-    aimed = { sizes: 0, views: 0, misplaced: 0 };
+    aimed = { moves: 0, sizes: 0, views: 0, misplaced: 0 };
     for (const pointed of toPoint) {
       const looked = await aimAt({
         recognises: input.recognises,
@@ -867,6 +898,7 @@ export async function buildReport(input: ReportInput): Promise<Report> {
         analysisWidth: image.width,
       });
       aimed = {
+        moves: aimed.moves + 1,
         sizes: aimed.sizes + looked.sizes,
         views: aimed.views + looked.views,
         misplaced: looked.misplaced,
@@ -1280,12 +1312,15 @@ export function describeRepetition(report: Report): string {
   const aimed = measured.aimed ?? null;
   let pointed = "";
   if (aimed !== null) {
-    // Which moves were pointed at, from the same rule that chose them.
-    const moves = movesToPoint(measured).map((move) =>
-      move.ends === measured.ends || (measured.ends !== null && sameEnds(move.ends, measured.ends))
-        ? "that move"
-        : `the move ${describeMove(move.move)}, which carries ${move.places} places`,
-    );
+    // Which moves were pointed at, from the same rule that chose them, up to the one where the
+    // looks stopped: a refusal at the first move named the second too, which was never looked at.
+    const moves = movesToPoint(measured)
+      .slice(0, aimed.moves)
+      .map((move) =>
+        move.ends === measured.ends || (measured.ends !== null && sameEnds(move.ends, measured.ends))
+          ? "that move"
+          : `the move ${describeMove(move.move)}, which carries ${move.places} places`,
+      );
     const which = moves.length > 0 ? moves.join(" and of ") : "that move";
     pointed =
       aimed.misplaced === 0

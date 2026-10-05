@@ -126,7 +126,7 @@ describe("formatReportLines", () => {
           move: { across: -0.72, down: 0, turnDegrees: 0, scale: 1.67 },
           ends: { from: { x: 512, y: 136 }, to: { x: 147, y: 139 } },
           beyond: null,
-          aimed: { sizes: 1, views: 16, misplaced: 4 },
+          aimed: { moves: 1, sizes: 1, views: 8, misplaced: 4 },
         },
         analysisWidth: 640,
         smallestUsableScale: 0.5,

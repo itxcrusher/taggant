@@ -274,7 +274,7 @@ describe("the report against real artwork", { timeout: 120_000 }, () => {
       .toBuffer();
     const compiled = await compileTarget(partly, { id: "part", scanDistanceMm: 190 });
     expect(compiled.report.pass).toBe(true);
-    expect(compiled.report.repetition?.aimed).toEqual({ sizes: 4, views: 32, misplaced: 0 });
+    expect(compiled.report.repetition?.aimed).toEqual({ moves: 1, sizes: 4, views: 32, misplaced: 0 });
   });
 
   it("gives a sheet the same verdict whichever size it was exported at", async () => {
