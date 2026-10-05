@@ -16,17 +16,24 @@ export interface ReportInput {
    * report cannot pass, because nothing says the design is not printed twice.
    */
   features?: TargetFeature[];
+  /**
+   * The artwork described at sizes below any the target covers, which the target does not hold,
+   * measured with the features above so that a copy of the design at less than half its size
+   * pairs with the original.
+   */
+  smaller?: TargetFeature[];
   /** Distance in millimetres at which a person is expected to hold the camera. */
   scanDistanceMm: number;
   /**
    * Show the recogniser the artwork with this many pixels across it, once for each turn it is
-   * shown at, and say what it made of each.
+   * shown at, and say what it made of each: pointed at the artwork's centre, or at the point
+   * given, in the artwork's own pixels.
    *
    * Supplied by whoever has the pixels, which is the compiler; this module has corners and
    * nothing else. Without it a report cannot pass, because every way of deciding readiness
    * from the corners alone has been measured wrong.
    */
-  recognises?: (pixelsAcross: number) => View[] | Promise<View[]>;
+  recognises?: (pixelsAcross: number, aim?: { x: number; y: number }) => View[] | Promise<View[]>;
 }
 
 /** One look the recogniser took: the artwork at one width and one turn. */
@@ -40,6 +47,25 @@ export interface View {
    */
   misplaced: boolean;
 }
+
+/**
+ * The recogniser pointed at the two ends of the move that carries the most places, at every size
+ * the target covers: where the move takes its places from, and where it puts them.
+ */
+export interface Aimed {
+  /** Sizes the target covers that were looked at, smallest first, until one put it in the wrong place. */
+  sizes: number;
+  /**
+   * Looks taken, until one put the artwork in the wrong place: when none did, the same number at
+   * each end at each size.
+   */
+  views: number;
+  /** Of those, the looks that put the artwork somewhere other than where it is. */
+  misplaced: number;
+}
+
+/** How far the design maps onto itself, and what the recogniser made of it pointed there. */
+export type MeasuredRepetition = Repetition & { aimed: Aimed | null };
 
 /** What the recogniser made of the artwork at the size a report gives. */
 export interface Recognition {
@@ -86,8 +112,11 @@ export interface Report {
    * and was then kept as a diagnostic beside a recogniser that settled repeated designs by
    * whether one look in twenty landed on the wrong copy, which it did at some export widths of
    * the same design and not at others.
+   *
+   * `aimed` is the recogniser pointed at both ends of that move, taken for a design whose move
+   * carries `AIMED_FROM` places or more and is not refused outright; null when it was not taken.
    */
-  repetition: Repetition | null;
+  repetition: MeasuredRepetition | null;
   /**
    * The artwork put in front of the recogniser at the size this report gives, and what came
    * back. This is what decides readiness: the width is a claim about what a camera at the scan
@@ -274,10 +303,39 @@ export function isCurrentReport(report: unknown): report is Report {
     !(isRecord(move) && [move.across, move.down, move.turnDegrees, move.scale].every(isFiniteNumber))
   )
     return false;
+  // Where the move's two ends are, present exactly when there is a move.
+  const ends = repeated.ends;
+  if (ends !== null && !(isRecord(ends) && isPoint(ends.from) && isPoint(ends.to))) return false;
+  if ((move === null) !== (ends === null)) return false;
+  // The recogniser pointed at those ends, at one size or more, until a look was in the wrong place.
+  const aimed = repeated.aimed;
+  if (
+    aimed !== null &&
+    !(
+      isRecord(aimed) &&
+      isCount(aimed.sizes) &&
+      isCount(aimed.views) &&
+      isCount(aimed.misplaced) &&
+      aimed.sizes > 0 &&
+      aimed.misplaced <= aimed.views
+    )
+  )
+    return false;
 
   if (pass) {
     if (featureCount < MIN_FEATURES || areasWithFeatures < MIN_AREAS) return false;
     if (repeats(repeated as unknown as Repetition)) return false;
+    // Pointed at both ends of a move carrying enough places to need it, the same number of looks
+    // at each end at each size, and put in the right place every time; not pointed at all for one
+    // that carries fewer. Only a pass has every look: a refusal stops at the first wrong one,
+    // which can be at either end of any size.
+    const pointed = aimed as Aimed | null;
+    if ((repeated.places as number) >= AIMED_FROM) {
+      if (pointed === null || pointed.misplaced !== 0 || pointed.views === 0) return false;
+      if (pointed.views % (2 * pointed.sizes) !== 0) return false;
+    } else if (pointed !== null) {
+      return false;
+    }
     // Asked, and agreed: at most of its widths, in every turn, never in the wrong place, and at
     // the size the report names.
     if (seen === null || seen.found !== true) return false;
@@ -294,6 +352,10 @@ export function isCurrentReport(report: unknown): report is Report {
     if ((width as number) > WIDEST_DECLARABLE_MM) return false;
   }
   return true;
+}
+
+function isPoint(value: unknown): boolean {
+  return isRecord(value) && isFiniteNumber(value.x) && isFiniteNumber(value.y);
 }
 
 function isCount(value: unknown): value is number {
@@ -406,23 +468,50 @@ export const MISPLACED_BEYOND = 0.1;
  * When a design repeats itself: one move of the whole artwork carries at least this many of its
  * places onto look-alikes, and at least this share of all of them.
  *
- * Set from what was measured either side of it. Over 51 sheets of copies, the postcard printed
+ * Set from what was measured either side of it, with the features of the sizes the target covers
+ * and of the smaller sizes the compiler adds. Over 51 sheets of copies, the postcard printed
  * twice exported at seventeen widths, with gutters and margins of every size tried, in six
  * layouts, and a generated design twice, four times and beside itself turned half way round,
- * none came under 101 places or a share of 0.268. Over 138 pieces that repeat nothing, every
+ * none came under 105 places or a share of 0.291. Over 138 pieces that repeat nothing, every
  * wallpaper on one machine with portrait and tall crops of each, and generated designs at seven
- * densities in three shapes, none came over 11 places, and of the 80 with sixty places or more,
- * none came over a share of 0.104. Both lines sit in those gaps.
+ * densities in three shapes, none came over 19 places, and of the 86 with sixty or more places
+ * holding a feature, none came over a share of 0.114. Both lines sit in those gaps, and it takes
+ * both: the most places a piece repeating nothing reached is one under the line, at a share of
+ * 0.058. Without the smaller sizes the same pieces gave 101 and 0.268 against 11 and 0.104.
  *
  * Twenty places, because that is the line a look's points are held to: a move carrying fewer
  * has fewer look-alikes to put behind the wrong pose than a look needs to count. A fifth, because
  * a part of a design printed twice, a logo on a label, is not the design repeating: a square a
- * quarter of a design's area copied elsewhere on it measured 77 places at 0.143, and was put in
+ * quarter of a design's area copied elsewhere on it measured 114 places at 0.147, and was put in
  * the right place in every one of 1200 looks at two sizes. What this leaves to the recogniser's
  * own looks is a design less than a fifth of which repeats, and a periodic texture, whose many
- * moves each carry a part of it: a brick wall measured 82 places at 0.105 and a grid 66 at 0.192.
+ * moves each carry a part of it: a brick wall measured 124 places at 0.124 and a grid 66 at 0.192.
  */
 export const REPEATS_FROM = { places: AGREEING_POINTS_NEEDED, share: 0.2 } as const;
+
+/**
+ * From how many places carried by one move the recogniser is pointed at both ends of it, at every
+ * size the target covers, before a design is called ready for press.
+ *
+ * The lines above refuse a design printed twice at one size, and a copy at another size sits
+ * under them: it pairs only through the sizes whose ratio matches its own, so its move carries a
+ * fraction of the smaller copy's places, and the postcard beside a copy of itself at 60 per cent
+ * was called ready for press. A camera pointed at the small copy settles on the large one and
+ * draws the content there. A part of a design copied at its own size can measure as much and is
+ * not put in the wrong place, because the rest of the artwork outvotes it. The measure cannot
+ * tell the two apart and the recogniser can, so for a move carrying this many places it is asked,
+ * pointed where the move takes its places from and where it puts them. The smaller copy is
+ * looked at grown by the move's change of size as well, which is the camera brought close
+ * enough to it that it fills as much of the frame as the larger copy does from further back:
+ * pointed at the plain sizes alone, nine of twelve such designs still passed.
+ *
+ * Measured on the postcard and a generated design beside copies of themselves, at the side, below
+ * and turned: copies at three tenths to three quarters of the design's size carried 14 to 111
+ * places, under both lines, and copies at a quarter and a fifth carried 5 to 10, which this does
+ * not reach. Twelve, because the 35 per cent copy carried 14. Of the 138 pieces repeating nothing
+ * above, five carry twelve or more, up to 19, and are asked too, which costs them seconds.
+ */
+export const AIMED_FROM = 12;
 
 /** Whether a measured repetition crosses both lines in `REPEATS_FROM`. */
 export function repeats(repetition: Repetition): boolean {
@@ -500,7 +589,9 @@ export async function buildReport(input: ReportInput): Promise<Report> {
   const repetition =
     input.features === undefined
       ? null
-      : measureRepetition(input.features, image, { farEnough: MISPLACED_BEYOND * image.width });
+      : measureRepetition([...input.features, ...(input.smaller ?? [])], image, {
+          farEnough: MISPLACED_BEYOND * image.width,
+        });
 
   const reasons: string[] = [];
   if (featureCount < MIN_FEATURES) reasons.push("too few features to track reliably");
@@ -562,6 +653,7 @@ export async function buildReport(input: ReportInput): Promise<Report> {
   // alone, where the mark overflows the frame, and was refused for repeating itself when it
   // repeats nothing; the recogniser finds the same artwork at half that size.
   let recognition: Recognition | null = null;
+  const sizes = [...new Set(levels.map((level) => level.scale))].sort((a, b) => a - b);
   if (pass) {
     if (input.recognises === undefined) {
       pass = false;
@@ -571,7 +663,7 @@ export async function buildReport(input: ReportInput): Promise<Report> {
     } else {
       const outcome = await confirmSize({
         recognises: input.recognises,
-        sizes: [...new Set(levels.map((level) => level.scale))].sort((a, b) => a - b),
+        sizes,
         analysisWidth: image.width,
         scanDistanceMm,
       });
@@ -583,6 +675,32 @@ export async function buildReport(input: ReportInput): Promise<Report> {
         pass = false;
         reasons.push(refusal(outcome, scanDistanceMm));
       }
+    }
+  }
+
+  // A move carrying enough places to need it: the recogniser pointed at both of its ends, at every
+  // size the target covers. Pointed at one copy of a design with a second copy at another size,
+  // a camera settles on the other copy, and the centred looks above never point there.
+  let aimed: Aimed | null = null;
+  if (
+    pass &&
+    input.recognises !== undefined &&
+    repetition !== null &&
+    repetition.ends !== null &&
+    repetition.places >= AIMED_FROM
+  ) {
+    const looked = await aimAt({
+      recognises: input.recognises,
+      ends: repetition.ends,
+      scale: repetition.move?.scale ?? 1,
+      sizes,
+      analysisWidth: image.width,
+    });
+    aimed = { sizes: looked.sizes, views: looked.views, misplaced: looked.misplaced };
+    if (looked.at !== null) {
+      pass = false;
+      minimumWidthMm = null;
+      reasons.push(aimedRefusal(repetition, looked.at, scanDistanceMm, image));
     }
   }
 
@@ -605,7 +723,7 @@ export async function buildReport(input: ReportInput): Promise<Report> {
     featureCount,
     areasWithFeatures,
     areas: GRID * GRID,
-    repetition,
+    repetition: repetition === null ? null : { ...repetition, aimed },
     recognition,
     analysisWidth: image.width,
     smallestUsableScale,
@@ -805,6 +923,68 @@ function refusal(outcome: SizeOutcome, scanDistanceMm: number): string {
   return `the recogniser did not find it in every turn with ${AGREEING_POINTS_NEEDED} points agreeing at most of its widths, at any size the target covers. The closest was ${seen.widthsAgreed} of ${seen.widths} widths, printed ${outcome.widthMm} mm wide and read from ${scanDistanceMm} mm. Artwork with too little distinct detail does this`;
 }
 
+interface AimedAt {
+  scale: number;
+  end: { x: number; y: number };
+  misplaced: number;
+  views: number;
+}
+
+/**
+ * The recogniser pointed at each end of a move, at each size from the smallest up, until a look
+ * puts the artwork in the wrong place.
+ *
+ * The end on the larger copy is looked at the sizes the target covers. The end on the smaller copy
+ * is looked at those sizes grown by the move's change of size: a smaller copy is taken for the
+ * larger one when it appears as large as one of the sizes the target describes, which is the whole
+ * artwork seen that much larger, a reader holding the phone closer to the small copy. Looked at
+ * only the target's own sizes, the postcard beside a copy of itself at 60 per cent was found in the
+ * right place at both ends every time.
+ */
+async function aimAt(given: {
+  recognises: (pixelsAcross: number, aim?: { x: number; y: number }) => View[] | Promise<View[]>;
+  ends: { from: { x: number; y: number }; to: { x: number; y: number } };
+  /** The move's change of size, from where it takes its places to where it puts them. */
+  scale: number;
+  sizes: number[];
+  analysisWidth: number;
+}): Promise<{ sizes: number; views: number; misplaced: number; at: AimedAt | null }> {
+  const growing = given.scale >= 1;
+  const larger = growing ? given.ends.to : given.ends.from;
+  const smaller = growing ? given.ends.from : given.ends.to;
+  const grow = growing ? given.scale : 1 / given.scale;
+  let views = 0;
+  let sizes = 0;
+  for (const scale of given.sizes) {
+    sizes++;
+    for (const [end, factor] of [
+      [larger, 1],
+      [smaller, grow],
+    ] as const) {
+      const shown = scale * factor;
+      const looks = await given.recognises(Math.round(shown * given.analysisWidth), end);
+      views += looks.length;
+      const misplaced = looks.filter((view) => view.misplaced).length;
+      if (misplaced > 0)
+        return { sizes, views, misplaced, at: { scale: shown, end, misplaced, views: looks.length } };
+    }
+  }
+  return { sizes, views, misplaced: 0, at: null };
+}
+
+/** Why a design the recogniser put in the wrong place when pointed at its copy is refused. */
+function aimedRefusal(
+  repetition: Repetition,
+  at: AimedAt,
+  scanDistanceMm: number,
+  image: { width: number; height: number },
+): string {
+  const widthMm = printWidthMm(at.scale * image.width, scanDistanceMm);
+  const across = Math.round((at.end.x / image.width) * 100);
+  const down = Math.round((at.end.y / image.height) * 100);
+  return `pointed at the part of the artwork ${across} per cent across and ${down} per cent down, at the size of a print ${widthMm} mm wide read from ${scanDistanceMm} mm, the recogniser put it in the wrong place in ${at.misplaced} of ${at.views} looks. One move of the whole artwork, ${describeMove(repetition.move)}, carries ${repetition.places} of its ${repetition.of} places onto look-alikes of themselves, and a camera pointed there settles on that move and draws the content on the wrong copy. A design with a second copy of itself at another size, or turned, does this: compile one copy, or change it so its copies differ`;
+}
+
 /** Why a design that maps onto itself is refused, naming the move that does it. */
 function repeatsItself(repetition: Repetition): string {
   return `it maps onto itself: one move of the whole artwork, ${describeMove(repetition.move)}, carries ${repetition.places} of its ${repetition.of} places onto look-alikes of themselves. The recogniser can settle on that move and draw the content on the wrong copy. Compile one copy of the design, or change it so its parts differ`;
@@ -859,7 +1039,14 @@ export function describeRepetition(report: Report): string {
   const measured = report.repetition;
   if (measured === null) return "not measured";
   const lines = `the lines are ${REPEATS_FROM.places} places and ${Math.round(REPEATS_FROM.share * 100)} per cent of them`;
-  return `${repeats(measured) ? "yes" : "no"}: the most one move carries onto look-alikes is ${measured.places} of its ${measured.of} places, and ${lines}`;
+  const aimed = measured.aimed ?? null;
+  const pointed =
+    aimed === null
+      ? ""
+      : aimed.misplaced === 0
+        ? `; pointed at both ends of that move at every size the target covers, the recogniser put it in the right place in all ${aimed.views} looks`
+        : `; pointed at the ends of that move, the recogniser put it in the wrong place in ${aimed.misplaced} of ${aimed.views} looks`;
+  return `${repeats(measured) ? "yes" : "no"}: the most one move carries onto look-alikes is ${measured.places} of its ${measured.of} places, and ${lines}${pointed}`;
 }
 
 function areasTouched(corners: Corner[], image: { width: number; height: number }): number {

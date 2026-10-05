@@ -68,6 +68,17 @@ describe("measureRepetition", () => {
     expect(alone.places).toBeLessThan(15);
   });
 
+  it("says where the move takes its places from and where it puts them, one end on each copy", () => {
+    // Those are where a camera is pointed when it settles on the wrong copy. The copies span
+    // 0 to 320 and 320 to 640, a shift of 320 apart.
+    const ends = measure(twice, twiceFeatures).ends;
+    expect(ends).not.toBeNull();
+    const [left, right] = [ends?.from.x ?? 0, ends?.to.x ?? 0].sort((p, q) => p - q) as [number, number];
+    expect(left).toBeLessThan(320);
+    expect(right).toBeGreaterThan(320);
+    expect(Math.abs(right - left - 320)).toBeLessThan(16);
+  });
+
   it("finds a copy turned half way round, which a sheet laid out for cutting has", () => {
     const pair = beside(one, halfTurn(one));
     const measured = measure(pair);
@@ -205,8 +216,8 @@ describe("measureRepetition", () => {
   });
 
   it("says nothing repeats when there is nothing to pair", () => {
-    expect(measure(one, [])).toEqual({ places: 0, of: 0, move: null });
+    expect(measure(one, [])).toEqual({ places: 0, of: 0, move: null, ends: null });
     const single = [twiceFeatures[0] as TargetFeature];
-    expect(measure(one, single)).toEqual({ places: 0, of: 1, move: null });
+    expect(measure(one, single)).toEqual({ places: 0, of: 1, move: null, ends: null });
   });
 });

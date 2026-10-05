@@ -16,6 +16,13 @@ export interface Repetition {
    * degrees; and how much it scales it.
    */
   move: { across: number; down: number; turnDegrees: number; scale: number } | null;
+  /**
+   * Where the move takes its places from and where it puts them, in the artwork's own pixels:
+   * the middle of the features it carries, and of the look-alikes it carries them onto. On a
+   * design printed twice these are the two copies, which is where a camera is pointed when it
+   * settles on the wrong one. Null when no move carries anything.
+   */
+  ends: { from: { x: number; y: number }; to: { x: number; y: number } } | null;
 }
 
 export interface RepetitionOptions {
@@ -140,7 +147,7 @@ export function measureRepetition(
     return id;
   });
   const of = placeIds.size;
-  const none: Repetition = { places: 0, of, move: null };
+  const none: Repetition = { places: 0, of, move: null, ends: null };
   if (usable.length < 2) return none;
 
   const pairs = pairUp(usable, places);
@@ -237,6 +244,19 @@ export function measureRepetition(
   if (bestMove === null) return none;
 
   const [a, b, tx, ty] = bestMove;
+  // The best move's pairs again, for where its two ends are on the artwork.
+  support(a, b, tx, ty);
+  let fromX = 0;
+  let fromY = 0;
+  let toX = 0;
+  let toY = 0;
+  for (const k of carried) {
+    fromX += pairs.fx[k] as number;
+    fromY += pairs.fy[k] as number;
+    toX += pairs.gx[k] as number;
+    toY += pairs.gy[k] as number;
+  }
+  const n = Math.max(1, carried.length);
   const cx = width / 2;
   const cy = height / 2;
   return {
@@ -248,6 +268,7 @@ export function measureRepetition(
       turnDegrees: (Math.atan2(b, a) * 180) / Math.PI,
       scale: Math.hypot(a, b),
     },
+    ends: { from: { x: fromX / n, y: fromY / n }, to: { x: toX / n, y: toY / n } },
   };
 }
 

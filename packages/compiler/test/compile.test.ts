@@ -1,3 +1,4 @@
+import { DEFAULT_SCALES } from "@taggant/vision";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { compileTarget } from "../src/compile.js";
@@ -65,6 +66,9 @@ describe("compileTarget", () => {
     const scales = new Set(target.features.map((feature) => feature.scale));
     expect(scales.size).toBeGreaterThan(1);
     expect(scales.has(1)).toBe(true);
+    // And only the sizes a target covers. The smaller ones the artwork is described at for the
+    // repetition measure are not what a camera is matched against, and do not ship.
+    for (const scale of scales) expect(DEFAULT_SCALES).toContain(scale);
   });
 
   it("counts each place on the artwork once in the report, not once per size", async () => {

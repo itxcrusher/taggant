@@ -199,6 +199,46 @@ describe("the report against real artwork", { timeout: 120_000 }, () => {
     expect(compiled.report.reasons.join(" ")).toContain("it maps onto itself");
   });
 
+  it("refuses the postcard beside a copy of itself at another size, which sits under both lines", async () => {
+    // At 60 per cent the move carries 61 of 458 places and at 35 per cent 14 of 505: no line
+    // refuses either, both were called ready for press, and a camera brought close to the small
+    // copy settles on the large one. The 35 per cent copy pairs only through the smaller sizes the
+    // compiler describes the artwork at for this, which the target does not hold.
+    for (const factor of [0.6, 0.35]) {
+      const compiled = await compileTarget(await besideItself(factor), { id: "pair", scanDistanceMm: 190 });
+      const name = `a copy at ${factor * 100} per cent`;
+      expect(compiled.report.pass, name).toBe(false);
+      expect(compiled.report.minimumWidthMm, name).toBeNull();
+      expect(compiled.report.reasons.join(" "), name).toContain("pointed at the part of the artwork");
+      expect(compiled.report.repetition?.aimed?.misplaced, name).toBeGreaterThan(0);
+    }
+  });
+
+  it("passes the postcard with a part of it copied at its own size, after pointing at both copies", async () => {
+    // The rest of the artwork outvotes the copied part wherever the camera is pointed.
+    const one = await sharp(join(EXAMPLE_DIR, "artwork.png"))
+      .grayscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const { width, height } = one.info;
+    const data = Buffer.from(one.data);
+    const side = 180;
+    for (let y = 0; y < side; y++) {
+      one.data.copy(
+        data,
+        (height - side - 30 + y) * width + width - side - 30,
+        (30 + y) * width + 30,
+        (30 + y) * width + 30 + side,
+      );
+    }
+    const partly = await sharp(data, { raw: { width, height, channels: 1 } })
+      .png()
+      .toBuffer();
+    const compiled = await compileTarget(partly, { id: "part", scanDistanceMm: 190 });
+    expect(compiled.report.pass).toBe(true);
+    expect(compiled.report.repetition?.aimed).toEqual({ sizes: 4, views: 32, misplaced: 0 });
+  });
+
   it("gives a sheet the same verdict whichever size it was exported at", async () => {
     // The export dialogue decided this. Four copies of the postcard read ready for press when
     // exported 4400 or 5300 pixels wide and not ready at 4700, 5000, 5600 and 9600, because the
@@ -211,6 +251,31 @@ describe("the report against real artwork", { timeout: 120_000 }, () => {
     }
   }, 360_000);
 });
+
+/** The example postcard and, 16 pixels to its right, a copy of it at `factor` of its size. */
+async function besideItself(factor: number): Promise<Buffer> {
+  const artwork = join(EXAMPLE_DIR, "artwork.png");
+  const { width, height } = await sharp(artwork).metadata();
+  const copy = await sharp(artwork)
+    .resize({ width: Math.round((width ?? 0) * factor) })
+    .png()
+    .toBuffer();
+  const copyHeight = (await sharp(copy).metadata()).height ?? 0;
+  return sharp({
+    create: {
+      width: (width ?? 0) + 16 + Math.round((width ?? 0) * factor),
+      height: height ?? 0,
+      channels: 3,
+      background: "#ffffff",
+    },
+  })
+    .composite([
+      { input: artwork, left: 0, top: 0 },
+      { input: copy, left: (width ?? 0) + 16, top: Math.round(((height ?? 0) - copyHeight) / 2) },
+    ])
+    .png()
+    .toBuffer();
+}
 
 /**
  * Copies of the example postcard laid out edge to edge as a sheet of labels is: `across` by

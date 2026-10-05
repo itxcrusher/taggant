@@ -25,7 +25,7 @@ Then point it at the artwork. Print `artwork.png` at 148 mm wide, or show it on 
   tracking quality      100 / 100
   features              248, reaching 16 of 16 areas
   minimum print width   147 mm to be read from 190 mm away, putting at least 320 px across the artwork from left to right
-  maps onto itself      no: the most one move carries onto look-alikes is 5 of its 454 places, and the lines are 20 places and 20 per cent of them
+  maps onto itself      no: the most one move carries onto look-alikes is 5 of its 548 places, and the lines are 20 places and 20 per cent of them
   recognised            at that size, every turn found it with 20 or more points agreeing at 5 of 5 widths, and with at least 50 at three of them, and no look put it in the wrong place
   verdict               ready for press
 ```
@@ -36,7 +36,7 @@ That width is a resolution requirement, not a judgement of the artwork. It is th
 
 The size line reads 640 by 454 where the file is 592 by 420, because every piece of artwork is analysed at the same raster whatever size it was exported at. Otherwise the same design sent as a bigger file would be measured differently and told to print larger, which rewards exporting small.
 
-`maps onto itself` is asked first. The compiler looks for one move of the whole artwork, a shift with any turn or change of size, that carries its features onto features that look like them, and the most this postcard manages is 5 of its 454 places, a coincidence. Printed twice, one above the other, it is 195 of 546, more than a third of its places, by a shift of exactly one postcard down: a camera can settle on that shift and draw the content on the other copy, so the sheet is refused there, before the recogniser is asked anything. The line is twenty places and a fifth of them, and a sheet of copies sits far above both.
+`maps onto itself` is asked first. The compiler looks for one move of the whole artwork, a shift with any turn or change of size, that carries its features onto features that look like them, and the most this postcard manages is 5 of its 548 places, a coincidence. Printed twice, one above the other, it is 230 of 624, more than a third of its places, by a shift of exactly one postcard down: a camera can settle on that shift and draw the content on the other copy, so the sheet is refused there, before the recogniser is asked anything. The line is twenty places and a fifth of them, and a sheet of copies sits far above both. Beside a copy of itself at 60 per cent of its size it is 61 of 458, under both lines, because a copy at another size pairs only at the sizes whose ratio is its own; that one is refused by pointing the recogniser at the small copy from close up, where it settles on the postcard.
 
 `recognised` is what decides the width. The compiler shows the artwork to the recogniser at five widths around the size above, two per cent apart, each turned four ways, and the width stands only if at most of those widths every turn finds it with twenty points agreeing on where it is, and no look puts it anywhere else. For this postcard all five widths do, and at three of them every turn finds at least 50.
 

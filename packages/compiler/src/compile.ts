@@ -26,6 +26,21 @@ export interface CompiledTarget {
   report: Report;
 }
 
+/**
+ * Sizes below the smallest a target covers, at which the artwork is described for one purpose:
+ * to find a copy of the design at less than half its own size.
+ *
+ * A copy pairs with the original only through two sizes whose ratio is its own, and the sizes a
+ * target covers are within a factor of two of each other, so a copy at a third of the design's
+ * size had nothing to pair with and was called ready for press. A camera brought close to that
+ * copy sees what it sees of the original from further back, and was put on the original in
+ * every look. These continue the target's own sizes, each about a fifth smaller than the last,
+ * and paired every copy measured down to three tenths of the design's size; copies at a quarter
+ * and a fifth did not pair, and are not checked. The target does not hold these features,
+ * because they are not what a camera is matched against.
+ */
+const SMALLER_SCALES = [0.4, 0.32, 0.25, 0.2] as const;
+
 /** Turn artwork into everything a runtime and a printer need to know about it. */
 export async function compileTarget(artwork: Buffer, options: CompileOptions): Promise<CompiledTarget> {
   const image = await loadGrayscale(artwork);
@@ -36,6 +51,11 @@ export async function compileTarget(artwork: Buffer, options: CompileOptions): P
   for (const scale of DEFAULT_SCALES) {
     await new Promise((settle) => setImmediate(settle));
     features.push(...buildTrackingFeatures(image, { scales: [scale], perScale: options.perScale ?? 300 }));
+  }
+  const smaller: TargetFeature[] = [];
+  for (const scale of SMALLER_SCALES) {
+    await new Promise((settle) => setImmediate(settle));
+    smaller.push(...buildTrackingFeatures(image, { scales: [scale], perScale: options.perScale ?? 300 }));
   }
 
   // Grouped by the size each feature was found at, so the report can say how small the
@@ -56,6 +76,7 @@ export async function compileTarget(artwork: Buffer, options: CompileOptions): P
       corners: features.filter((feature) => feature.scale === scale),
     })),
     features,
+    smaller,
     scanDistanceMm: options.scanDistanceMm,
     recognises: recognitionOf(image, features),
   });

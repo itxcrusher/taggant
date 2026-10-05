@@ -1,11 +1,13 @@
 import type { Corner, TargetFeature } from "@taggant/vision";
 import { describe, expect, it } from "vitest";
 import {
+  AIMED_FROM,
   FRAME_WIDTH_MM_AT_1M,
   RECOGNISED_PIXELS_ACROSS_FRAME,
   type View,
   buildReport,
   carriesItsDistance,
+  describeRepetition,
   describeWidth,
   distanceBehind,
   isCurrentReport,
@@ -697,7 +699,7 @@ describe("what a caller may hand the report", () => {
       recognises: FOUND_EVERYWHERE,
       features: NO_FEATURES,
     });
-    expect(empty.repetition).toEqual({ places: 0, of: 0, move: null });
+    expect(empty.repetition).toEqual({ places: 0, of: 0, move: null, ends: null, aimed: null });
     expect(empty.pass).toBe(true);
   });
 
@@ -905,12 +907,21 @@ describe("what a stored report has to hold before it is trusted", () => {
       ],
       ["no repetition measured", { ...report, repetition: undefined }],
       ["a repetition figure from the build before", { ...report, repetition: 0.36 }],
-      ["more places repeating than there are", { ...report, repetition: { places: 5, of: 3, move: null } }],
+      [
+        "more places repeating than there are",
+        { ...report, repetition: { places: 5, of: 3, move: null, ends: null, aimed: null } },
+      ],
       [
         "a move that is not one",
         {
           ...report,
-          repetition: { places: 1, of: 300, move: { across: Number.NaN, down: 0, turnDegrees: 0, scale: 1 } },
+          repetition: {
+            places: 1,
+            of: 300,
+            move: { across: Number.NaN, down: 0, turnDegrees: 0, scale: 1 },
+            ends: { from: { x: 160, y: 226 }, to: { x: 480, y: 226 } },
+            aimed: null,
+          },
         },
       ],
       ["a pass with too few features", { ...report, featureCount: 59 }],
@@ -919,7 +930,13 @@ describe("what a stored report has to hold before it is trusted", () => {
         "a pass for a design that repeats itself",
         {
           ...report,
-          repetition: { places: 120, of: 400, move: { across: 0.5, down: 0, turnDegrees: 0, scale: 1 } },
+          repetition: {
+            places: 120,
+            of: 400,
+            move: { across: 0.5, down: 0, turnDegrees: 0, scale: 1 },
+            ends: { from: { x: 160, y: 226 }, to: { x: 480, y: 226 } },
+            aimed: { sizes: 4, views: 32, misplaced: 0 },
+          },
         },
       ],
       ["a pass the recogniser did not find", { ...report, recognition: { ...recognition, found: false } }],
@@ -961,3 +978,230 @@ function lattice(spacing: number, size: number): Corner[] {
   }
   return corners;
 }
+
+/**
+ * A design where one move carries `copied` of its `unique + copied` places: a part of it repeated
+ * elsewhere on it, under both of the lines that refuse a design outright.
+ */
+function partlyCopied(unique: number, copied: number): TargetFeature[] {
+  let seed = 11;
+  const next = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
+    return seed;
+  };
+  const features: TargetFeature[] = [];
+  for (let i = 0; i < unique; i++) {
+    const descriptor = new Uint32Array(8);
+    for (let w = 0; w < 8; w++) descriptor[w] = (next() ^ (next() << 16)) >>> 0;
+    features.push({
+      x: 20 + (i % 12) * 24,
+      y: 20 + Math.floor(i / 12) * 24,
+      strength: 1,
+      angle: 0.3,
+      scale: 1,
+      descriptor,
+    });
+  }
+  for (let i = 0; i < copied; i++) {
+    const original = features[i] as TargetFeature;
+    features.push({ ...original, x: original.x + 320 });
+  }
+  return features;
+}
+
+/** Four turns found with plenty agreeing; in the wrong place when pointed off the centre, if asked to be. */
+const pointedLooks =
+  (wrongWhenAimed: boolean, asked: Array<{ x: number; y: number } | undefined> = []) =>
+  (_pixels: number, aim?: { x: number; y: number }): View[] => {
+    asked.push(aim);
+    return Array.from({ length: 4 }, () => ({
+      found: true,
+      inliers: 58,
+      misplaced: aim !== undefined && wrongWhenAimed,
+    }));
+  };
+
+const pointedReport = async (
+  features: TargetFeature[],
+  looks: (pixels: number, aim?: { x: number; y: number }) => View[],
+  smaller?: TargetFeature[],
+) =>
+  buildReport({
+    image: { width: 640, height: 640 },
+    levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
+    scanDistanceMm: 190,
+    recognises: looks,
+    features,
+    ...(smaller === undefined ? {} : { smaller }),
+  });
+
+/**
+ * Thirty places of a design described at a third of its size, which the target does not hold,
+ * and the same thirty on a copy at a third of the size, described at full size, which it does.
+ * The two pair only through those two sizes.
+ */
+function copiedAtAThird(): { onTarget: TargetFeature[]; smaller: TargetFeature[] } {
+  let seed = 23;
+  const next = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
+    return seed;
+  };
+  const onTarget: TargetFeature[] = [];
+  const smaller: TargetFeature[] = [];
+  for (let i = 0; i < 30; i++) {
+    const descriptor = new Uint32Array(8);
+    for (let w = 0; w < 8; w++) descriptor[w] = (next() ^ (next() << 16)) >>> 0;
+    const x = 40 + (i % 6) * 48;
+    const y = 40 + Math.floor(i / 6) * 48;
+    smaller.push({ x, y, strength: 1, angle: 0.3, scale: 0.32, descriptor });
+    onTarget.push({ x: 420 + x * 0.32, y: 420 + y * 0.32, strength: 1, angle: 0.3, scale: 1, descriptor });
+  }
+  return { onTarget, smaller };
+}
+
+describe("a design with a copy the lines do not refuse", () => {
+  it("points the recogniser at both ends of a move carrying enough places, and refuses one it puts in the wrong place there", async () => {
+    // A copy at another size carries a fraction of its places, under both lines, and a camera
+    // pointed at it settled on the other copy while every centred look was right.
+    const features = partlyCopied(120, 15);
+    const asked: Array<{ x: number; y: number } | undefined> = [];
+    const report = await pointedReport(features, pointedLooks(true, asked));
+    expect(report.repetition?.places).toBeGreaterThanOrEqual(AIMED_FROM);
+    expect(report.pass).toBe(false);
+    expect(report.minimumWidthMm).toBeNull();
+    expect(report.reasons.join(" ")).toContain("pointed at the part of the artwork");
+    expect(report.repetition?.aimed?.misplaced).toBeGreaterThan(0);
+    expect(describeRepetition(report)).toContain(
+      `put it in the wrong place in ${report.repetition?.aimed?.misplaced} of ${report.repetition?.aimed?.views} looks`,
+    );
+    // Pointed where the move takes its places from or where it puts them: the middle of the
+    // fifteen copied places, or of their copies 320 pixels across.
+    const middle = (points: TargetFeature[]) => ({
+      x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
+      y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
+    });
+    const ends = [middle(features.slice(0, 15)), middle(features.slice(120))];
+    const aims = asked.filter((aim) => aim !== undefined) as Array<{ x: number; y: number }>;
+    expect(aims.length).toBeGreaterThan(0);
+    for (const aim of aims) {
+      expect(ends.some((end) => Math.hypot(aim.x - end.x, aim.y - end.y) < 1)).toBe(true);
+    }
+    expect(isCurrentReport(JSON.parse(JSON.stringify(report)))).toBe(true);
+  });
+
+  it("measures the sizes below the target's with its own, so a copy at a third of the size is pointed at", async () => {
+    // The target's sizes are within a factor of two of each other, so a copy at a third pairs with
+    // nothing in them, and was called ready for press without a look at it.
+    const unique = partlyCopied(120, 0);
+    const { onTarget, smaller } = copiedAtAThird();
+    const unmeasured = await pointedReport([...unique, ...onTarget], pointedLooks(true));
+    expect(unmeasured.pass).toBe(true);
+    expect(unmeasured.repetition?.places).toBeLessThan(AIMED_FROM);
+    // Wrong only when pointed at the copy, which sits right of x = 400.
+    const looked: Array<{ pixels: number; aim?: { x: number; y: number } }> = [];
+    const onTheCopy = (pixels: number, aim?: { x: number; y: number }): View[] => {
+      looked.push(aim === undefined ? { pixels } : { pixels, aim });
+      const misplaced = aim !== undefined && aim.x > 400;
+      return Array.from({ length: 4 }, () => ({ found: true, inliers: 58, misplaced }));
+    };
+    const report = await pointedReport([...unique, ...onTarget], onTheCopy, smaller);
+    expect(report.repetition?.places).toBeGreaterThanOrEqual(25);
+    const scale = report.repetition?.move?.scale ?? 1;
+    expect(Math.min(scale, 1 / scale)).toBeCloseTo(0.32, 2);
+    expect(report.pass).toBe(false);
+    expect(report.reasons.join(" ")).toContain("pointed at the part of the artwork");
+    // The copy is looked at grown by the move, as a camera brought close to it sees it: at the
+    // smallest size the target covers, the original at 320 pixels across and the copy at 1000.
+    const atOriginal = looked.find((look) => look.aim !== undefined && look.aim.x < 400);
+    const atCopy = looked.find((look) => look.aim !== undefined && look.aim.x > 400);
+    expect(atOriginal?.pixels).toBe(320);
+    expect(atCopy?.pixels).toBe(1000);
+  });
+
+  it("writes a refusal its own check reads, wherever the wrong look came", async () => {
+    // Wrong at the first end looked at, at the third size: twenty looks, which is not the same
+    // number at each end at each size, and the check of a stored report held every report to
+    // that, so a fresh refusal read as one from an older build.
+    let pointedAt = 0;
+    const looks = (_pixels: number, aim?: { x: number; y: number }): View[] => {
+      const misplaced = aim !== undefined && ++pointedAt === 5;
+      return Array.from({ length: 4 }, () => ({ found: true, inliers: 58, misplaced }));
+    };
+    const report = await pointedReport(partlyCopied(120, 15), looks);
+    expect(report.pass).toBe(false);
+    expect(report.repetition?.aimed).toEqual({ sizes: 3, views: 20, misplaced: 4 });
+    expect(isCurrentReport(JSON.parse(JSON.stringify(report)))).toBe(true);
+    // And a refusal still may not claim more looks in the wrong place than it took.
+    const stored = JSON.parse(JSON.stringify(report));
+    stored.repetition.aimed.misplaced = 21;
+    expect(isCurrentReport(stored)).toBe(false);
+  });
+
+  it("passes one the recogniser puts in the right place at both ends and every size, and says so", async () => {
+    const asked: Array<{ x: number; y: number } | undefined> = [];
+    const report = await pointedReport(partlyCopied(120, 15), pointedLooks(false, asked));
+    expect(report.pass).toBe(true);
+    // Both ends at each of the four sizes the target covers, four turns each.
+    expect(report.repetition?.aimed).toEqual({ sizes: 4, views: 32, misplaced: 0 });
+    const aims = asked.filter((aim) => aim !== undefined) as Array<{ x: number; y: number }>;
+    expect(aims.some((aim) => aim.x < 320) && aims.some((aim) => aim.x > 320)).toBe(true);
+    expect(describeRepetition(report)).toContain("put it in the right place in all 32 looks");
+    expect(isCurrentReport(JSON.parse(JSON.stringify(report)))).toBe(true);
+  });
+
+  it("points it nowhere for a design whose move carries fewer places than that", async () => {
+    const asked: Array<{ x: number; y: number } | undefined> = [];
+    const report = await pointedReport(partlyCopied(120, AIMED_FROM - 4), pointedLooks(true, asked));
+    expect(report.repetition?.places).toBeLessThan(AIMED_FROM);
+    expect(report.pass).toBe(true);
+    expect(report.repetition?.aimed).toBeNull();
+    expect(asked.every((aim) => aim === undefined)).toBe(true);
+  });
+
+  it("holds a stored report to its looks at both ends", async () => {
+    const report = JSON.parse(
+      JSON.stringify(await pointedReport(partlyCopied(120, 15), pointedLooks(false))),
+    );
+    expect(isCurrentReport(report)).toBe(true);
+    const repetition = report.repetition;
+    for (const [label, broken] of [
+      ["a pass that was never pointed", { ...report, repetition: { ...repetition, aimed: null } }],
+      [
+        "a pass put in the wrong place",
+        { ...report, repetition: { ...repetition, aimed: { ...repetition.aimed, misplaced: 1 } } },
+      ],
+      [
+        "looks not the same at each end",
+        { ...report, repetition: { ...repetition, aimed: { ...repetition.aimed, views: 33 } } },
+      ],
+      [
+        "looks at no size",
+        { ...report, repetition: { ...repetition, aimed: { sizes: 0, views: 0, misplaced: 0 } } },
+      ],
+      [
+        "four sizes and no looks",
+        { ...report, repetition: { ...repetition, aimed: { sizes: 4, views: 0, misplaced: 0 } } },
+      ],
+      ["no ends", { ...report, repetition: { ...repetition, ends: undefined } }],
+      ["ends with no move", { ...report, repetition: { ...repetition, move: null } }],
+      [
+        "a point that is not one",
+        {
+          ...report,
+          repetition: { ...repetition, ends: { ...repetition.ends, to: { x: Number.NaN, y: 1 } } },
+        },
+      ],
+    ] as const) {
+      expect(isCurrentReport(broken), label).toBe(false);
+    }
+    // And looks recorded for a design that did not need them are a report this build never writes.
+    const plain = JSON.parse(JSON.stringify(await pointedReport(partlyCopied(120, 4), pointedLooks(false))));
+    expect(isCurrentReport(plain)).toBe(true);
+    expect(
+      isCurrentReport({
+        ...plain,
+        repetition: { ...plain.repetition, aimed: { sizes: 1, views: 8, misplaced: 0 } },
+      }),
+    ).toBe(false);
+  });
+});

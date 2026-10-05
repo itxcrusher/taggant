@@ -205,10 +205,19 @@ describe("a compiled target from an older build", () => {
         "a pass for a design that repeats itself",
         {
           ...good,
-          repetition: { places: 120, of: 400, move: { across: 0.5, down: 0, turnDegrees: 0, scale: 1 } },
+          repetition: {
+            places: 120,
+            of: 400,
+            move: { across: 0.5, down: 0, turnDegrees: 0, scale: 1 },
+            ends: { from: { x: 160, y: 226 }, to: { x: 480, y: 226 } },
+            aimed: { sizes: 4, views: 32, misplaced: 0 },
+          },
         },
       ],
-      ["more places repeating than there are", { ...good, repetition: { places: 5, of: 3, move: null } }],
+      [
+        "more places repeating than there are",
+        { ...good, repetition: { places: 5, of: 3, move: null, ends: null, aimed: null } },
+      ],
     ];
     for (const [label, report] of shapes) {
       await expect(

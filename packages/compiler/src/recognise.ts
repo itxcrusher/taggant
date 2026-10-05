@@ -48,7 +48,7 @@ const TURNS = [0, 30, 60, 90] as const;
 export function recognitionOf(
   image: GrayscaleImage,
   features: TargetFeature[],
-): (pixelsAcross: number) => Promise<View[]> {
+): (pixelsAcross: number, aim?: { x: number; y: number }) => Promise<View[]> {
   const target = { id: "readiness", width: image.width, height: image.height, features };
   const corners: Array<[number, number]> = [
     [0, 0],
@@ -56,12 +56,12 @@ export function recognitionOf(
     [0, image.height - 1],
     [image.width - 1, image.height - 1],
   ];
-  return async (pixelsAcross) => {
+  return async (pixelsAcross, aim) => {
     const mark = markAt(image, pixelsAcross);
     const views: View[] = [];
     for (const degrees of TURNS) {
       await new Promise((settle) => setImmediate(settle));
-      const { frame, truth } = photographed(mark, degrees, image);
+      const { frame, truth } = photographed(mark, degrees, image, aim);
       const result = locate(frame, target);
       let misplaced = false;
       if (result.found && result.homography) {
@@ -90,24 +90,34 @@ export function markAt(image: GrayscaleImage, pixelsAcross: number): GrayscaleIm
 }
 
 /**
- * The mark turned about its centre and placed in the middle of a frame, on mid grey, and where
- * that puts each point of the artwork.
+ * The mark turned about a point and placed with that point in the middle of a frame, on mid grey,
+ * and where that puts each point of the artwork.
+ *
+ * The point is the artwork's centre unless another is given, in the artwork's own pixels: a
+ * camera pointed at one copy of a design printed twice, which is where it settles on the wrong
+ * one, rather than at the middle of the sheet.
  */
 function photographed(
   mark: GrayscaleImage,
   degrees: number,
   artwork: { width: number; height: number },
+  aim?: { x: number; y: number },
 ): { frame: GrayscaleImage; truth: (x: number, y: number) => [number, number] } {
   const frameWidth = RECOGNISED_PIXELS_ACROSS_FRAME;
   const frameHeight = Math.round(frameWidth * 0.75);
   const data = new Uint8Array(frameWidth * frameHeight).fill(150);
   const sx = mark.width / artwork.width;
   const sy = mark.height / artwork.height;
+  // The aimed-at point in the mark's own pixels. Unaimed it is the mark's own centre, taken from
+  // the mark rather than worked out from the artwork, so the frame is exactly the one it always
+  // was: a product of fractions can land a hair either side of a half and round a pixel away.
+  const mx = aim === undefined ? mark.width / 2 : aim.x * sx;
+  const my = aim === undefined ? mark.height / 2 : aim.y * sy;
   if (degrees === 0) {
     // Copied rather than sampled, so the upright pose is exactly the construction the
     // independent test makes and not a resampling of it.
-    const left = Math.round((frameWidth - mark.width) / 2);
-    const top = Math.round((frameHeight - mark.height) / 2);
+    const left = Math.round(frameWidth / 2 - mx);
+    const top = Math.round(frameHeight / 2 - my);
     for (let y = 0; y < mark.height; y++) {
       const intoY = top + y;
       if (intoY < 0 || intoY >= frameHeight) continue;
@@ -127,8 +137,6 @@ function photographed(
   const sin = Math.sin(turn);
   const cx = frameWidth / 2;
   const cy = frameHeight / 2;
-  const mx = mark.width / 2;
-  const my = mark.height / 2;
   for (let y = 0; y < frameHeight; y++) {
     for (let x = 0; x < frameWidth; x++) {
       // From the frame back into the mark: undo the turn about the frame's centre.
