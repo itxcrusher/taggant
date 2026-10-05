@@ -240,6 +240,7 @@ describe("what an orchestrator can ask", () => {
     expect(rose('taggant_scans_total{outcome="linkset"}')).toBe(linksets);
     expect(rose('taggant_scans_total{outcome="unresolved"}')).toBe(unresolved);
     expect(rose("taggant_bad_requests_total")).toBe(bad);
+    expect(rose("taggant_server_errors_total")).toBe(0);
 
     // Each counter against the events, which are the other record of the same requests.
     // `events` is emptied before each test, so these are this test's own.
@@ -272,6 +273,7 @@ describe("what an orchestrator can ask", () => {
       'taggant_scans_total{outcome="linkset"}',
       'taggant_scans_total{outcome="redirect"}',
       'taggant_scans_total{outcome="unresolved"}',
+      "taggant_server_errors_total",
     ]);
 
     // And by value: nothing outside the scan counter carries the scan sum. The counts above
@@ -286,6 +288,41 @@ describe("what an orchestrator can ask", () => {
       copies.map((each) => each.series),
       `these carry the scan sum: ${JSON.stringify(copies)}`,
     ).toEqual([]);
+  });
+
+  it("counts an answer it failed to give, and tells whoever asked nothing about why", async () => {
+    // Reaching the catch at the top of the server is this resolver's own fault, and it was
+    // written to the log and counted nowhere, so every scan could fail while `/metrics` said
+    // nothing had. A table that cannot be had, once, is the fault here.
+    const logged: Event[] = [];
+    let broken = true;
+    const faulty = createResolver({
+      table: () => {
+        if (!broken) return TABLE;
+        broken = false;
+        throw new Error("the table could not be had");
+      },
+      events: (event) => logged.push(event),
+    });
+    await new Promise<void>((resolve) => faulty.listen(0, "127.0.0.1", resolve));
+    const at = `http://127.0.0.1:${(faulty.address() as AddressInfo).port}`;
+    try {
+      const failed = await fetch(`${at}/01/09520123456788?email=alice%40example.com`, { redirect: "manual" });
+      expect(failed.status).toBe(500);
+      expect(await failed.text()).not.toContain("could not be had");
+      const metrics = await (await fetch(`${at}/metrics`)).text();
+      expect(metrics).toMatch(/^taggant_server_errors_total 1$/m);
+      expect(metrics, "a fault of the resolver's own counted as the caller's").toMatch(
+        /^taggant_bad_requests_total 0$/m,
+      );
+      // In the log with what went wrong, and without the caller's query.
+      expect(logged).toEqual([
+        expect.objectContaining({ type: "problem", status: 500, path: "/01/09520123456788" }),
+      ]);
+      expect(JSON.stringify(logged)).toContain("could not be had");
+    } finally {
+      await new Promise<void>((resolve) => faulty.close(() => resolve()));
+    }
   });
 });
 
@@ -363,6 +400,48 @@ describe("what a stranger can put in a header", () => {
       statuses.filter((line) => line.includes("500")),
       statuses.join(" | "),
     ).toEqual([]);
+  });
+
+  it("answers a request target that is not a URL with a counted refusal rather than a 500", async () => {
+    // HTTP/1.1 allows a target in absolute form, and a proxy sends one. The base a target is
+    // parsed against does not apply to it, so a malformed one threw into a 500 that moved no
+    // counter. Sent over a socket, because a client library refuses to send these at all.
+    const { connect } = await import("node:net");
+    const url = new URL(origin);
+    const statusOf = (target: string) =>
+      new Promise<string>((settle, fail) => {
+        const socket = connect(Number(url.port), url.hostname, () => {
+          socket.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+        });
+        const chunks: Buffer[] = [];
+        socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+        socket.on("error", fail);
+        socket.on("end", () => settle(Buffer.concat(chunks).toString("utf8").split("\r\n")[0] ?? ""));
+      });
+    const counter = async (name: string): Promise<number> => {
+      const line = (await (await get("/metrics")).text())
+        .split("\n")
+        .find((each) => each.startsWith(`${name} `));
+      return Number(line?.slice(name.length + 1));
+    };
+    const bad = await counter("taggant_bad_requests_total");
+    const faults = await counter("taggant_server_errors_total");
+
+    const targets = [
+      "http://[/01/09520123456788",
+      "http://a:99999/01/09520123456788",
+      "http://exa%00mple/01/09520123456788",
+      "https://[::1/01/09520123456788",
+    ];
+    for (const target of targets) {
+      expect(await statusOf(target), target).toContain(" 400 ");
+    }
+    expect(await counter("taggant_bad_requests_total")).toBe(bad + targets.length);
+    expect(await counter("taggant_server_errors_total")).toBe(faults);
+    // Each one recorded as a problem.
+    expect(events.filter((event) => event.type === "problem").length).toBe(targets.length);
+    // And a well formed one in absolute form is answered from its path, as it was.
+    expect(await statusOf("http://id.example.com/01/09520123456788")).toContain(" 307 ");
   });
 
   it("never puts an internal error message in a response", async () => {

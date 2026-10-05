@@ -86,17 +86,30 @@ export function createResolver(options: ResolverOptions): Server {
       // Nothing below is expected to throw, so reaching here is this resolver's fault.
       // What went wrong goes to the log, not to whoever asked: an internal error message in
       // a response body tells a stranger about the inside of the process, and this one was
-      // reachable from a crafted path.
-      sink({
+      // reachable from a crafted path. And it is counted, as a fault of the resolver's own:
+      // written to the log alone, every scan could fail while `/metrics` said nothing had.
+      emit({
         type: "problem",
         at: new Date().toISOString(),
         reason: `unhandled: ${error instanceof Error ? error.message : String(error)}`,
-        path: request.url ?? "",
+        path: withoutQuery(request.url),
         status: 500,
       });
       send(response, 500, { "content-type": "text/plain" }, "the resolver could not answer that\n");
     }
   });
+}
+
+/**
+ * The request target up to its query, for a problem event.
+ *
+ * The query is whatever the caller wrote, and a printed code can carry anything in one, an
+ * email address included, so it stays out of the log here as it does out of a scan.
+ */
+function withoutQuery(target: string | undefined): string {
+  const raw = target ?? "";
+  const query = raw.indexOf("?");
+  return query === -1 ? raw : raw.slice(0, query);
 }
 
 function currentTable(options: ResolverOptions): LinkTable {
@@ -113,11 +126,6 @@ function handle(
   const started = performance.now();
   const table = currentTable(options);
   const method = request.method ?? "GET";
-  // A fixed base, because the only things read from this are the path and the query.
-  // It was `http://${request.headers.host}`, which put a caller's header into the
-  // subject of every fact below and answered 500 for any Host that is not a URL
-  // authority, since parsing threw before anything was validated.
-  const url = new URL(request.url ?? "/", PARSE_BASE);
   const origin = options.origin ?? LOCAL_ORIGIN;
 
   // Every response carries these. A resolver that cannot be read from a browser page is
@@ -128,6 +136,29 @@ function handle(
     "access-control-allow-headers": "Accept, Accept-Language",
     "access-control-expose-headers": "Link, Location",
   };
+
+  // A fixed base, because the only things read from this are the path and the query.
+  // It was `http://${request.headers.host}`, which put a caller's header into the
+  // subject of every fact below and answered 500 for any Host that is not a URL
+  // authority, since parsing threw before anything was validated. A target in absolute
+  // form, which HTTP/1.1 allows and a proxy sends, does not use the base at all, so a
+  // malformed one still threw here into a 500 that no counter recorded. It is a request
+  // that could not be read, and is answered and counted as one.
+  let url: URL;
+  try {
+    url = new URL(request.url ?? "/", PARSE_BASE);
+  } catch {
+    const message = "the request target could not be read as a URL";
+    emit({
+      type: "problem",
+      at: new Date().toISOString(),
+      reason: message,
+      path: withoutQuery(request.url),
+      status: 400,
+    });
+    send(response, 400, { ...cors, "content-type": "text/plain" }, `${message}\n`);
+    return;
+  }
 
   if (method === "OPTIONS") {
     send(response, 204, { ...cors, allow: "GET, HEAD, OPTIONS" }, "");

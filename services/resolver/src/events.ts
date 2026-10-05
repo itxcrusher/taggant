@@ -46,7 +46,7 @@ export interface ProblemEvent {
   at: string;
   /** Why the request could not be answered. */
   reason: string;
-  /** The path as asked for, which is the thing that needs fixing. */
+  /** The path as asked for, without its query, which is the thing that needs fixing. */
   path: string;
   status: number;
 }
@@ -69,12 +69,16 @@ export function jsonLines(write: (line: string) => void = (line) => process.stdo
 /** Counters, in the text format Prometheus and everything that imitates it reads. */
 export class Counters {
   private readonly scans = new Map<string, number>();
-  private problems = 0;
+  private badRequests = 0;
+  private serverErrors = 0;
   private totalMs = 0;
 
   record(event: Event): void {
     if (event.type === "problem") {
-      this.problems++;
+      // A request that could not be read is the caller's mistake, and one this resolver failed
+      // to answer is its own. Only the second is worth waking somebody for, so they are apart.
+      if (event.status >= 500) this.serverErrors++;
+      else this.badRequests++;
       return;
     }
     this.scans.set(event.outcome, (this.scans.get(event.outcome) ?? 0) + 1);
@@ -92,7 +96,7 @@ export class Counters {
     lines.push(
       "# HELP taggant_bad_requests_total Requests that could not be read as a Digital Link.",
       "# TYPE taggant_bad_requests_total counter",
-      `taggant_bad_requests_total ${this.problems}`,
+      `taggant_bad_requests_total ${this.badRequests}`,
       // There was a `taggant_answered_total` here as the denominator for the line above,
       // and it is gone. It counted one per scan, so it was exactly the sum of the scan
       // counter under a name that claimed more: the resolver answers health checks,
@@ -100,6 +104,9 @@ export class Counters {
       // in it, so a dashboard reading it as a request rate read low by however often an
       // orchestrator polls. Two numbers that must stay equal are two numbers that can
       // drift, and the sum is one expression away.
+      "# HELP taggant_server_errors_total Requests this resolver failed to answer, through a fault of its own.",
+      "# TYPE taggant_server_errors_total counter",
+      `taggant_server_errors_total ${this.serverErrors}`,
       "# HELP taggant_resolve_seconds_total Time spent resolving, in seconds. Divide by sum(taggant_scans_total) for the mean.",
       "# TYPE taggant_resolve_seconds_total counter",
       `taggant_resolve_seconds_total ${(this.totalMs / 1000).toFixed(6)}`,
