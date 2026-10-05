@@ -5,6 +5,7 @@ import {
   AIMED_FROM,
   FRAME_WIDTH_MM_AT_1M,
   RECOGNISED_PIXELS_ACROSS_FRAME,
+  REPEATS_FROM,
   type View,
   buildReport,
   carriesItsDistance,
@@ -921,6 +922,17 @@ describe("what a stored report has to hold before it is trusted", () => {
       ),
     });
     expect(isCurrentReport(far(190)), "the width worked out here is not the report's own").toBe(true);
+    // The score is worked out again from a report's own figures, so a shape that changes a figure
+    // the score reads is refused by the score before the line it is there for, unless it carries
+    // the score those figures give. Three below do, and here are their twins one step inside each
+    // line, with theirs, accepted: what refuses each of the three is its own line.
+    for (const [label, twin] of [
+      ["sixty features", { ...report, featureCount: 60, score: 76 }],
+      ["features in eight areas", { ...report, areasWithFeatures: 8, score: 82 }],
+      ["a whole feature count one higher", { ...report, featureCount: report.featureCount + 1 }],
+    ] as const) {
+      expect(isCurrentReport(twin), label).toBe(true);
+    }
     for (const [label, broken] of [
       ["a score over 100", { ...report, score: 1000 }],
       ["a pass scoring under 60", { ...report, score: 10 }],
@@ -931,6 +943,7 @@ describe("what a stored report has to hold before it is trusted", () => {
       ["a pass with a reason against it", { ...report, reasons: ["too few features to track reliably"] }],
       ["a failure with no reason", { ...failing, reasons: [] }],
       ["a feature count that is not a count", { ...report, featureCount: "300" }],
+      ["a feature count that is not a whole number", { ...report, featureCount: report.featureCount + 0.5 }],
       ["a grid of twenty-five areas", { ...report, areas: 25 }],
       ["more areas reached than there are", { ...report, areasWithFeatures: 17 }],
       ["no analysed width", { ...failing, analysisWidth: 0 }],
@@ -976,8 +989,8 @@ describe("what a stored report has to hold before it is trusted", () => {
           },
         },
       ],
-      ["a pass with too few features", { ...report, featureCount: 59 }],
-      ["a pass with its features in too few areas", { ...report, areasWithFeatures: 7 }],
+      ["a pass with too few features", { ...report, featureCount: 59, score: 76 }],
+      ["a pass with its features in too few areas", { ...report, areasWithFeatures: 7, score: 80 }],
       [
         "a pass for a design that repeats itself",
         {
@@ -1300,6 +1313,16 @@ describe("a design with a copy the lines do not refuse", () => {
         repetition: { ...sheet.repetition, aimed: { moves: 1, sizes: 1, views: 8, misplaced: 4 } },
       }),
     ).toBe(false);
+    // The sheet is refused for having no recognition as well, because a line refuses before the
+    // recogniser is asked. A refusal by the looks whose lines say the design repeats itself has a
+    // recognition, and is refused for its lines alone: at the line, and not one place under it.
+    const of = report.repetition?.of ?? 0;
+    const line = Math.max(REPEATS_FROM.places, Math.ceil(REPEATS_FROM.share * of));
+    const onLines = JSON.parse(JSON.stringify(report));
+    onLines.repetition.places = line;
+    expect(isCurrentReport(onLines), "looks kept for a design its lines refuse").toBe(false);
+    onLines.repetition.places = line - 1;
+    expect(isCurrentReport(onLines), "refused one place under the line").toBe(true);
   });
 
   it("passes one the recogniser puts in the right place at both ends and every size, and says so", async () => {
