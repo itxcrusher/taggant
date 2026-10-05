@@ -23,6 +23,18 @@ export interface Repetition {
    * settles on the wrong one. Null when no move carries anything.
    */
   ends: { from: { x: number; y: number }; to: { x: number; y: number } } | null;
+  /**
+   * The move that carries the most places among those that change the artwork's size by more
+   * than `spans` allows, with its places and ends; null when `spans` was not given or no such
+   * move carries any. It can be the move above. A copy of a design at a third of its size pairs
+   * only through such a move, and carries few places, because the small copy holds few features:
+   * reported on its own, it is not lost behind a coincidence elsewhere that carries one more.
+   */
+  beyond: {
+    places: number;
+    move: { across: number; down: number; turnDegrees: number; scale: number };
+    ends: { from: { x: number; y: number }; to: { x: number; y: number } };
+  } | null;
 }
 
 export interface RepetitionOptions {
@@ -32,6 +44,13 @@ export interface RepetitionOptions {
    * that is a different failure from drawing it somewhere else.
    */
   farEnough: number;
+  /**
+   * The ratio of the largest size to the smallest that a matcher has the artwork at, which is
+   * the target's own sizes. A move changing the artwork's size by more than that, past the
+   * tolerance a pair is held to, can only be made through sizes the target does not hold, and
+   * the best of those is reported as well as the best of all.
+   */
+  spans?: number;
 }
 
 /** Look-alikes kept for each feature: one for each other copy on a sheet of four. */
@@ -147,7 +166,7 @@ export function measureRepetition(
     return id;
   });
   const of = placeIds.size;
-  const none: Repetition = { places: 0, of, move: null, ends: null };
+  const none: Repetition = { places: 0, of, move: null, ends: null, beyond: null };
   if (usable.length < 2) return none;
 
   const pairs = pairUp(usable, places);
@@ -202,8 +221,15 @@ export function measureRepetition(
     return counted;
   };
 
+  // A move whose change of size no two of the target's own sizes can make, past the tolerance.
+  const beyondLog = options.spans === undefined ? null : Math.log(options.spans) + SCALE_TOLERANCE;
+  const isBeyond = (a: number, b: number): boolean =>
+    beyondLog !== null && Math.abs(Math.log(Math.hypot(a, b))) > beyondLog;
+
   let best = 0;
   let bestMove: [number, number, number, number] | null = null;
+  let bestBeyond = 0;
+  let bestBeyondMove: [number, number, number, number] | null = null;
   const tried = new Set<number>();
   for (let k = 0; k < pairs.count; k++) {
     const scale = Math.exp(pairs.logScale[k] as number);
@@ -240,35 +266,46 @@ export function measureRepetition(
       best = count;
       bestMove = move;
     }
+    if (count > bestBeyond && isBeyond(move[0], move[1])) {
+      bestBeyond = count;
+      bestBeyondMove = move;
+    }
   }
   if (bestMove === null) return none;
 
-  const [a, b, tx, ty] = bestMove;
-  // The best move's pairs again, for where its two ends are on the artwork.
-  support(a, b, tx, ty);
-  let fromX = 0;
-  let fromY = 0;
-  let toX = 0;
-  let toY = 0;
-  for (const k of carried) {
-    fromX += pairs.fx[k] as number;
-    fromY += pairs.fy[k] as number;
-    toX += pairs.gx[k] as number;
-    toY += pairs.gy[k] as number;
-  }
-  const n = Math.max(1, carried.length);
   const cx = width / 2;
   const cy = height / 2;
+  const described = ([a, b, tx, ty]: [number, number, number, number]) => ({
+    across: width > 0 ? (a * cx - b * cy + tx - cx) / width : 0,
+    down: width > 0 ? (b * cx + a * cy + ty - cy) / width : 0,
+    turnDegrees: (Math.atan2(b, a) * 180) / Math.PI,
+    scale: Math.hypot(a, b),
+  });
+  /** A move's pairs again, for where its two ends are on the artwork. */
+  const endsOf = ([a, b, tx, ty]: [number, number, number, number]) => {
+    support(a, b, tx, ty);
+    let fromX = 0;
+    let fromY = 0;
+    let toX = 0;
+    let toY = 0;
+    for (const k of carried) {
+      fromX += pairs.fx[k] as number;
+      fromY += pairs.fy[k] as number;
+      toX += pairs.gx[k] as number;
+      toY += pairs.gy[k] as number;
+    }
+    const n = Math.max(1, carried.length);
+    return { from: { x: fromX / n, y: fromY / n }, to: { x: toX / n, y: toY / n } };
+  };
   return {
     places: best,
     of,
-    move: {
-      across: width > 0 ? (a * cx - b * cy + tx - cx) / width : 0,
-      down: width > 0 ? (b * cx + a * cy + ty - cy) / width : 0,
-      turnDegrees: (Math.atan2(b, a) * 180) / Math.PI,
-      scale: Math.hypot(a, b),
-    },
-    ends: { from: { x: fromX / n, y: fromY / n }, to: { x: toX / n, y: toY / n } },
+    move: described(bestMove),
+    ends: endsOf(bestMove),
+    beyond:
+      bestBeyondMove === null
+        ? null
+        : { places: bestBeyond, move: described(bestBeyondMove), ends: endsOf(bestBeyondMove) },
   };
 }
 

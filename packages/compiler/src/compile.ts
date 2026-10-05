@@ -34,10 +34,11 @@ export interface CompiledTarget {
  * target covers are within a factor of two of each other, so a copy at a third of the design's
  * size had nothing to pair with and was called ready for press. A camera brought close to that
  * copy sees what it sees of the original from further back, and was put on the original in
- * every look. These continue the target's own sizes, each about a fifth smaller than the last,
- * and paired every copy measured down to three tenths of the design's size; copies at a quarter
- * and a fifth paired too few places to be pointed at, and are not checked. The target does not hold these features,
- * because they are not what a camera is matched against.
+ * every look. These continue the target's own sizes, each about a fifth smaller than the last.
+ * With them a copy down to about a quarter of the design's size pairs enough places to be pointed
+ * at in most layouts tried, and one at a fifth mostly does not; `AIMED_BEYOND_FROM` in the report
+ * has the counts. The target does not hold these features, because they are not what a camera is
+ * matched against.
  */
 const SMALLER_SCALES = [0.4, 0.32, 0.25, 0.2] as const;
 

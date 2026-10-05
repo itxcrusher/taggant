@@ -215,9 +215,48 @@ describe("measureRepetition", () => {
     ).toBeGreaterThanOrEqual(60);
   });
 
+  it("reports the best move past the target's sizes on its own, where a coincidence carries more", () => {
+    // Twenty places shifted at one size, and eight found at a third of the size paired with their
+    // copies found at full size: the shift carries the most, and the copy's move, which only a
+    // size the target does not hold can make, is reported beside it rather than lost behind it.
+    let seed = 41;
+    const next = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
+      return seed;
+    };
+    const described = () => {
+      const descriptor = new Uint32Array(8);
+      for (let w = 0; w < 8; w++) descriptor[w] = (next() ^ (next() << 16)) >>> 0;
+      return descriptor;
+    };
+    const features: TargetFeature[] = [];
+    for (let i = 0; i < 20; i++) {
+      const at = { x: 20 + (i % 5) * 30, y: 20 + Math.floor(i / 5) * 30, strength: 1, angle: 0.3, scale: 1 };
+      const descriptor = described();
+      features.push({ ...at, descriptor }, { ...at, x: at.x + 320, descriptor });
+    }
+    for (let i = 0; i < 8; i++) {
+      const at = { x: 200 + (i % 4) * 60, y: 160 + Math.floor(i / 4) * 60, strength: 1, angle: 0.3 };
+      const descriptor = described();
+      features.push(
+        { ...at, scale: 0.32, descriptor },
+        { ...at, x: 420 + at.x * 0.32, y: 160 + at.y * 0.32, scale: 1, descriptor },
+      );
+    }
+    const size = { width: 640, height: 400 };
+    const measured = measureRepetition(features, size, { farEnough: 64, spans: 2 });
+    expect(measured.places).toBeGreaterThanOrEqual(20);
+    expect(Math.abs(Math.log(measured.move?.scale ?? 0))).toBeLessThan(0.1);
+    expect(measured.beyond?.places).toBeGreaterThanOrEqual(8);
+    const scale = measured.beyond?.move.scale ?? 1;
+    expect(Math.min(scale, 1 / scale)).toBeCloseTo(0.32, 2);
+    // Without the span of the target's sizes there is nothing to measure it against.
+    expect(measureRepetition(features, size, { farEnough: 64 }).beyond).toBeNull();
+  });
+
   it("says nothing repeats when there is nothing to pair", () => {
-    expect(measure(one, [])).toEqual({ places: 0, of: 0, move: null, ends: null });
+    expect(measure(one, [])).toEqual({ places: 0, of: 0, move: null, ends: null, beyond: null });
     const single = [twiceFeatures[0] as TargetFeature];
-    expect(measure(one, single)).toEqual({ places: 0, of: 1, move: null, ends: null });
+    expect(measure(one, single)).toEqual({ places: 0, of: 1, move: null, ends: null, beyond: null });
   });
 });
