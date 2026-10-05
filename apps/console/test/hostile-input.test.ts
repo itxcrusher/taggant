@@ -25,7 +25,7 @@ let root = "";
 const made: string[] = [];
 
 beforeAll(async () => {
-  root = await mkdtemp(join(tmpdir(), "console-adversarial-"));
+  root = await mkdtemp(join(tmpdir(), "console-hostile-"));
   made.push(root);
   workspace = createWorkspace(join(root, "workspace"));
   server = createConsole({
