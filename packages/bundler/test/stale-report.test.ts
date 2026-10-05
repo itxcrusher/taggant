@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import { bundle } from "../src/bundle.js";
-import { currentReport, reportAskingFor } from "./current-report.js";
+import { currentFeatures, currentReport, reportAskingFor } from "./current-report.js";
 
 const RUNTIME_DIST = join(dirname(fileURLToPath(import.meta.url)), "../../runtime/dist");
 
@@ -56,13 +56,12 @@ describe("a compiled target from an older build", () => {
     ],
   };
 
-  const FEATURE = { x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] };
   const features = {
     formatVersion: 2,
     id: "front",
     width: 640,
     height: 452,
-    features: [FEATURE, { ...FEATURE, scale: 0.5 }],
+    features: currentFeatures(),
   };
 
   it("is refused rather than published on a width that cannot be trusted", async () => {
@@ -262,12 +261,23 @@ describe("a compiled target from an older build", () => {
     // The target says what it was built from: its analysed width, and the sizes its features
     // were found at, one of which is the size the report confirms.
     const report = await currentReport();
-    const otherWidth = { ...features, width: 100, report };
+    const otherWidth = { ...features, width: 700, report };
     await expect(bundle({ manifest, targets: { front: otherWidth }, ...(await scratch()) })).rejects.toThrow(
       /does not describe its own target/,
     );
-    const otherSizes = { ...features, features: [features.features[0]], report };
+    const otherSizes = {
+      ...features,
+      features: features.features.filter((feature) => feature.scale === 1),
+      report,
+    };
     await expect(bundle({ manifest, targets: { front: otherSizes }, ...(await scratch()) })).rejects.toThrow(
+      /does not describe its own target/,
+    );
+    // And the report of another target of the same width and sizes, which every landscape artwork
+    // shares: what tells them apart is how many features each was found to have at full size.
+    const another = { ...features, features: features.features.slice(1), report };
+    expect(another.features.filter((feature) => feature.scale === 1).length).toBe(report.featureCount - 1);
+    await expect(bundle({ manifest, targets: { front: another }, ...(await scratch()) })).rejects.toThrow(
       /does not describe its own target/,
     );
     const own = { ...features, report };

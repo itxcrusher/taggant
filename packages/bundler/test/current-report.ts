@@ -11,19 +11,38 @@ import type { TargetFeature } from "@taggant/vision";
  * through. Tests change the one field they are about and keep the rest.
  */
 export async function currentReport(changes: Partial<Report> = {}, scanDistanceMm = 190): Promise<Report> {
-  const corners: { x: number; y: number; strength: number }[] = [];
-  for (let y = 40; y < 452; y += 40)
-    for (let x = 40; x < 640; x += 40) corners.push({ x, y, strength: 1000 });
   const report = await buildReport({
     image: { width: 640, height: 452 },
-    levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners })),
+    levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: CORNERS })),
     // Measured over features nothing repeats in, one at each corner described unlike the rest,
     // as a report written for artwork that does not repeat itself is.
-    features: unrepeated(corners),
+    features: unrepeated(CORNERS),
     scanDistanceMm,
     recognises: () => [{ found: true, inliers: 58, misplaced: false }],
   });
   return { ...JSON.parse(JSON.stringify(report)), ...changes };
+}
+
+/** The corners the report above is built from, every 40 px over a 640 by 452 artwork. */
+const CORNERS: { x: number; y: number; strength: number }[] = [];
+for (let y = 40; y < 452; y += 40) for (let x = 40; x < 640; x += 40) CORNERS.push({ x, y, strength: 1000 });
+
+/**
+ * The features of the target that report describes, as a target file holds them: one at each of
+ * its corners, at full size and at half, so the count at full size and the sizes are the report's
+ * own. A target that disagrees with its report in either is refused by the publish gate.
+ */
+export function currentFeatures(): Array<{
+  x: number;
+  y: number;
+  strength: number;
+  angle: number;
+  scale: number;
+  descriptor: number[];
+}> {
+  return [1, 0.5].flatMap((scale) =>
+    unrepeated(CORNERS).map((feature) => ({ ...feature, scale, descriptor: [...feature.descriptor] })),
+  );
 }
 
 /** A feature at each point, each described unlike the others, so that nothing repeats. */

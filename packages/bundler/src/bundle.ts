@@ -414,17 +414,25 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     checkReadiness(target, compiled.report);
     // And the report has to be this target's. Edited together, an analysed width of 1 px and
     // the figures worked out from it made a report the stored check stood behind, and a piece
-    // that needs 147 mm published declared 10 mm wide; the same through the smallest size. What
-    // the target itself was built from says otherwise.
+    // that needs 147 mm published declared 10 mm wide; the same through the smallest size. And
+    // every landscape artwork is analysed 640 px wide at the same four sizes, so the report of
+    // one was published on the target of another. What the target itself was built from says
+    // otherwise: its width, its sizes, and how many of its features were found at full size,
+    // which is the count the report gives. A report whose every figure was edited by hand to
+    // match is not caught: this ties a report to its target, and does not sign it.
     const fields = compiled.report as Record<string, unknown>;
-    const built = new Set(
-      (Array.isArray(compiled.features) ? compiled.features : []).map(
-        (feature) => (feature as { scale?: unknown } | null)?.scale,
-      ),
-    );
-    if (fields.analysisWidth !== compiled.width || !built.has(fields.smallestUsableScale)) {
+    const features = Array.isArray(compiled.features) ? compiled.features : [];
+    const built = new Set(features.map((feature) => (feature as { scale?: unknown } | null)?.scale));
+    const atFullSize = features.filter(
+      (feature) => (feature as { scale?: unknown } | null)?.scale === 1,
+    ).length;
+    if (
+      fields.analysisWidth !== compiled.width ||
+      !built.has(fields.smallestUsableScale) ||
+      fields.featureCount !== atFullSize
+    ) {
       throw new Error(
-        `${target.id} carries a print readiness report that does not describe its own target: the report says the artwork was analysed ${String(fields.analysisWidth)} px wide and confirmed at ${String(fields.smallestUsableScale)} of that, and the target was built ${String(compiled.width)} px wide at other sizes. Compile it again before publishing.`,
+        `${target.id} carries a print readiness report that does not describe its own target: the report says the artwork was analysed ${String(fields.analysisWidth)} px wide, with ${String(fields.featureCount)} features at full size, and confirmed at ${String(fields.smallestUsableScale)} of that; the target was built ${String(compiled.width)} px wide with ${atFullSize} features at full size, and ${built.has(fields.smallestUsableScale) ? "has" : "has no"} features at that size. Compile it again before publishing.`,
       );
     }
   }

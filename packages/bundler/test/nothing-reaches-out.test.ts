@@ -6,7 +6,7 @@ import sharp from "sharp";
 import { afterAll, describe, expect, it } from "vitest";
 import { RENDER_TIMEOUT_MS, prepareAsset } from "../src/assets.js";
 import { bundle } from "../src/bundle.js";
-import { currentReport } from "./current-report.js";
+import { currentFeatures, currentReport } from "./current-report.js";
 
 /** A report the compiler writes, so the publish gate lets the probes through to what they test. */
 const REPORT = await currentReport();
@@ -41,10 +41,7 @@ describe("a published bundle", () => {
     id: "front",
     width: 640,
     height: 452,
-    features: [
-      { x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] },
-      { x: 50, y: 50, strength: 1, angle: 0, scale: 0.5, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] },
-    ],
+    features: currentFeatures(),
     report: REPORT,
   };
 

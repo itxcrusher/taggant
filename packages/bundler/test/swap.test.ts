@@ -43,11 +43,10 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 const { bundle } = await import("../src/bundle.js");
-const { currentReport } = await import("./current-report.js");
+const { currentFeatures, currentReport } = await import("./current-report.js");
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNTIME_DIST = join(here, "../../runtime/dist");
-const FEATURE = { x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] };
 // Built as the compiler builds one: the analysed width the report names, and features at the
 // size it confirms, which the gate now checks the report against.
 const TARGET = {
@@ -55,7 +54,7 @@ const TARGET = {
   id: "front",
   width: 640,
   height: 452,
-  features: [FEATURE, { ...FEATURE, scale: 0.5 }],
+  features: currentFeatures(),
   report: await currentReport(),
 };
 const OVERLAY =

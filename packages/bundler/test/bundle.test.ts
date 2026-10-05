@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { within } from "../src/assets.js";
 import { bundle } from "../src/bundle.js";
-import { currentReport, reportAskingFor } from "./current-report.js";
+import { currentFeatures, currentReport, reportAskingFor } from "./current-report.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNTIME_DIST = join(here, "../../runtime/dist");
@@ -28,7 +28,6 @@ const MANIFEST = {
 // and the bundler now refuses it: a target with nothing in it publishes a bundle that
 // points a camera at a page and can never answer, which is worth refusing even though it
 // costs every fixture a line.
-const FEATURE = { x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] };
 // And a report as the compiler writes one. A target with none is refused, because removing that
 // one key from a target file was the way past every readiness check the gate makes.
 // Built as the compiler builds one: the analysed width the report names, and features at the
@@ -38,7 +37,7 @@ const TARGET = {
   id: "front",
   width: 640,
   height: 452,
-  features: [FEATURE, { ...FEATURE, scale: 0.5 }],
+  features: currentFeatures(),
   report: await currentReport(),
 };
 
