@@ -3,7 +3,7 @@ import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/p
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
 import process from "node:process";
-import { carriesItsDistance, isCurrentReport } from "@taggant/compiler";
+import { carriesItsDistance, describesTarget, isCurrentReport, targetDigest } from "@taggant/compiler";
 import { validateManifest } from "@taggant/manifest";
 import { fromTargetFile } from "@taggant/vision";
 import { type CopiedAsset, RENDER_BUDGET_MS, copyAsset, within } from "./assets.js";
@@ -391,6 +391,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     }
     const compiled = options.targets[target.id] as {
       width?: unknown;
+      height?: unknown;
       features?: unknown[];
       report?: unknown;
     };
@@ -415,24 +416,21 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     // And the report has to be this target's. Edited together, an analysed width of 1 px and
     // the figures worked out from it made a report the stored check stood behind, and a piece
     // that needs 147 mm published declared 10 mm wide; the same through the smallest size. And
-    // every landscape artwork is analysed 640 px wide at the same four sizes, so the report of
-    // one was published on the target of another. What the target itself was built from says
-    // otherwise: its width, its sizes, and how many of its features were found at full size,
-    // which is the count the report gives. A report whose every figure was edited by hand to
-    // match is not caught: this ties a report to its target, and does not sign it.
-    const fields = compiled.report as Record<string, unknown>;
-    const features = Array.isArray(compiled.features) ? compiled.features : [];
-    const built = new Set(features.map((feature) => (feature as { scale?: unknown } | null)?.scale));
-    const atFullSize = features.filter(
-      (feature) => (feature as { scale?: unknown } | null)?.scale === 1,
-    ).length;
-    if (
-      fields.analysisWidth !== compiled.width ||
-      !built.has(fields.smallestUsableScale) ||
-      fields.featureCount !== atFullSize
-    ) {
+    // every landscape artwork is analysed 640 px wide at the same four sizes, often with the same
+    // count of features, so the report of a design that passed published on the target of one
+    // that was refused. The report carries its target's fingerprint, which settles it; the
+    // console asks the same question before it shows a verdict.
+    if (!describesTarget(compiled)) {
+      const fields = compiled.report as Record<string, unknown>;
+      const features = Array.isArray(compiled.features) ? compiled.features : [];
+      const scaleOf = (feature: unknown) => (feature as { scale?: unknown } | null)?.scale;
+      const built = new Set(features.map(scaleOf));
+      const atFullSize = features.filter((feature) => scaleOf(feature) === 1).length;
+      const own =
+        fields.targetDigest ===
+        targetDigest({ width: compiled.width, height: compiled.height, features: compiled.features });
       throw new Error(
-        `${target.id} carries a print readiness report that does not describe its own target: the report says the artwork was analysed ${String(fields.analysisWidth)} px wide, with ${String(fields.featureCount)} features at full size, and confirmed at ${String(fields.smallestUsableScale)} of that; the target was built ${String(compiled.width)} px wide with ${atFullSize} features at full size, and ${built.has(fields.smallestUsableScale) ? "has" : "has no"} features at that size. Compile it again before publishing.`,
+        `${target.id} carries a print readiness report that does not describe its own target: the report says the artwork was analysed ${String(fields.analysisWidth)} px wide, with ${String(fields.featureCount)} features at full size, and confirmed at ${String(fields.smallestUsableScale)} of that; the target was built ${String(compiled.width)} px wide with ${atFullSize} features at full size, ${built.has(fields.smallestUsableScale) ? "has" : "has no"} features at that size, and ${own ? "is" : "is not"} the target the report's fingerprint names. Compile it again before publishing.`,
       );
     }
   }

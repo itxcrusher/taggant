@@ -468,6 +468,7 @@ describe("the score", () => {
       smallestUsableScale: 0.5,
       minimumWidthMm: 70,
       scanDistanceMm: 150,
+      targetDigest: "0".repeat(64),
       recognition: {
         pixelsAcross: 320,
         widths: 5,

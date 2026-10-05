@@ -17,10 +17,36 @@ export async function currentReport(changes: Partial<Report> = {}, scanDistanceM
     // Measured over features nothing repeats in, one at each corner described unlike the rest,
     // as a report written for artwork that does not repeat itself is.
     features: unrepeated(CORNERS),
+    // Written for the target the tests publish, whose fingerprint it carries.
+    target: { width: 640, height: 452, features: currentFeatures() },
     scanDistanceMm,
     recognises: () => [{ found: true, inliers: 58, misplaced: false }],
   });
   return { ...JSON.parse(JSON.stringify(report)), ...changes };
+}
+
+/**
+ * A report this build stands behind, written for the same target as the one above, whose own
+ * figures differ from that target in one way: analysed at another width, with fewer features at
+ * full size, or confirmed at a size the target holds no features at. Each is consistent with
+ * itself, as a report edited together is, and carries the target's own fingerprint.
+ */
+export async function reportDifferingIn(
+  change: { analysisWidth: number } | { featureCount: number } | { confirmedFrom: number },
+): Promise<Report> {
+  const width = "analysisWidth" in change ? change.analysisWidth : 640;
+  const corners = "featureCount" in change ? CORNERS.slice(0, change.featureCount) : CORNERS;
+  // Found only from this many pixels across, so the size confirmed is the first that reaches it.
+  const from = "confirmedFrom" in change ? change.confirmedFrom : 0;
+  const report = await buildReport({
+    image: { width, height: 452 },
+    levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners })),
+    features: unrepeated(CORNERS),
+    target: { width: 640, height: 452, features: currentFeatures() },
+    scanDistanceMm: 190,
+    recognises: (pixels) => [{ found: pixels >= from, inliers: pixels >= from ? 58 : 0, misplaced: false }],
+  });
+  return JSON.parse(JSON.stringify(report));
 }
 
 /** The corners the report above is built from, every 40 px over a 640 by 452 artwork. */
@@ -29,8 +55,9 @@ for (let y = 40; y < 452; y += 40) for (let x = 40; x < 640; x += 40) CORNERS.pu
 
 /**
  * The features of the target that report describes, as a target file holds them: one at each of
- * its corners, at full size and at half, so the count at full size and the sizes are the report's
- * own. A target that disagrees with its report in either is refused by the publish gate.
+ * its corners, at full size and at half, so the count at full size, the sizes and the fingerprint
+ * are the report's own. A target that disagrees with its report in any of them is refused by the
+ * publish gate.
  */
 export function currentFeatures(): Array<{
   x: number;

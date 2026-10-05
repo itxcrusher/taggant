@@ -1,5 +1,6 @@
 export { compileTarget, toTargetJson } from "./compile.js";
 export type { CompileOptions, CompiledTarget } from "./compile.js";
+export { targetDigest } from "./digest.js";
 export { ArtworkError, loadGrayscale } from "./load.js";
 export type { LoadOptions } from "./load.js";
 export {
@@ -13,6 +14,7 @@ export {
   buildReport,
   carriesItsDistance,
   describeRepetition,
+  describesTarget,
   distanceBehind,
   isCurrentReport,
   repeats,

@@ -1,4 +1,5 @@
 import { type Corner, type Repetition, type TargetFeature, measureRepetition } from "@taggant/vision";
+import { targetDigest } from "./digest.js";
 
 /** One size the artwork was described at, with the features found there. */
 export interface Level {
@@ -23,6 +24,11 @@ export interface ReportInput {
    * pairs with the original.
    */
   smaller?: TargetFeature[];
+  /**
+   * The target this report is written for, as its file will hold it, whose fingerprint the report
+   * carries (`targetDigest`). The image's size and the features above unless given.
+   */
+  target?: { width: number; height: number; features: unknown };
   /** Distance in millimetres at which a person is expected to hold the camera. */
   scanDistanceMm: number;
   /**
@@ -158,6 +164,12 @@ export interface Report {
    * had nothing to do with.
    */
   scanDistanceMm: number;
+  /**
+   * The fingerprint of the target this report was written for (`targetDigest`), which whatever
+   * reads the two together compares with the target's own. Null when the report was built with no
+   * features, and a report like that does not pass.
+   */
+  targetDigest: string | null;
   reasons: string[];
 }
 
@@ -249,6 +261,32 @@ export function carriesItsDistance(report: unknown): report is Report {
 export const SCAN_DISTANCE_MM = { nearest: 50, furthest: 10_000 } as const;
 
 /**
+ * Does the report a compiled target carries describe that target, and not another?
+ *
+ * Its analysed width is the target's width, the size it confirms is one the target holds features
+ * at, its count of features is the target's at full size, and its fingerprint is the target's own.
+ * The first three are shared by any two landscape artworks with the same count of features, and
+ * the report of one published on the target of the other; the fingerprint is not. This ties a
+ * report to its target and does not sign it: a report whose every figure was edited to match is
+ * not caught. Whether the report is one this build stands behind at all is `isCurrentReport`.
+ */
+export function describesTarget(compiled: unknown): boolean {
+  if (!isRecord(compiled) || !isRecord(compiled.report)) return false;
+  const report = compiled.report;
+  const features = Array.isArray(compiled.features) ? compiled.features : [];
+  const scaleOf = (feature: unknown) => (isRecord(feature) ? feature.scale : undefined);
+  const built = new Set(features.map(scaleOf));
+  const atFullSize = features.filter((feature) => scaleOf(feature) === 1).length;
+  return (
+    report.analysisWidth === compiled.width &&
+    built.has(report.smallestUsableScale) &&
+    report.featureCount === atFullSize &&
+    report.targetDigest ===
+      targetDigest({ width: compiled.width, height: compiled.height, features: compiled.features })
+  );
+}
+
+/**
  * Is a report read back off disk one this build would stand behind?
  *
  * The fields a reader acts on, each checked rather than assumed. `carriesItsDistance` looked at
@@ -280,6 +318,9 @@ export function isCurrentReport(report: unknown): report is Report {
   if (width !== null && !(typeof width === "number" && Number.isFinite(width) && width > 0)) return false;
   // A passing report names a width; a failing one names none.
   if (pass !== (width !== null)) return false;
+  // The fingerprint of the target it was written for, which every compile writes; whether it is
+  // this target's is for whatever holds the target as well (`describesTarget`).
+  if (typeof fields.targetDigest !== "string" || !/^[0-9a-f]{64}$/.test(fields.targetDigest)) return false;
 
   const seen = fields.recognition;
   if (seen === undefined || (seen !== null && !isRecord(seen))) return false;
@@ -871,6 +912,12 @@ export async function buildReport(input: ReportInput): Promise<Report> {
     analysisWidth: image.width,
     smallestUsableScale,
     minimumWidthMm,
+    targetDigest:
+      input.features === undefined
+        ? null
+        : targetDigest(
+            input.target ?? { width: image.width, height: image.height, features: input.features },
+          ),
     reasons,
   };
 }

@@ -43,6 +43,7 @@ describe("formatReportLines", () => {
         analysisWidth: 1200,
         smallestUsableScale: 0.5,
         minimumWidthMm: 62,
+        targetDigest: "0000000000000000000000000000000000000000000000000000000000000000",
         scanDistanceMm: 150,
         recognition: {
           pixelsAcross: 320,
@@ -89,6 +90,7 @@ describe("formatReportLines", () => {
         analysisWidth: 1200,
         smallestUsableScale: 0.5,
         minimumWidthMm: 62,
+        targetDigest: "0000000000000000000000000000000000000000000000000000000000000000",
         scanDistanceMm: 150,
         recognition: null,
         reasons: ["too few features to track reliably", "features are concentrated in part of the artwork"],
@@ -129,6 +131,7 @@ describe("formatReportLines", () => {
         analysisWidth: 640,
         smallestUsableScale: 0.5,
         minimumWidthMm: null,
+        targetDigest: "0000000000000000000000000000000000000000000000000000000000000000",
         scanDistanceMm: 190,
         recognition: {
           pixelsAcross: 320,

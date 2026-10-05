@@ -1,7 +1,9 @@
 import { DEFAULT_SCALES } from "@taggant/vision";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-import { compileTarget } from "../src/compile.js";
+import { compileTarget, toTargetJson } from "../src/compile.js";
+import { targetDigest } from "../src/digest.js";
+import { describesTarget, isCurrentReport } from "../src/report.js";
 
 /**
  * Irregular artwork, deliberately not a checkerboard.
@@ -86,5 +88,32 @@ describe("compileTarget", () => {
     const target = await compileTarget(await noisyArtwork(), { id: "front-panel", scanDistanceMm: 400 });
     const round = JSON.parse(JSON.stringify(target));
     expect(round.features.length).toBe(target.features.length);
+  });
+
+  it("writes into its report the fingerprint of the target as the file holds it, and of no other", async () => {
+    const stored = JSON.parse(
+      JSON.stringify(
+        toTargetJson(await compileTarget(await noisyArtwork(), { id: "front-panel", scanDistanceMm: 400 })),
+      ),
+    );
+    expect(isCurrentReport(stored.report)).toBe(true);
+    expect(stored.report.targetDigest).toBe(targetDigest(stored));
+    expect(describesTarget(stored)).toBe(true);
+    // Another target with the same width, the same sizes and the same count of features at full
+    // size, which is all the report's own figures can tell: one bit of one descriptor apart.
+    const first = stored.features[0];
+    const other = {
+      ...stored,
+      features: [
+        { ...first, descriptor: [(first.descriptor[0] ^ 1) >>> 0, ...first.descriptor.slice(1)] },
+        ...stored.features.slice(1),
+      ],
+    };
+    expect(describesTarget(other)).toBe(false);
+    // Nor with one feature moved a pixel, or the artwork a pixel taller.
+    expect(
+      describesTarget({ ...stored, features: [{ ...first, x: first.x + 1 }, ...stored.features.slice(1)] }),
+    ).toBe(false);
+    expect(describesTarget({ ...stored, height: stored.height + 1 })).toBe(false);
   });
 });

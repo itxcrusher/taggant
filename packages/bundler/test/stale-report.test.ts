@@ -2,10 +2,11 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isCurrentReport, targetDigest } from "@taggant/compiler";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import { bundle } from "../src/bundle.js";
-import { currentFeatures, currentReport, reportAskingFor } from "./current-report.js";
+import { currentFeatures, currentReport, reportAskingFor, reportDifferingIn } from "./current-report.js";
 
 const RUNTIME_DIST = join(dirname(fileURLToPath(import.meta.url)), "../../runtime/dist");
 
@@ -274,13 +275,62 @@ describe("a compiled target from an older build", () => {
       /does not describe its own target/,
     );
     // And the report of another target of the same width and sizes, which every landscape artwork
-    // shares: what tells them apart is how many features each was found to have at full size.
+    // shares, with a different count of features at full size.
     const another = { ...features, features: features.features.slice(1), report };
     expect(another.features.filter((feature) => feature.scale === 1).length).toBe(report.featureCount - 1);
     await expect(bundle({ manifest, targets: { front: another }, ...(await scratch()) })).rejects.toThrow(
       /does not describe its own target/,
     );
+    // Or the same count, which many landscape artworks share too: only the fingerprint tells them
+    // apart, here one bit of one descriptor.
+    const [first, ...rest] = features.features as Array<{ descriptor: number[] }>;
+    const twin = {
+      ...features,
+      features: [
+        {
+          ...first,
+          descriptor: [((first?.descriptor[0] ?? 0) ^ 1) >>> 0, ...(first?.descriptor.slice(1) ?? [])],
+        },
+        ...rest,
+      ],
+      report,
+    };
+    expect(twin.features.filter((feature) => (feature as { scale?: number }).scale === 1).length).toBe(
+      report.featureCount,
+    );
+    await expect(bundle({ manifest, targets: { front: twin }, ...(await scratch()) })).rejects.toThrow(
+      /is not the target the report's fingerprint names/,
+    );
     const own = { ...features, report };
     await expect(bundle({ manifest, targets: { front: own }, ...(await scratch()) })).resolves.toBeDefined();
+  });
+
+  it("refuses a report whose own figures do not describe the target, though it names the target", async () => {
+    // Edited together, a report can carry the target's own fingerprint and still say the artwork
+    // was analysed at another width, held fewer features, or was confirmed at a size the target
+    // has no features at. Each is consistent with itself, so only the target says otherwise. The
+    // piece is declared wide enough for every one of them, so the width is not what refuses it.
+    const wide = {
+      ...manifest,
+      targets: manifest.targets.map((each) => ({ ...each, physicalWidthMm: 400 })),
+    };
+    for (const change of [{ analysisWidth: 700 }, { featureCount: 100 }, { confirmedFrom: 380 }]) {
+      const report = await reportDifferingIn(change);
+      const name = JSON.stringify(change);
+      expect(isCurrentReport(report), name).toBe(true);
+      expect(report.targetDigest, name).toBe(targetDigest(features));
+      await expect(
+        bundle({ manifest: wide, targets: { front: { ...features, report } }, ...(await scratch()) }),
+        name,
+      ).rejects.toThrow(/does not describe its own target/);
+    }
+    // And the same piece with the target's own report publishes, so it is the figures that refuse.
+    await expect(
+      bundle({
+        manifest: wide,
+        targets: { front: { ...features, report: await currentReport() } },
+        ...(await scratch()),
+      }),
+    ).resolves.toBeDefined();
   });
 });

@@ -13,7 +13,7 @@
 import { randomUUID } from "node:crypto";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { MIMEType } from "node:util";
-import { type Report, carriesItsDistance, isCurrentReport } from "@taggant/compiler";
+import { type Report, carriesItsDistance, describesTarget, isCurrentReport } from "@taggant/compiler";
 import { manifestSchema } from "@taggant/manifest";
 import { fromTargetFile } from "@taggant/vision";
 import { DEFAULT_SCAN_DISTANCE_MM, bundleDirFor, compile, publish, registerCode } from "./operations.js";
@@ -488,6 +488,10 @@ export function createConsole(options: ConsoleOptions): Server {
           view.staleReport = "unreadable";
         } else if (report !== undefined && !isCurrentReport(report)) {
           view.staleReport = !isObject(report) ? "broken" : carriesItsDistance(report) ? "verdict" : "width";
+        } else if (report !== undefined && !describesTarget(compiled)) {
+          // A report this build wrote, for another target: the publish gate refuses it, and its
+          // verdict and width are another artwork's, so none of it is shown as this one's.
+          view.staleReport = "another";
         } else if (report !== undefined) {
           view.report = report as Report;
           const needed = view.report.minimumWidthMm;

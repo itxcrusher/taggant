@@ -91,6 +91,7 @@ describe("what a stored report is said to be", () => {
       analysisWidth: 640,
       smallestUsableScale: 0.5,
       minimumWidthMm: null,
+      targetDigest: "0000000000000000000000000000000000000000000000000000000000000000",
       scanDistanceMm: 190,
       recognition: {
         pixelsAcross: 320,
@@ -134,6 +135,7 @@ describe("what a stored report is said to be", () => {
       analysisWidth: 640,
       smallestUsableScale: 0.5,
       minimumWidthMm: null,
+      targetDigest: "0000000000000000000000000000000000000000000000000000000000000000",
       scanDistanceMm: 190,
       recognition: {
         pixelsAcross: 320,

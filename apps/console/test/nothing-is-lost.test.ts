@@ -692,6 +692,37 @@ describe("an internal failure said as a sentence", () => {
     expect(body, "not JSON").toContain("cannot be read as a target");
   });
 
+  it("does not show the report of another target as this one's verdict", async () => {
+    // A report this build wrote, beside a target with the same width, sizes and count of features
+    // that is not the one it was written for: the card showed its verdict and width while the
+    // publish gate refused it as another target's. Here the target differs by one descriptor bit.
+    const { post, workspace, port } = await drive();
+    await post("/experiences", new URLSearchParams({ id: "swapped", title: "Swapped" }));
+    await post("/e/swapped/targets", target("front", "front.png", await artwork()));
+    await post("/e/swapped/targets/front/compile", new URLSearchParams({ scanDistanceMm: "190" }));
+    const page = async () => (await fetch(`http://127.0.0.1:${port}/e/swapped`)).text();
+    const own = await page();
+    expect(own).toContain("Print it at least");
+    expect(own).not.toContain("report of another target");
+    const stored = (await workspace.readTarget("swapped", "front")) as {
+      features: Array<{ descriptor: number[] }>;
+    };
+    const [first, ...rest] = stored.features;
+    await workspace.writeTarget("swapped", "front", {
+      ...stored,
+      features: [
+        {
+          ...first,
+          descriptor: [((first?.descriptor[0] ?? 0) ^ 1) >>> 0, ...(first?.descriptor.slice(1) ?? [])],
+        },
+        ...rest,
+      ],
+    });
+    const swapped = await page();
+    expect(swapped).toContain("carries the print readiness report of another target");
+    expect(swapped).not.toContain("Print it at least");
+  }, 240_000);
+
   it("keeps the compile asked for last, not the one that finished last", async () => {
     // The recogniser hands the event loop back between looks, so two compiles of one target
     // interleave, and the later request did less work, finished first and was overwritten: the

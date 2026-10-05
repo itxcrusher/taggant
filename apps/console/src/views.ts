@@ -220,8 +220,9 @@ export interface TargetView {
    * written before the width carried its distance, and was about four times too small; `verdict`
    * for anything else, an earlier build's or a hand-edited report, whose verdict this build does
    * not stand behind. It said the width was sound there, which a corrupt width made false.
+   * `another` when the report is one this build wrote, for another target.
    */
-  staleReport?: "unreadable" | "broken" | "width" | "verdict" | undefined;
+  staleReport?: "unreadable" | "broken" | "width" | "verdict" | "another" | undefined;
   /** Set when the compiled target asks for more width than the manifest says it is printed at. */
   tooSmall?: string | undefined;
 }
@@ -256,7 +257,9 @@ export function experiencePage(view: ExperienceView): string {
             ? `<div class="notice gap-md"><p>Compiled by an older build, whose minimum print width was too small to trust. Compile it again to see what this artwork needs.</p></div>`
             : target.staleReport === "verdict"
               ? `<div class="notice gap-md"><p>Compiled by an earlier build, or changed since, and this build does not stand behind its verdict. Compile it again to see what this artwork needs.</p></div>`
-              : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
+              : target.staleReport === "another"
+                ? `<div class="notice gap-md"><p>The compiled target carries the print readiness report of another target, so its verdict and width are not this artwork's. Compile it again to see what this artwork needs.</p></div>`
+                : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
   }
   ${target.tooSmall ? `<div class="notice bad gap-md"><p>${esc(target.tooSmall)}</p></div>` : ""}
   <form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/compile" class="gap-md">
