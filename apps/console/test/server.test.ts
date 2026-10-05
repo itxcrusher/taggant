@@ -552,7 +552,7 @@ describe("what it says", () => {
       id: "front",
       width: 640,
       height: 452,
-      features: [],
+      features: [{ x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] }],
       report: {
         score: 100,
         pass: true,

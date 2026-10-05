@@ -80,6 +80,9 @@ async function currentReport(): Promise<Report> {
   return JSON.parse(JSON.stringify(report));
 }
 
+/** One feature a target file can hold, so that the file is one the runtime reads. */
+const ONE_FEATURE = { x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] };
+
 /** The bytes say MP4, which is what the bundler reads to decide what ships. */
 const MP4 = Buffer.concat([
   Buffer.from([0, 0, 0, 0x18]),
@@ -650,7 +653,7 @@ describe("an internal failure said as a sentence", () => {
         id: "front",
         width: 640,
         height: 452,
-        features: [],
+        features: [ONE_FEATURE],
         report,
       });
       const page = await fetch(`http://127.0.0.1:${port}/e/kept`);
@@ -663,6 +666,26 @@ describe("an internal failure said as a sentence", () => {
     await workspace.writeTarget("kept", "front", [1, 2, 3]);
     let body = await (await fetch(`http://127.0.0.1:${port}/e/kept`)).text();
     expect(body, "an array").toContain("cannot be read as a target");
+    // And so is an object the runtime cannot read, or one that holds nothing to match, whatever
+    // report it carries: these read as not compiled yet, or showed a passing report's verdict.
+    const shapes: Array<[string, unknown]> = [
+      ["an empty object", {}],
+      ["an object of something else", { hello: "world" }],
+      ["a later format", { formatVersion: 3, id: "front", width: 640, height: 452, features: [ONE_FEATURE] }],
+      [
+        "features that are a word",
+        { formatVersion: 2, id: "front", width: 640, height: 452, features: "x", report: good },
+      ],
+      ["no features", { formatVersion: 2, id: "front", width: 640, height: 452, features: [], report: good }],
+    ];
+    for (const [name, shape] of shapes) {
+      await workspace.writeTarget("kept", "front", shape);
+      const page = await fetch(`http://127.0.0.1:${port}/e/kept`);
+      const text = await page.text();
+      expect(page.status, name).toBe(200);
+      expect(text, name).toContain("cannot be read as a target");
+      expect(text, name).not.toContain("ready for press");
+    }
     const folder = join(workspace.root, "kept", "targets");
     for (const name of await readdir(folder)) await writeFile(join(folder, name), "{ this is not json");
     body = await (await fetch(`http://127.0.0.1:${port}/e/kept`)).text();
@@ -1359,13 +1382,23 @@ describe("what it writes down, and how much it holds", () => {
       scanDistanceMm: 190,
       recognition: { pixelsAcross: 322, found: true, inliers: 58, needed: 20 },
     };
-    await workspace.writeTarget("stored", "front", { formatVersion: 2, features: [], report: oneWidth });
+    await workspace.writeTarget("stored", "front", {
+      formatVersion: 2,
+      id: "front",
+      width: 640,
+      height: 452,
+      features: [ONE_FEATURE],
+      report: oneWidth,
+    });
     expect(await page()).toContain("this build does not stand behind its verdict");
     expect(await page()).not.toContain("too small to trust");
 
     await workspace.writeTarget("stored", "front", {
       formatVersion: 2,
-      features: [],
+      id: "front",
+      width: 640,
+      height: 452,
+      features: [ONE_FEATURE],
       report: { minimumWidthMm: 70, pass: true },
     });
     expect(await page()).toContain("too small to trust");

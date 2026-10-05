@@ -15,6 +15,7 @@ import { type IncomingMessage, type Server, type ServerResponse, createServer } 
 import { MIMEType } from "node:util";
 import { type Report, carriesItsDistance, isCurrentReport } from "@taggant/compiler";
 import { manifestSchema } from "@taggant/manifest";
+import { fromTargetFile } from "@taggant/vision";
 import { DEFAULT_SCAN_DISTANCE_MM, bundleDirFor, compile, publish, registerCode } from "./operations.js";
 import { STYLESHEET } from "./style.js";
 import {
@@ -396,6 +397,20 @@ function checkMultipart(body: Buffer, contentType: string): void {
 }
 
 /**
+ * Whether a stored target file is one a browser can use: read by the same parser the runtime and
+ * the publish gate read it with, and holding at least one feature. Taken only as "an object", an
+ * empty object or one from a later format read as not compiled yet, and one whose features were
+ * missing or a string showed its report's verdict, ready for press.
+ */
+function readableTarget(value: unknown): boolean {
+  try {
+    return fromTargetFile(value).features.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Percent-decoding that answers rather than throws.
  *
  * `decodeURIComponent` throws `URIError` on a lone `%`, and that is not a `WorkspaceError`,
@@ -469,7 +484,7 @@ export function createConsole(options: ConsoleOptions): Server {
         // whether its value is truthy: `null`, `0`, `false` and `""` read as not compiled yet,
         // and a string read as a width too small to trust. No report at all is not compiled by
         // anything this build stands behind, and publishing compiles it first, as the page says.
-        if (!isObject(compiled)) {
+        if (!isObject(compiled) || !readableTarget(compiled)) {
           view.staleReport = "unreadable";
         } else if (report !== undefined && !isCurrentReport(report)) {
           view.staleReport = !isObject(report) ? "broken" : carriesItsDistance(report) ? "verdict" : "width";
