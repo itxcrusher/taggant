@@ -8,7 +8,7 @@
  */
 import { utimesSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -17,6 +17,8 @@ const hooks = vi.hoisted(() => ({
   rename: null as null | ((from: string, to: string) => Promise<void>),
   /** Returns an error code to fail an exclusive create of this path with, or null to let it be. */
   create: null as null | ((path: string) => string | null),
+  /** Runs before a stat, and may change what is on disk first. */
+  stat: null as null | ((path: string) => Promise<void>),
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -26,6 +28,10 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     rename: async (from: string, to: string) => {
       await hooks.rename?.(String(from), String(to));
       return actual.rename(from, to);
+    },
+    stat: async (...args: Parameters<typeof actual.stat>) => {
+      await hooks.stat?.(String(args[0]));
+      return actual.stat(...args);
     },
     writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
       const [path, , options] = args;
@@ -40,7 +46,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   };
 });
 
-const { STALE_AFTER_MS, claim, lockFor } = await import("../src/one-console.js");
+const { STALE_AFTER_MS, claim, lockFor, markerPrefix } = await import("../src/one-console.js");
 
 const WORKSPACE = (path: string) => ({ what: "workspace", path, kind: "directory" as const });
 const roots: string[] = [];
@@ -48,6 +54,8 @@ const roots: string[] = [];
 afterEach(async () => {
   hooks.rename = null;
   hooks.create = null;
+  hooks.stat = null;
+  vi.restoreAllMocks();
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 
@@ -98,6 +106,75 @@ describe("taking over a lock", () => {
     expect(held.ok, "took a lock its holder had just touched").toBe(false);
     if (!held.ok) expect(held.heldByAnother).toBe(true);
     expect(JSON.parse(await readFile(lock, "utf8")).nonce).toBe("old");
+  });
+
+  it("leaves another claimant's marker where it is when it backs off", async () => {
+    // Until the lock it judged is gone, a takeover removes its own marker and no other. Removing
+    // every marker for the lock as it backed off took the one a later claimant was working
+    // under, and a third claimant then found no marker and took over beside that one.
+    const { workspace, lock } = await staleLock();
+    let theirs = "";
+    hooks.create = (path) => {
+      if (!path.includes(".taking-over-")) return null;
+      hooks.create = null;
+      // The lock touched, so this claim backs off once it holds its marker; and the next marker
+      // made, by another claimant that judged this one's to be left behind.
+      const now = new Date();
+      utimesSync(lock, now, now);
+      const cut = path.lastIndexOf("-") + 1;
+      theirs = `${path.slice(0, cut)}${Number(path.slice(cut)) + 1}`;
+      writeFileSync(theirs, "another claimant");
+      return null;
+    };
+    const held = await claim([WORKSPACE(workspace)], { watchMs: 100 });
+    expect(theirs, "the claim never reached a marker").not.toBe("");
+    expect(held.ok, "took a lock its holder had just touched").toBe(false);
+    const markers = (await readdir(workspace)).filter((name) => name.includes(".taking-over-"));
+    expect(markers, "removed another claimant's marker, or left its own").toEqual([basename(theirs)]);
+  });
+
+  it("takes a marker gone between the listing and the look at it as a takeover that finished", async () => {
+    // A claim lists the markers, then looks at the newest. Gone in between, that takeover
+    // finished, so the lock is not the one judged any more, and it is looked at again rather
+    // than the missing marker read as a file with a time on it.
+    const { workspace, lock } = await staleLock();
+    const finished = join(workspace, `${markerPrefix(lock, await readFile(lock, "utf8"))}1`);
+    await writeFile(finished, "a takeover finishing now");
+    let removed = false;
+    hooks.stat = async (path) => {
+      if (path !== finished) return;
+      hooks.stat = null;
+      await rm(finished);
+      removed = true;
+    };
+    const held = await claim([WORKSPACE(workspace)], { watchMs: 100 });
+    expect(removed, "the claim never looked at the marker").toBe(true);
+    expect(held.ok, held.ok ? "" : held.because).toBe(true);
+    if (held.ok) held.claim.release();
+  });
+
+  it("leaves a lock to a process on this machine that it may not signal", async () => {
+    // Whether a process runs is asked with a signal of nothing, and a process belonging to
+    // another user refuses even that, with EPERM: it is running, and not this one's to signal.
+    // Read as not running, the lock of a console another user started here was taken over.
+    const { workspace, lock } = await staleLock();
+    const theirs = 999_999;
+    await writeFile(lock, JSON.stringify({ pid: theirs, host: hostname(), nonce: "another-user" }));
+    const longAgo = new Date(Date.now() - (STALE_AFTER_MS + 5_000));
+    await utimes(lock, longAgo, longAgo);
+    const signal = process.kill.bind(process);
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid, code) => {
+      if (pid === theirs) throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+      return signal(pid, code);
+    });
+    const held = await claim([WORKSPACE(workspace)], { watchMs: 100 });
+    expect(kill).toHaveBeenCalledWith(theirs, 0);
+    expect(held.ok, "took over the lock of a console it may not signal").toBe(false);
+    if (!held.ok) {
+      expect(held.heldByAnother).toBe(true);
+      expect(held.because).toContain("running on this machine");
+    }
+    expect(JSON.parse(await readFile(lock, "utf8")).nonce).toBe("another-user");
   });
 
   it("steps back when another claimant makes the next marker first, and leaves that marker alone", async () => {
