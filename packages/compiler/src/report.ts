@@ -324,7 +324,7 @@ export function isCurrentReport(report: unknown): report is Report {
   // checked the verdict, the width's type and the recognition's counts, and accepted a report
   // decided on one width, a pass scoring 10, a pass with three features, and a width edited to
   // 1 mm, which turned the bundler's comparison off for a piece that needs 147.
-  if (typeof pass !== "boolean" || !isCount(score) || score > 100 || pass !== score >= 60) return false;
+  if (typeof pass !== "boolean") return false;
   // A passing report has nothing against it and a failing one says why. A report with no list
   // here took the console's page down with a TypeError.
   if (!Array.isArray(reasons) || !reasons.every((reason) => typeof reason === "string")) return false;
@@ -355,9 +355,25 @@ export function isCurrentReport(report: unknown): report is Report {
     if ((widthsAgreed as number) > (widths as number) || (widths as number) > WIDTHS_SHOWN.length)
       return false;
     if ((misplaced as number) > (views as number)) return false;
-    // A size confirmed is one no look put in the wrong place.
-    if (found === true && misplaced !== 0) return false;
+    // A size confirmed is one no look put in the wrong place, and one every width of was looked
+    // at, as many times each and no more than once a turn, most of them agreeing, at the size the
+    // report names. They were held to that only on a pass, so a refusal by the looks after a
+    // confirmed size could name a size its recognition did not, and a pass could carry forty
+    // looks there.
+    if (found === true) {
+      if (misplaced !== 0 || widths !== WIDTHS_SHOWN.length || (widthsAgreed as number) * 2 <= widths)
+        return false;
+      if ((inliers as number) < AGREEING_POINTS_NEEDED) return false;
+      const looks = views as number;
+      if (looks < widths || looks % widths !== 0 || looks > widths * TURNS.length) return false;
+      if (pixelsAcross !== Math.round(smallestUsableScale * analysisWidth)) return false;
+    }
   }
+  // The score is not a separate fact either: it is worked out again from the report's own figures,
+  // which holds it whole, at most 100 and on the verdict's side of sixty. Bounded rather than
+  // worked out, a pass scoring 61 where its figures give 100 was taken as written.
+  if (fields.score !== scoreFor(featureCount, areasWithFeatures, pass, seen as unknown as Recognition | null))
+    return false;
 
   // Measured by every compile this build makes, so a report without it is from an earlier one:
   // the build whose verdict on a design printed twice turned on its export width.
@@ -419,6 +435,10 @@ export function isCurrentReport(report: unknown): report is Report {
     if (toPoint.length === 0 || repeats(repeated as unknown as Repetition)) return false;
     if ((aimed as unknown as Aimed).moves > toPoint.length) return false;
     if (!pass && (aimed as unknown as Aimed).misplaced === 0) return false;
+    // Taken once enough features over enough of the artwork were found and a size was confirmed:
+    // a refusal by the looks with no recognition, or with too few features, was taken as written.
+    if (featureCount < MIN_FEATURES || areasWithFeatures < MIN_AREAS) return false;
+    if (!isRecord(seen) || seen.found !== true) return false;
   }
   if (!pass && isRecord(seen) && seen.found === true && aimed === null) return false;
 
@@ -436,15 +456,8 @@ export function isCurrentReport(report: unknown): report is Report {
       if (pointed.moves !== toPoint.length || pointed.sizes !== pointed.moves * DEFAULT_SCALES.length)
         return false;
     }
-    // Asked, and agreed: at most of its widths, in every turn, never in the wrong place, and at
-    // the size the report names.
+    // Asked, and agreed: a confirmed size, held above to what confirming one takes.
     if (seen === null || seen.found !== true) return false;
-    const recognition = seen as unknown as Recognition;
-    if (recognition.widths !== WIDTHS_SHOWN.length || recognition.widthsAgreed * 2 <= recognition.widths)
-      return false;
-    if (recognition.misplaced !== 0 || recognition.inliers < recognition.needed) return false;
-    if (recognition.views < recognition.widths || recognition.views % recognition.widths !== 0) return false;
-    if (recognition.pixelsAcross !== Math.round(smallestUsableScale * analysisWidth)) return false;
     // The width is not a separate fact: it is the confirmed size turned into millimetres at the
     // report's own distance, and recomputing it is what makes it a check rather than a reading.
     const scanDistanceMm = fields.scanDistanceMm as number;
@@ -929,20 +942,8 @@ export async function buildReport(input: ReportInput): Promise<Report> {
     }
   }
 
-  // A refusal by the recogniser scores by how far short of agreeing it fell. It scored by the
-  // corners alone, so a sheet found nowhere read 59 of 100, one point under passing.
-  const agreedShare =
-    recognition === null || pass
-      ? 1
-      : recognition.widths === 0
-        ? 0
-        : (2 * recognition.widthsAgreed) / recognition.widths;
-
   return {
-    score: Math.min(
-      scoreOf(featureCount / MIN_FEATURES, areasWithFeatures / MIN_AREAS, pass),
-      pass ? 100 : Math.round(59 * Math.min(1, agreedShare)),
-    ),
+    score: scoreFor(featureCount, areasWithFeatures, pass, recognition),
     pass,
     scanDistanceMm,
     featureCount,
@@ -1357,6 +1358,29 @@ function holdsUp(corners: Corner[], image: { width: number; height: number }): b
 
 function clamp(value: number, low: number, high: number): number {
   return value < low || Number.isNaN(value) ? low : value > high ? high : value;
+}
+
+/**
+ * The score a report gives, from its own figures, so that a stored report's is worked out again
+ * rather than read. A refusal by the recogniser scores by how far short of agreeing it fell. It
+ * scored by the corners alone, so a sheet found nowhere read 59 of 100, one point under passing.
+ */
+function scoreFor(
+  featureCount: number,
+  areasWithFeatures: number,
+  pass: boolean,
+  recognition: Recognition | null,
+): number {
+  const agreedShare =
+    recognition === null || pass
+      ? 1
+      : recognition.widths === 0
+        ? 0
+        : (2 * recognition.widthsAgreed) / recognition.widths;
+  return Math.min(
+    scoreOf(featureCount / MIN_FEATURES, areasWithFeatures / MIN_AREAS, pass),
+    pass ? 100 : Math.round(59 * Math.min(1, agreedShare)),
+  );
 }
 
 /**

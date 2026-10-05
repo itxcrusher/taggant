@@ -1404,6 +1404,22 @@ describe("a design with a copy the lines do not refuse", () => {
     expect(describeRepetition(report)).toContain("; pointed at the ends of that move, the recogniser");
     expect(describeRepetition(report)).not.toContain("scaling it to");
     expect(isCurrentReport(JSON.parse(JSON.stringify(report)))).toBe(true);
+    // A pass on the same design is looked at both moves, and one whose looks stopped at the first
+    // is not what a compile writes, though its count of sizes fits the one move it reached.
+    const both = JSON.parse(
+      JSON.stringify(
+        await pointedReport(
+          [...partlyCopied(120, 15), ...onTarget.slice(0, 6)],
+          pointedLooks(false),
+          smaller.slice(0, 6),
+        ),
+      ),
+    );
+    expect(both.pass).toBe(true);
+    expect(both.repetition.aimed).toEqual({ moves: 2, sizes: 8, views: 64, misplaced: 0 });
+    expect(isCurrentReport(both)).toBe(true);
+    const first = { moves: 1, sizes: 4, views: 32, misplaced: 0 };
+    expect(isCurrentReport({ ...both, repetition: { ...both.repetition, aimed: first } })).toBe(false);
     // Nor may a stored report claim the second move was reached before the first one's four sizes.
     const early = JSON.parse(JSON.stringify(report));
     early.repetition.aimed = { moves: 2, sizes: 3, views: 20, misplaced: 4 };
@@ -1429,6 +1445,25 @@ describe("a design with a copy the lines do not refuse", () => {
       ["more moves looked at than the rule picks", stopped({ moves: 2, sizes: 5, views: 36, misplaced: 4 })],
       ["more sizes than the moves looked at have", stopped({ moves: 1, sizes: 5, views: 36, misplaced: 4 })],
       ["looks in the wrong place at no size", stopped({ moves: 1, sizes: 0, views: 0, misplaced: 4 })],
+      ["looks in the wrong place at no move", stopped({ moves: 0, sizes: 0, views: 0, misplaced: 4 })],
+      ["a pass four looks short at its last size", aimed({ moves: 1, sizes: 4, views: 28, misplaced: 0 })],
+      ["a refusal by the looks with no recognition", { ...refused, recognition: null }],
+      [
+        "a refusal by the looks with no size confirmed",
+        { ...refused, recognition: { ...refused.recognition, found: false } },
+      ],
+      // Ten features is a refusal for too few, scored 10 by a compile, round(59 x 10 / 60); the
+      // score set to match, so that only the looks being there refuse it.
+      ["a refusal by the looks with too few features", { ...refused, featureCount: 10, score: 10 }],
+      [
+        "a refusal by the looks confirming a size its recognition does not name",
+        { ...refused, smallestUsableScale: refused.smallestUsableScale === 1 ? 0.79 : 1 },
+      ],
+      [
+        "a pass with forty looks at the size it confirms",
+        { ...passed, recognition: { ...passed.recognition, views: 40 } },
+      ],
+      ["a pass scoring 61 where its figures give more", { ...passed, score: 61 }],
       ["no fingerprint of its target", { ...passed, targetDigest: null }],
       [
         "a move past the target's sizes that does not change size",
