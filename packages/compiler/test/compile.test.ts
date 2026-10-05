@@ -1,3 +1,5 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { DEFAULT_SCALES } from "@taggant/vision";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
@@ -115,5 +117,24 @@ describe("compileTarget", () => {
       describesTarget({ ...stored, features: [{ ...first, x: first.x + 1 }, ...stored.features.slice(1)] }),
     ).toBe(false);
     expect(describesTarget({ ...stored, height: stored.height + 1 })).toBe(false);
+  });
+
+  it("ties a refusal to its own target when the artwork holds no features at full size", async () => {
+    // Soft artwork, the example postcard blurred: refused for too few features, it holds none at
+    // full size, and a refusal confirms no size, keeping the full size as its own. Its report
+    // was called another target's, and compiling again could not clear it.
+    const postcard = join(dirname(fileURLToPath(import.meta.url)), "../../../examples/postcard/artwork.png");
+    const soft = await sharp(postcard).blur(8).png().toBuffer();
+    const stored = JSON.parse(
+      JSON.stringify(toTargetJson(await compileTarget(soft, { id: "soft", scanDistanceMm: 190 }))),
+    );
+    expect(stored.report.pass).toBe(false);
+    expect(stored.report.smallestUsableScale).toBe(1);
+    expect(stored.features.some((feature: { scale: number }) => feature.scale === 1)).toBe(false);
+    expect(isCurrentReport(stored.report)).toBe(true);
+    expect(describesTarget(stored)).toBe(true);
+    // A passing report is still held to a size the target holds features at.
+    const claimed = { ...stored, report: { ...stored.report, pass: true } };
+    expect(describesTarget(claimed)).toBe(false);
   });
 });

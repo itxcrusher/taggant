@@ -282,7 +282,11 @@ function inTurnForSwap<T>(outDir: string, work: () => Promise<T>): Promise<T> {
  * declares. Everything is held to `isCurrentReport`, which the console's rebuild uses too; the
  * checks before it say which earlier build wrote a report, in words an operator can act on.
  */
-function checkReadiness(target: { id: string; physicalWidthMm: number }, report: unknown): void {
+function checkReadiness(
+  target: { id: string; physicalWidthMm: number },
+  compiled: { width?: unknown; height?: unknown; features?: unknown[]; report?: unknown },
+): void {
+  const report = compiled.report;
   // A report that is not an object, `null` among them, reached the checks below as a raw
   // TypeError naming a property of null.
   const fields =
@@ -331,6 +335,38 @@ function checkReadiness(target: { id: string; physicalWidthMm: number }, report:
   if (!isCurrentReport(fields)) {
     throw new Error(
       `${target.id} carries a print readiness report this build does not stand behind: written by an earlier build, whose verdict could turn on a millimetre of scan distance, or edited by hand. Compile it again before publishing.`,
+    );
+  }
+  // And the report has to be this target's, asked before its verdict and its width are read,
+  // which would otherwise be another artwork's: a refused design carrying a passing report was
+  // told the other design's width, and the other way round the other design's refusal. Edited
+  // together, an analysed width of 1 px and the figures worked out from it made a report the
+  // stored check stood behind, and a piece that needs 147 mm published declared 10 mm wide; the
+  // same through the smallest size. And every landscape artwork is analysed 640 px wide at the
+  // same four sizes, often with the same count of features, so the report of a design that passed
+  // published on the target of one that was refused. The report carries its target's
+  // fingerprint, which settles it; the console asks the same question before it shows a verdict.
+  if (!describesTarget(compiled)) {
+    const features = Array.isArray(compiled.features) ? compiled.features : [];
+    const scaleOf = (feature: unknown) => (feature as { scale?: unknown } | null)?.scale;
+    const built = new Set(features.map(scaleOf));
+    const atFullSize = features.filter((feature) => scaleOf(feature) === 1).length;
+    const own =
+      fields.targetDigest ===
+      targetDigest({ width: compiled.width, height: compiled.height, features: compiled.features });
+    // A size only a passing report confirms; a refusal's is the full size, confirming nothing.
+    const confirmed = fields.pass === true;
+    const said = `the report says the artwork was analysed ${String(fields.analysisWidth)} px wide, with ${String(fields.featureCount)} features at full size${confirmed ? `, and confirmed at ${String(fields.smallestUsableScale)} of that` : ""}`;
+    const ofTarget = [
+      `the target was built ${String(compiled.width)} px wide with ${atFullSize} features at full size`,
+      ...(confirmed
+        ? [`${built.has(fields.smallestUsableScale) ? "has" : "has no"} features at that size`]
+        : []),
+      `${own ? "is" : "is not"} the target the report's fingerprint names`,
+    ];
+    const targetSays = `${ofTarget.slice(0, -1).join(", ")}, and ${ofTarget[ofTarget.length - 1]}`;
+    throw new Error(
+      `${target.id} carries a print readiness report that does not describe its own target: ${said}; ${targetSays}. Compile it again before publishing.`,
     );
   }
   // Refused before the width is looked at, because a failing report has no width: it is
@@ -412,27 +448,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
         `${target.id} carries no print readiness report, so nothing says its artwork was checked against the width it is declared at. Compile it again before publishing.`,
       );
     }
-    checkReadiness(target, compiled.report);
-    // And the report has to be this target's. Edited together, an analysed width of 1 px and
-    // the figures worked out from it made a report the stored check stood behind, and a piece
-    // that needs 147 mm published declared 10 mm wide; the same through the smallest size. And
-    // every landscape artwork is analysed 640 px wide at the same four sizes, often with the same
-    // count of features, so the report of a design that passed published on the target of one
-    // that was refused. The report carries its target's fingerprint, which settles it; the
-    // console asks the same question before it shows a verdict.
-    if (!describesTarget(compiled)) {
-      const fields = compiled.report as Record<string, unknown>;
-      const features = Array.isArray(compiled.features) ? compiled.features : [];
-      const scaleOf = (feature: unknown) => (feature as { scale?: unknown } | null)?.scale;
-      const built = new Set(features.map(scaleOf));
-      const atFullSize = features.filter((feature) => scaleOf(feature) === 1).length;
-      const own =
-        fields.targetDigest ===
-        targetDigest({ width: compiled.width, height: compiled.height, features: compiled.features });
-      throw new Error(
-        `${target.id} carries a print readiness report that does not describe its own target: the report says the artwork was analysed ${String(fields.analysisWidth)} px wide, with ${String(fields.featureCount)} features at full size, and confirmed at ${String(fields.smallestUsableScale)} of that; the target was built ${String(compiled.width)} px wide with ${atFullSize} features at full size, ${built.has(fields.smallestUsableScale) ? "has" : "has no"} features at that size, and ${own ? "is" : "is not"} the target the report's fingerprint names. Compile it again before publishing.`,
-      );
-    }
+    checkReadiness(target, compiled);
   }
 
   const assets: CopiedAsset[] = [];

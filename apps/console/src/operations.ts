@@ -16,6 +16,7 @@ import {
   SCAN_DISTANCE_MM,
   carriesItsDistance,
   compileTarget,
+  describesTarget,
   distanceBehind,
   isCurrentReport,
   toTargetJson,
@@ -256,6 +257,12 @@ async function publishOnce(
           rebuildAt = carriesItsDistance(report)
             ? report.scanDistanceMm
             : (distanceBehind(report) ?? options.scanDistanceMm);
+        } else if (!describesTarget(stored)) {
+          // A report this build wrote, for another target: its verdict and its width are another
+          // artwork's, and the gate would refuse it. Rebuilt from this target's own artwork, at the
+          // distance asked for, since the report's distance was chosen for the other one.
+          stored = undefined;
+          rebuildAt = options.scanDistanceMm;
         }
       } catch {
         stored = undefined;

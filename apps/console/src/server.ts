@@ -397,14 +397,18 @@ function checkMultipart(body: Buffer, contentType: string): void {
 }
 
 /**
- * Whether a stored target file is one a browser can use: read by the same parser the runtime and
- * the publish gate read it with, and holding at least one feature. Taken only as "an object", an
- * empty object or one from a later format read as not compiled yet, and one whose features were
- * missing or a string showed its report's verdict, ready for press.
+ * Whether a stored target file is one the runtime can read at all, by the same parser the runtime
+ * and the publish gate read it with. Taken only as "an object", an empty object or one from a
+ * later format read as not compiled yet, and one whose features were missing or a string showed its
+ * report's verdict, ready for press. A target that reads and holds no features is not called
+ * unreadable: a compile of artwork with nothing to track writes one, with its own refusal, which is
+ * the sentence the operator needs, and one carrying any other report is not this target's
+ * (`describesTarget`).
  */
 function readableTarget(value: unknown): boolean {
   try {
-    return fromTargetFile(value).features.length > 0;
+    fromTargetFile(value);
+    return true;
   } catch {
     return false;
   }

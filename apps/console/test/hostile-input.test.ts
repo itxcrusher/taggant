@@ -242,7 +242,35 @@ describe("a target on disk with no report at all", () => {
     expect(rebuilt, "a target with no report was published as it stood").toEqual(["front"]);
     const shipped = JSON.parse(await read(join(out, "targets", "front.json"), "utf8"));
     expect(shipped.report?.pass).toBe(true);
-  }, 120_000);
+
+    // And a report written for another target, which the gate refuses in terms of that target: it
+    // went to the gate as it stood, and the operator was told the other artwork's width. Rebuilt
+    // from this target's own artwork, it publishes on its own report.
+    const own = JSON.parse(await read(path, "utf8"));
+    const [first, ...rest] = own.features as Array<{ descriptor: number[] }>;
+    await write(
+      path,
+      JSON.stringify({
+        ...own,
+        features: [
+          {
+            ...first,
+            descriptor: [((first?.descriptor[0] ?? 0) ^ 1) >>> 0, ...(first?.descriptor.slice(1) ?? [])],
+          },
+          ...rest,
+        ],
+      }),
+    );
+    const again: string[] = [];
+    const elsewhere = join(root, "another-out");
+    await publish(workspace, await workspace.read(created.id), elsewhere, {
+      runtimeDir,
+      onRebuild: (id: string) => again.push(id),
+    });
+    expect(again, "another target's report went to the gate as it stood").toEqual(["front"]);
+    const republished = JSON.parse(await read(join(elsewhere, "targets", "front.json"), "utf8"));
+    expect(republished.report?.pass).toBe(true);
+  }, 240_000);
 });
 
 describe("registering a code", () => {

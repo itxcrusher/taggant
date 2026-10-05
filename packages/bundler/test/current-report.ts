@@ -49,6 +49,26 @@ export async function reportDifferingIn(
   return JSON.parse(JSON.stringify(report));
 }
 
+/**
+ * A refusal as the compiler writes it for artwork the recogniser finds at no size, written for
+ * the target given, so that one target's refusal can be put on another.
+ */
+export async function refusalFor(target: {
+  width: number;
+  height: number;
+  features: unknown;
+}): Promise<Report> {
+  const report = await buildReport({
+    image: { width: 640, height: 452 },
+    levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: CORNERS })),
+    features: unrepeated(CORNERS),
+    target,
+    scanDistanceMm: 190,
+    recognises: () => [{ found: false, inliers: 0, misplaced: false }],
+  });
+  return JSON.parse(JSON.stringify(report));
+}
+
 /** The corners the report above is built from, every 40 px over a 640 by 452 artwork. */
 const CORNERS: { x: number; y: number; strength: number }[] = [];
 for (let y = 40; y < 452; y += 40) for (let x = 40; x < 640; x += 40) CORNERS.push({ x, y, strength: 1000 });

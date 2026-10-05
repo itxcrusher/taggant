@@ -280,8 +280,11 @@ export const SCAN_DISTANCE_MM = { nearest: 50, furthest: 10_000 } as const;
 /**
  * Does the report a compiled target carries describe that target, and not another?
  *
- * Its analysed width is the target's width, the size it confirms is one the target holds features
- * at, its count of features is the target's at full size, and its fingerprint is the target's own.
+ * Its analysed width is the target's width, the size a passing report confirms is one the target
+ * holds features at, its count of features is the target's at full size, and its fingerprint is
+ * the target's own. A refusal confirmed no size, and keeps the full size there whether or not the
+ * target holds features at it: soft artwork, with none at full size, is refused for too few, and
+ * its own report was called another target's.
  * The first three are shared by any two landscape artworks with the same count of features, and
  * the report of one published on the target of the other; the fingerprint is not. This ties a
  * report to its target and does not sign it: a report whose every figure was edited to match is
@@ -296,7 +299,7 @@ export function describesTarget(compiled: unknown): boolean {
   const atFullSize = features.filter((feature) => scaleOf(feature) === 1).length;
   return (
     report.analysisWidth === compiled.width &&
-    built.has(report.smallestUsableScale) &&
+    (report.pass !== true || built.has(report.smallestUsableScale)) &&
     report.featureCount === atFullSize &&
     report.targetDigest ===
       targetDigest({ width: compiled.width, height: compiled.height, features: compiled.features })

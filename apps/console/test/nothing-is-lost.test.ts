@@ -666,8 +666,8 @@ describe("an internal failure said as a sentence", () => {
     await workspace.writeTarget("kept", "front", [1, 2, 3]);
     let body = await (await fetch(`http://127.0.0.1:${port}/e/kept`)).text();
     expect(body, "an array").toContain("cannot be read as a target");
-    // And so is an object the runtime cannot read, or one that holds nothing to match, whatever
-    // report it carries: these read as not compiled yet, or showed a passing report's verdict.
+    // And so is an object the runtime cannot read, whatever report it carries: these read as not
+    // compiled yet, or showed a passing report's verdict.
     const shapes: Array<[string, unknown]> = [
       ["an empty object", {}],
       ["an object of something else", { hello: "world" }],
@@ -676,7 +676,6 @@ describe("an internal failure said as a sentence", () => {
         "features that are a word",
         { formatVersion: 2, id: "front", width: 640, height: 452, features: "x", report: good },
       ],
-      ["no features", { formatVersion: 2, id: "front", width: 640, height: 452, features: [], report: good }],
     ];
     for (const [name, shape] of shapes) {
       await workspace.writeTarget("kept", "front", shape);
@@ -686,6 +685,19 @@ describe("an internal failure said as a sentence", () => {
       expect(text, name).toContain("cannot be read as a target");
       expect(text, name).not.toContain("ready for press");
     }
+    // One the runtime reads that holds no features is not unreadable: carrying a passing report
+    // written for other features, it is said to carry another target's, its verdict not shown.
+    await workspace.writeTarget("kept", "front", {
+      formatVersion: 2,
+      id: "front",
+      width: 640,
+      height: 452,
+      features: [],
+      report: good,
+    });
+    body = await (await fetch(`http://127.0.0.1:${port}/e/kept`)).text();
+    expect(body, "no features").toContain("carries the print readiness report of another target");
+    expect(body, "no features").not.toContain("ready for press");
     const folder = join(workspace.root, "kept", "targets");
     for (const name of await readdir(folder)) await writeFile(join(folder, name), "{ this is not json");
     body = await (await fetch(`http://127.0.0.1:${port}/e/kept`)).text();
@@ -721,6 +733,28 @@ describe("an internal failure said as a sentence", () => {
     const swapped = await page();
     expect(swapped).toContain("carries the print readiness report of another target");
     expect(swapped).not.toContain("Print it at least");
+  }, 240_000);
+
+  it("shows soft artwork its own refusal, not another target's report or an unreadable file", async () => {
+    // The example postcard blurred, the second time until nothing in it can be tracked at all:
+    // each compile is refused for too few features, holds none at full size, or none anywhere,
+    // and the card called the first another target's report and the second an unreadable file,
+    // where the reason is the artwork and compiling again changed nothing.
+    const { post, port } = await drive();
+    const postcard = fileURLToPath(new URL("../../../examples/postcard/artwork.png", import.meta.url));
+    await post("/experiences", new URLSearchParams({ id: "soft", title: "Soft" }));
+    for (const sigma of [8, 12]) {
+      const name = `blur${sigma}`;
+      await post(
+        "/e/soft/targets",
+        target(name, `${name}.png`, await sharp(postcard).blur(sigma).png().toBuffer()),
+      );
+      await post(`/e/soft/targets/${name}/compile`, new URLSearchParams({ scanDistanceMm: "190" }));
+    }
+    const page = await (await fetch(`http://127.0.0.1:${port}/e/soft`)).text();
+    expect(page).toContain("too few features to track reliably");
+    expect(page).not.toContain("report of another target");
+    expect(page).not.toContain("cannot be read as a target");
   }, 240_000);
 
   it("keeps the compile asked for last, not the one that finished last", async () => {

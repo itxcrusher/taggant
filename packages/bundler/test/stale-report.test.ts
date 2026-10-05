@@ -6,7 +6,13 @@ import { isCurrentReport, targetDigest } from "@taggant/compiler";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import { bundle } from "../src/bundle.js";
-import { currentFeatures, currentReport, reportAskingFor, reportDifferingIn } from "./current-report.js";
+import {
+  currentFeatures,
+  currentReport,
+  refusalFor,
+  reportAskingFor,
+  reportDifferingIn,
+} from "./current-report.js";
 
 const RUNTIME_DIST = join(dirname(fileURLToPath(import.meta.url)), "../../runtime/dist");
 
@@ -303,6 +309,52 @@ describe("a compiled target from an older build", () => {
     );
     const own = { ...features, report };
     await expect(bundle({ manifest, targets: { front: own }, ...(await scratch()) })).resolves.toBeDefined();
+  });
+
+  it("asks whether a report is the target's own before reading its verdict or its width", async () => {
+    // Asked after them, a refused design carrying another's passing report was told that design's
+    // width, declared too narrow for it, and a ready design carrying another's refusal was told it
+    // had not passed: each a message about another artwork, which no compile of this one changes.
+    const [first, ...rest] = features.features as Array<{ descriptor: number[] }>;
+    const twin = {
+      ...features,
+      features: [
+        {
+          ...first,
+          descriptor: [((first?.descriptor[0] ?? 0) ^ 1) >>> 0, ...(first?.descriptor.slice(1) ?? [])],
+        },
+        ...rest,
+      ],
+    };
+    const narrow = {
+      ...manifest,
+      targets: manifest.targets.map((each) => ({ ...each, physicalWidthMm: 10 })),
+    };
+    const refusedFor = (error: unknown) => (error instanceof Error ? error.message : String(error));
+    const passing = await currentReport();
+    const tooNarrow = refusedFor(
+      await bundle({
+        manifest: narrow,
+        targets: { front: { ...twin, report: passing } },
+        ...(await scratch()),
+      }).catch((error: unknown) => error),
+    );
+    expect(tooNarrow).toMatch(/does not describe its own target/);
+    expect(tooNarrow).not.toMatch(/needs at least/);
+    const refusal = await refusalFor(twin);
+    expect(isCurrentReport(refusal)).toBe(true);
+    expect(refusal.pass).toBe(false);
+    const notPassed = refusedFor(
+      await bundle({
+        manifest,
+        targets: { front: { ...features, report: refusal } },
+        ...(await scratch()),
+      }).catch((error: unknown) => error),
+    );
+    expect(notPassed).toMatch(/does not describe its own target/);
+    expect(notPassed).not.toMatch(/did not pass/);
+    // And a refusal confirmed no size, so none is named.
+    expect(notPassed).not.toMatch(/confirmed at/);
   });
 
   it("refuses a report whose own figures do not describe the target, though it names the target", async () => {
