@@ -102,6 +102,54 @@ describe("formatReportLines", () => {
     // declare stops it here too, and "the artwork did not get that far" blamed the artwork.
     expect(text).toContain("not asked, for the reason below");
   });
+
+  it("describes the size the recogniser confirmed when looks pointed at a copy refuse it", () => {
+    // Those looks come after a size is confirmed, and the line read "at the size that came
+    // closest ... where most are needed" beside five widths of five agreeing.
+    const lines = formatReportLines("pair.png", {
+      formatVersion: 2,
+      id: "pair",
+      width: 640,
+      height: 278,
+      features: [],
+      report: {
+        score: 59,
+        pass: false,
+        featureCount: 198,
+        areasWithFeatures: 16,
+        areas: 16,
+        repetition: {
+          places: 55,
+          of: 454,
+          move: { across: -0.72, down: 0, turnDegrees: 0, scale: 1.67 },
+          ends: { from: { x: 512, y: 136 }, to: { x: 147, y: 139 } },
+          beyond: null,
+          aimed: { sizes: 1, views: 16, misplaced: 4 },
+        },
+        analysisWidth: 640,
+        smallestUsableScale: 0.5,
+        minimumWidthMm: null,
+        scanDistanceMm: 190,
+        recognition: {
+          pixelsAcross: 320,
+          widths: 5,
+          widthsAgreed: 5,
+          views: 20,
+          misplaced: 0,
+          found: true,
+          inliers: 41,
+          needed: 20,
+        },
+        reasons: ["pointed at the part of the artwork 80 per cent across and 49 per cent down"],
+      },
+    });
+    const text = lines.join("\n");
+    expect(text).not.toContain("came closest");
+    expect(text).not.toContain("where most are needed");
+    expect(text).toContain(
+      "at the smallest size it was confirmed at, every turn found it with 20 or more points agreeing at 5 of 5 widths, and with at least 41 at three of them, and no look centred on it put it in the wrong place",
+    );
+  });
 });
 
 describe("main", () => {

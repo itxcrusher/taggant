@@ -113,4 +113,44 @@ describe("what a stored report is said to be", () => {
     expect(refused).not.toContain("The artwork has to change");
     expect(refused).toContain("Not printable until it passes");
   });
+
+  it("describes the size the recogniser confirmed when looks pointed at a copy refuse it", () => {
+    // Those looks come after a size is confirmed, and the row called five widths of five agreeing
+    // "the size that came closest".
+    const refused = verdict({
+      score: 59,
+      pass: false,
+      featureCount: 198,
+      areasWithFeatures: 16,
+      areas: 16,
+      repetition: {
+        places: 55,
+        of: 454,
+        move: { across: -0.72, down: 0, turnDegrees: 0, scale: 1.67 },
+        ends: { from: { x: 512, y: 136 }, to: { x: 147, y: 139 } },
+        beyond: null,
+        aimed: { sizes: 1, views: 16, misplaced: 4 },
+      },
+      analysisWidth: 640,
+      smallestUsableScale: 0.5,
+      minimumWidthMm: null,
+      scanDistanceMm: 190,
+      recognition: {
+        pixelsAcross: 320,
+        widths: 5,
+        widthsAgreed: 5,
+        views: 20,
+        misplaced: 0,
+        found: true,
+        inliers: 41,
+        needed: 20,
+      },
+      reasons: ["pointed at the part of the artwork 80 per cent across and 49 per cent down"],
+    });
+    expect(refused).not.toContain("came closest");
+    expect(refused).toContain(
+      "every turn found it with 20 or more points agreeing at 5 of 5 widths at the smallest size it was confirmed at, no look centred on it in the wrong place",
+    );
+    expect(refused).toContain("none, for the reasons above");
+  });
 });

@@ -227,6 +227,11 @@ function describeRecognition(report: Report): string {
     // as though it were the worst turn at the middle width, which it is not.
     return `at that size, every turn found it with ${seen.needed} or more points agreeing at ${seen.widthsAgreed} of ${seen.widths} widths, and with at least ${seen.inliers} at three of them, and no look put it in the wrong place`;
   }
+  // A size was confirmed and the looks pointed at a copy, which come after, refused it. This read
+  // "at the size that came closest ... where most are needed" beside five widths of five agreeing.
+  if (seen.found) {
+    return `at the smallest size it was confirmed at, every turn found it with ${seen.needed} or more points agreeing at ${seen.widthsAgreed} of ${seen.widths} widths, and with at least ${seen.inliers} at three of them, and no look centred on it put it in the wrong place`;
+  }
   return `at the size that came closest, every turn found it with ${seen.needed} or more points agreeing at ${seen.widthsAgreed} of ${seen.widths} widths, where most are needed${seen.misplaced > 0 ? `, and ${seen.misplaced} looks put it in the wrong place` : ""}`;
 }
 

@@ -126,6 +126,22 @@ ${
 </form>`;
 }
 
+/**
+ * What the recogniser made of the artwork, at the size the report gives. A refused report names
+ * the size that came closest, unless a size was confirmed and the looks pointed at a copy, which
+ * come after, refused it: the row called five widths of five agreeing the size that came closest.
+ */
+function describeRecognition(report: Report): string {
+  const seen = report.recognition;
+  if (seen === null) return "not asked, for the reasons above";
+  const agreed = `every turn found it with ${seen.needed} or more points agreeing at ${seen.widthsAgreed} of ${seen.widths} widths`;
+  if (report.pass)
+    return `${agreed}, ${seen.misplaced === 0 ? "none in the wrong place" : `${seen.misplaced} looks in the wrong place`}`;
+  if (seen.found)
+    return `${agreed} at the smallest size it was confirmed at, no look centred on it in the wrong place`;
+  return `${agreed} at the size that came closest, ${seen.misplaced === 0 ? "none in the wrong place" : `${seen.misplaced} looks in the wrong place`} at that size`;
+}
+
 function reportRecord(report: Report): string {
   const rows: [string, string][] = [
     ["features", String(report.featureCount)],
@@ -145,12 +161,7 @@ function reportRecord(report: Report): string {
     // What decided the verdict, in place of the figure that used to sit here: it fell as a
     // design repeated, so it was a measurement of the wrong thing beside the sentence it did
     // not decide.
-    [
-      "recognised",
-      report.recognition === null
-        ? "not asked, for the reasons above"
-        : `every turn found it with ${report.recognition.needed} or more points agreeing at ${report.recognition.widthsAgreed} of ${report.recognition.widths} widths${report.pass ? "" : " at the size that came closest"}, ${report.recognition.misplaced === 0 ? "none in the wrong place" : `${report.recognition.misplaced} looks in the wrong place`}${report.pass ? "" : " at that size"}`,
-    ],
+    ["recognised", describeRecognition(report)],
     ["score", `${report.score} of 100, passing at 60`],
   ];
   return `<details class="record">
