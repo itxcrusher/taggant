@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseTable } from "../src/links.js";
-import { watchTable } from "../src/table-source.js";
+import { stampFor, watchTable } from "../src/table-source.js";
 
 /** Every folder a test makes, removed after it, or each run leaves one per test behind. */
 const made: string[] = [];
@@ -162,6 +162,28 @@ describe("noticing that the table changed", () => {
     });
     await rm(path);
     expect(await until(() => changes >= 1)).toBe(true);
+    source.stop();
+  });
+
+  it("takes a save between the caller's read and the watch as a change", async () => {
+    // A caller stamps the file, reads it, then starts watching. A save landing after the read
+    // and before the watch's own first stamp was the state the watch started from: the older
+    // table was served, the stamp matched the newer file, and nothing would ever report a
+    // change. The stamp taken before the read is passed in, so that save is one.
+    const path = await scratch();
+    await writeFile(path, "1");
+    const since = await stampFor(path);
+    await writeFile(path, "22");
+    let changes = 0;
+    const source = await watchTable(path, {
+      since,
+      pollMs: 60_000,
+      onChange: () => {
+        changes++;
+      },
+    });
+    await source.check();
+    expect(await until(() => changes >= 1, 2000), "the save before the watch was never seen").toBe(true);
     source.stop();
   });
 

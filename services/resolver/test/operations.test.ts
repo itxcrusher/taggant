@@ -26,6 +26,12 @@ const TABLE: LinkTable = parseTable({
         default: true,
       },
       { href: "https://example.com/produit", linkType: "gs1:pip", title: "Produit", hreflang: ["fr"] },
+      {
+        href: "https://example.com/recettes",
+        linkType: "gs1:recipeInfo",
+        title: "Recettes",
+        hreflang: ["fr"],
+      },
     ],
   },
 });
@@ -103,14 +109,17 @@ describe("what counts as a scan", () => {
   });
 
   it("does not record a language that decided nothing", async () => {
-    // Only one link of this type exists, so the header cannot have chosen between any.
-    // Recording it anyway reads, in a report, as the reason the redirect went where it did.
+    // Only one link of this type exists, so the header cannot have chosen between any, even
+    // though that link is in the language asked for. Recording it anyway reads, in a report,
+    // as the reason the redirect went where it did.
     await get("/01/09520123456788?linkType=gs1:recipeInfo", { headers: { "accept-language": "fr" } });
     await get("/01/09520123456702", { headers: { "accept-language": "fr" } });
     const events = scans();
     // Without this the test passes when scan recording has stopped entirely, which is the
     // regression it would most want to report.
     expect(events.length, "no scan was recorded, so nothing was inspected").toBe(2);
+    // And a redirect, because a scan that went nowhere has nothing a language could have chosen.
+    expect(events[0]).toMatchObject({ outcome: "redirect", target: "https://example.com/recettes" });
     for (const event of events) expect("language" in event).toBe(false);
   });
 });
@@ -158,6 +167,57 @@ describe("what a scan event may not carry", () => {
       const scan = events.find((event) => event.type === "scan");
       const language = scan?.type === "scan" ? scan.language : undefined;
       expect(language, `${header.slice(0, 40)} recorded ${String(language)}`).toBe(recorded);
+    }
+  });
+
+  it("records the tag the request ranked first, never one it refused, whatever form the type is in", async () => {
+    // A link can be for more than one language, and then which of its tags is recorded turns
+    // on how the header is read: in the order it was written, with `q=0` kept, `en;q=0, fr`
+    // recorded `en` for a scan whose header said English was not acceptable. And the links of a
+    // type are the same type however each is written, `gs1:pip` or its full URI.
+    const table = parseTable({
+      version: 1,
+      entries: {
+        "/01/09520123456788": [
+          {
+            href: "https://example.com/both",
+            linkType: "gs1:pip",
+            title: "Product",
+            hreflang: ["en", "fr"],
+            default: true,
+          },
+          {
+            href: "https://example.com/deutsch",
+            linkType: "https://gs1.org/voc/pip",
+            title: "Produkt",
+            hreflang: ["de"],
+          },
+        ],
+      },
+    });
+    const recorded: Event[] = [];
+    const bilingual = createResolver({ table, events: (event) => recorded.push(event) });
+    await new Promise<void>((resolve) => bilingual.listen(0, "127.0.0.1", resolve));
+    const at = `http://127.0.0.1:${(bilingual.address() as AddressInfo).port}`;
+    try {
+      const cases: [string, string, string][] = [
+        // header, where it goes, what is recorded
+        ["en;q=0, fr", "https://example.com/both", "fr"],
+        ["en;q=0.5, fr", "https://example.com/both", "fr"],
+        ["de", "https://example.com/deutsch", "de"],
+      ];
+      for (const [header, target, language] of cases) {
+        recorded.length = 0;
+        const response = await fetch(`${at}/01/09520123456788`, {
+          redirect: "manual",
+          headers: { "accept-language": header },
+        });
+        expect(response.headers.get("location"), header).toBe(target);
+        const scan = recorded.find((event) => event.type === "scan");
+        expect(scan?.type === "scan" ? scan.language : undefined, header).toBe(language);
+      }
+    } finally {
+      await new Promise<void>((resolve) => bilingual.close(() => resolve()));
     }
   });
 });
@@ -340,6 +400,12 @@ describe("what a stranger can put in a header", () => {
     expect(header).not.toContain("%22%3E%3Cscript%3E");
     expect(header).not.toContain("attacker");
     expect(header).toContain("/01/09520123456788");
+
+    // And in the linkset, whose every anchor is a subject too.
+    const linkset = (await (await get("/attacker/stem/01/09520123456788?linkType=linkset")).json()) as {
+      linkset: Array<{ anchor: string }>;
+    };
+    expect(linkset.linkset.map((entry) => entry.anchor)).toEqual(["http://localhost/01/09520123456788"]);
   });
 
   it("answers a path carrying a line break rather than failing on it", async () => {

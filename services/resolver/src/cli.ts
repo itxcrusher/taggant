@@ -48,7 +48,14 @@ export function parseArguments(args: string[]): { arguments: Arguments } | { err
   return { arguments: origin === undefined ? { table, port } : { table, port, origin } };
 }
 
-export async function main(args: string[]): Promise<number> {
+/**
+ * Run the command line, and say how it ended.
+ *
+ * `started` is handed a way to stop the resolver once it is listening. The command line has no
+ * use for it, since a resolver runs until its process ends; a test does, to start one, read
+ * what it writes, and put it away.
+ */
+export async function main(args: string[], started?: (stop: () => Promise<void>) => void): Promise<number> {
   if (args.length === 0 || args[0] === "--help") {
     stdout.write(USAGE);
     return args.length === 0 ? EXIT.usage : EXIT.ok;
@@ -136,7 +143,7 @@ export async function main(args: string[]): Promise<number> {
   // Not a watch on the file. A watch dies when the file is replaced by a rename, which is
   // how anything that writes safely writes, and a bind mount often delivers no events at
   // all. Both were measured against this stack; the reasoning is in `table-source.ts`.
-  await watchTable(path, { onChange: reload, since });
+  const source = await watchTable(path, { onChange: reload, since });
 
   const server = createResolver({
     table: () => current,
@@ -157,6 +164,8 @@ export async function main(args: string[]): Promise<number> {
     server.listen(port, () => settle(null));
   });
   if (listening !== null) {
+    // Nothing left running: the watch would go on reading a table that nothing serves.
+    source.stop();
     stderr.write(`${listening}\n`);
     return EXIT.cannotListen;
   }
@@ -168,6 +177,10 @@ export async function main(args: string[]): Promise<number> {
     `\n  resolving ${count} links across ${Object.keys(table.entries).length} identifiers on port ${port}\n`,
   );
   stderr.write("  description at /.well-known/gs1resolver\n\n");
+  started?.(async () => {
+    source.stop();
+    await new Promise<void>((done) => server.close(() => done()));
+  });
   return EXIT.ok;
 }
 
