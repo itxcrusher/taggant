@@ -177,11 +177,17 @@ export async function main(args: string[]): Promise<number> {
  */
 function invokedDirectly(): boolean {
   if (argv[1] === undefined) return false;
-  try {
-    return realpathSync.native(argv[1]) === realpathSync.native(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
+  const self = realpathSync.native(fileURLToPath(import.meta.url));
+  // Node runs a name given without its extension as the `.js` file, so both spellings are tried:
+  // named `cli`, the program ran, did nothing and exited 0.
+  for (const named of [argv[1], `${argv[1]}.js`]) {
+    try {
+      if (realpathSync.native(named) === self) return true;
+    } catch {
+      // Nothing by that name.
+    }
   }
+  return false;
 }
 if (invokedDirectly()) {
   main(argv.slice(2)).then((code) => {

@@ -13,8 +13,9 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
  * The compiler turns a print width into a count of pixels across the mark by assuming the
  * frame is a fixed width; the runtime reduces every frame to that width before recognising.
  * If they disagree, every printed width is wrong by the ratio, which is the exact shape of
- * the defect this whole round was about. They live in packages that do not depend on each
- * other and were kept together by a comment saying to keep them together.
+ * the defect that once made every printed width about four times too small. They live in
+ * packages that do not depend on each other and were kept together by a comment saying to
+ * keep them together.
  *
  * The bundler is the natural place for the check: it is where a compiled target and the
  * runtime that will read it are put in the same folder.

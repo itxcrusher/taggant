@@ -57,7 +57,13 @@ describe("a compiled target from an older build", () => {
   };
 
   const FEATURE = { x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] };
-  const features = { formatVersion: 2, id: "front", width: 640, height: 452, features: [FEATURE] };
+  const features = {
+    formatVersion: 2,
+    id: "front",
+    width: 640,
+    height: 452,
+    features: [FEATURE, { ...FEATURE, scale: 0.5 }],
+  };
 
   it("is refused rather than published on a width that cannot be trusted", async () => {
     // The shape the previous build wrote: a report, and no distance anywhere in it.
@@ -239,5 +245,23 @@ describe("a compiled target from an older build", () => {
     await expect(bundle({ manifest, targets: { front: features }, ...(await scratch()) })).rejects.toThrow(
       /carries no print readiness report/,
     );
+  });
+
+  it("refuses a report that does not describe its own target", async () => {
+    // Edited together, an analysed width and the figures worked out from it made a report the
+    // stored check stood behind, and a piece that needs 147 mm published declared 10 mm wide.
+    // The target says what it was built from: its analysed width, and the sizes its features
+    // were found at, one of which is the size the report confirms.
+    const report = await currentReport();
+    const otherWidth = { ...features, width: 100, report };
+    await expect(bundle({ manifest, targets: { front: otherWidth }, ...(await scratch()) })).rejects.toThrow(
+      /does not describe its own target/,
+    );
+    const otherSizes = { ...features, features: [features.features[0]], report };
+    await expect(bundle({ manifest, targets: { front: otherSizes }, ...(await scratch()) })).rejects.toThrow(
+      /does not describe its own target/,
+    );
+    const own = { ...features, report };
+    await expect(bundle({ manifest, targets: { front: own }, ...(await scratch()) })).resolves.toBeDefined();
   });
 });

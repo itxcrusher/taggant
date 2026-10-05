@@ -41,7 +41,10 @@ describe("a published bundle", () => {
     id: "front",
     width: 640,
     height: 452,
-    features: [{ x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] }],
+    features: [
+      { x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] },
+      { x: 50, y: 50, strength: 1, angle: 0, scale: 0.5, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] },
+    ],
     report: REPORT,
   };
 
@@ -124,7 +127,7 @@ describe("a published bundle", () => {
     `<svg xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg" viewBox="0 0 10 10" ${attrs}>${inner}</svg>`;
 
   /**
-   * Every payload the two reviews produced. The label says which control it beat and how.
+   * Every payload found against the earlier controls. The label says which control it beat and how.
    * None may ship as a document; each either ships as a PNG or is refused by name.
    */
   const PAYLOADS: Array<[string, string, Buffer | string]> = [
@@ -277,10 +280,10 @@ describe("a published bundle", () => {
     // A refusal counts only when it is about the file. When the gate refused the fixture's
     // report, every payload here read as refused and this passed, testing nothing at all; so the
     // ordinary exports must ship, and no refusal may be the report's.
+    // A refusal about the file names it; one that does not was about the report, the declared
+    // width or the manifest, and every one of those empties this sweep while it passes.
     for (const [name, reason] of refusals) {
-      expect(reason, `${name} was refused for something other than itself`).not.toContain(
-        "print readiness report",
-      );
+      expect(reason, `${name} was refused for something other than itself: ${reason}`).toContain(name);
     }
     for (const name of ["inkscape.svg", "affinity.svg"]) {
       const shipped = outcomes.some((line) => line.startsWith(`rendered  ${name} `));

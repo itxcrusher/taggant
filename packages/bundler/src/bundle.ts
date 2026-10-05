@@ -390,6 +390,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       );
     }
     const compiled = options.targets[target.id] as {
+      width?: unknown;
       features?: unknown[];
       report?: unknown;
     };
@@ -411,6 +412,21 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       );
     }
     checkReadiness(target, compiled.report);
+    // And the report has to be this target's. Edited together, an analysed width of 1 px and
+    // the figures worked out from it made a report the stored check stood behind, and a piece
+    // that needs 147 mm published declared 10 mm wide; the same through the smallest size. What
+    // the target itself was built from says otherwise.
+    const fields = compiled.report as Record<string, unknown>;
+    const built = new Set(
+      (Array.isArray(compiled.features) ? compiled.features : []).map(
+        (feature) => (feature as { scale?: unknown } | null)?.scale,
+      ),
+    );
+    if (fields.analysisWidth !== compiled.width || !built.has(fields.smallestUsableScale)) {
+      throw new Error(
+        `${target.id} carries a print readiness report that does not describe its own target: the report says the artwork was analysed ${String(fields.analysisWidth)} px wide and confirmed at ${String(fields.smallestUsableScale)} of that, and the target was built ${String(compiled.width)} px wide at other sizes. Compile it again before publishing.`,
+      );
+    }
   }
 
   const assets: CopiedAsset[] = [];

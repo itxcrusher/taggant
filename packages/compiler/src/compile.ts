@@ -47,7 +47,7 @@ export async function compileTarget(artwork: Buffer, options: CompileOptions): P
   // from what was found instead, a size that found nothing was absent rather than empty, and
   // the report walks sizes from the largest down and stops at the first that does not hold
   // up: an empty size stops it, an absent one is stepped over to a smaller healthy one, and
-  // the width came out more than a third too small (308 mm against 487 in the review).
+  // the width came out more than a third too small (308 mm where 487 was right).
   const scales = [...DEFAULT_SCALES];
   const report = await buildReport({
     image: { width: image.width, height: image.height },

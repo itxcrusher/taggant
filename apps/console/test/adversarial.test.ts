@@ -84,7 +84,7 @@ const upload = (name: string, bytes: string) => {
   return form;
 };
 
-describe("H3: two uploads whose names reduce to one", () => {
+describe("two uploads whose names reduce to one", () => {
   it("keeps both files rather than letting the second delete the first", async () => {
     await post("/experiences", new URLSearchParams({ id: "collide", title: "Collide" }));
     for (const [targetId, filename, bytes] of [
@@ -245,7 +245,7 @@ describe("a target on disk with no report at all", () => {
   }, 120_000);
 });
 
-describe("H5: registering a code", () => {
+describe("registering a code", () => {
   it("leaves every other link on that code alone", async () => {
     // The shape this repository ships as its worked example: an English page, a French
     // page, and a certification link, all on one GTIN.
@@ -334,7 +334,7 @@ describe("H5: registering a code", () => {
   });
 });
 
-describe("H6: the Host header", () => {
+describe("the Host header", () => {
   it("refuses a form posted to a name this console does not answer to", async () => {
     // A raw socket, because `fetch` will not send a Host header somebody else chose, and
     // the whole point is what happens when a browser is held on a name that resolves here.
@@ -389,7 +389,7 @@ describe("H6: the Host header", () => {
   });
 });
 
-describe("M1: links inside the workspace", () => {
+describe("links inside the workspace", () => {
   it("will not write a manifest through a link that leaves the workspace", async () => {
     const outside = await mkdtemp(join(tmpdir(), "console-outside-"));
     made.push(outside);
@@ -407,7 +407,7 @@ describe("M1: links inside the workspace", () => {
   });
 });
 
-describe("M2: one unreadable folder", () => {
+describe("one unreadable folder", () => {
   it("does not take the whole index down with it", async () => {
     await post("/experiences", new URLSearchParams({ id: "healthy", title: "Healthy" }));
     const { mkdir } = await import("node:fs/promises");
@@ -428,7 +428,7 @@ describe("M2: one unreadable folder", () => {
   });
 });
 
-describe("M3: addresses that will not decode", () => {
+describe("addresses that will not decode", () => {
   it("answers a lone percent with a sentence rather than a 500", async () => {
     for (const path of ["/e/%/targets", "/e/%zz/publish", "/e/loopback/targets/%E0%A4%A/compile"]) {
       const response = await post(path, new URLSearchParams());
@@ -437,7 +437,7 @@ describe("M3: addresses that will not decode", () => {
   });
 });
 
-describe("M4 and M7: what a body may weigh", () => {
+describe("what a body may weigh", () => {
   it("refuses an oversized form before reading it, so the answer arrives", async () => {
     const response = await fetch(`${origin}/experiences`, {
       method: "POST",
@@ -454,7 +454,7 @@ describe("M4 and M7: what a body may weigh", () => {
   });
 });
 
-describe("L1: the score", () => {
+describe("the score", () => {
   it("is escaped like everything else that reaches a page", async () => {
     const { verdict } = await import("../src/views.js");
     const rendered = verdict({

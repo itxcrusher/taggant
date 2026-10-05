@@ -31,12 +31,14 @@ const MANIFEST = {
 const FEATURE = { x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] };
 // And a report as the compiler writes one. A target with none is refused, because removing that
 // one key from a target file was the way past every readiness check the gate makes.
+// Built as the compiler builds one: the analysed width the report names, and features at the
+// size it confirms, which the gate now checks the report against.
 const TARGET = {
   formatVersion: 2,
   id: "front",
-  width: 100,
-  height: 100,
-  features: [FEATURE],
+  width: 640,
+  height: 452,
+  features: [FEATURE, { ...FEATURE, scale: 0.5 }],
   report: await currentReport(),
 };
 
@@ -330,7 +332,7 @@ describe("an SVG that carries script", () => {
   // domain without opening it. The runtime loads content through an img element and would
   // not run any of this; navigating straight to the asset would. So the file is not what
   // ships. It is rendered, and pixels of a drawing carry nothing that was written round it.
-  // The payloads every review produced go through `nothing-reaches-out.test.ts`; these are
+  // Every hostile payload found so far goes through `nothing-reaches-out.test.ts`; these are
   // the four shapes the first version of this control was written against.
   const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   const active: [string, string][] = [

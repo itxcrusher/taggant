@@ -108,8 +108,9 @@ describe("buildReport", () => {
 });
 
 describe("buildReport input validation", () => {
-  it("refuses a scan distance that is not a positive finite number", async () => {
-    for (const bad of [0, -400, Number.NaN, Number.POSITIVE_INFINITY]) {
+  it("refuses a scan distance outside the range a stored report is held to", async () => {
+    // A positive distance short of the range wrote a passing report the bundler then refused.
+    for (const bad of [0, -400, Number.NaN, Number.POSITIVE_INFINITY, 20, 49.5, 10_001]) {
       await expect(
         buildReport({
           image: { width: 400, height: 400 },

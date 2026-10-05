@@ -62,7 +62,7 @@ describe("the third-party licence inventory", () => {
   }, 120_000);
 
   it("names nothing that is not installed, so a dependency taken out takes its row with it", async () => {
-    // The other direction, and the file claimed it for several rounds without it: the walk
+    // The other direction, which the file went without for a time: the walk
     // above requires every installed package to have a row, which catches one added or
     // relicensed and cannot catch one removed. A row for a package nothing depends on any
     // more is a document describing a tree that no longer exists, which is the failure this

@@ -470,7 +470,7 @@ export function createConsole(options: ConsoleOptions): Server {
         // and a string read as a width too small to trust. No report at all is not compiled by
         // anything this build stands behind, and publishing compiles it first, as the page says.
         if (!isObject(compiled)) {
-          view.staleReport = "broken";
+          view.staleReport = "unreadable";
         } else if (report !== undefined && !isCurrentReport(report)) {
           view.staleReport = !isObject(report) ? "broken" : carriesItsDistance(report) ? "verdict" : "width";
         } else if (report !== undefined) {

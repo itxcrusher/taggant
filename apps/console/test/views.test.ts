@@ -50,7 +50,7 @@ describe("escaping", () => {
 });
 
 describe("what a stored report is said to be", () => {
-  const page = (staleReport: "broken" | "width" | "verdict") =>
+  const page = (staleReport: "unreadable" | "broken" | "width" | "verdict") =>
     experiencePage({
       id: "botanica-500",
       manifest: MANIFEST as never,
@@ -73,6 +73,9 @@ describe("what a stored report is said to be", () => {
     expect(page("broken")).toContain("not one at all");
     expect(page("broken")).not.toContain("Not compiled yet");
     expect(page("broken")).not.toContain("too small to trust");
+    // A target file that is not a target at all is said to be that, not a broken report.
+    expect(page("unreadable")).toContain("cannot be read as a target");
+    expect(page("unreadable")).not.toContain("not one at all");
   });
 
   it("offers no printable size for artwork that is not ready at any size", () => {
@@ -102,6 +105,9 @@ describe("what a stored report is said to be", () => {
       reasons: ["the recogniser did not find it"],
     });
     expect(refused).toContain("none, for the reasons above");
+    // The recognition row describes the size that came closest, and a reason can name a look in
+    // the wrong place at another size, so "none in the wrong place" says which size it means.
+    expect(refused).toContain("none in the wrong place at that size");
     expect(refused).not.toContain("50% of that");
     // Nor that the artwork must change, which is not true of a refusal for distance.
     expect(refused).not.toContain("The artwork has to change");

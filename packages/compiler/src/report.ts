@@ -466,8 +466,16 @@ const WIDTHS_SHOWN = [0.98, 0.99, 1, 1.01, 1.02] as const;
  */
 export async function buildReport(input: ReportInput): Promise<Report> {
   const { image, levels, scanDistanceMm } = input;
-  if (!Number.isFinite(scanDistanceMm) || scanDistanceMm <= 0) {
-    throw new RangeError(`scan distance must be a positive number of millimetres, got ${scanDistanceMm}`);
+  // The same range the stored check holds a report to: a positive distance short of it wrote a
+  // passing report that the bundler then refused as written by an older build.
+  if (
+    !Number.isFinite(scanDistanceMm) ||
+    scanDistanceMm < SCAN_DISTANCE_MM.nearest ||
+    scanDistanceMm > SCAN_DISTANCE_MM.furthest
+  ) {
+    throw new RangeError(
+      `scan distance must be ${SCAN_DISTANCE_MM.nearest} to ${SCAN_DISTANCE_MM.furthest} mm, got ${scanDistanceMm}`,
+    );
   }
   if (!(image.width > 0) || !(image.height > 0)) {
     throw new RangeError(`image must have a positive width and height, got ${image.width} x ${image.height}`);

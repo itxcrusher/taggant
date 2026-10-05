@@ -66,6 +66,9 @@ describe("the command line reached through a link", () => {
       const run = spawnSync(process.execPath, [join(link, "cli.js"), "--help"], { encoding: "utf8" });
       expect(`${run.stdout}${run.stderr}`, "said nothing through the link").toContain("usage:");
       expect(run.status).toBe(0);
+      // And named without its extension, which Node runs as the same file.
+      const bare = spawnSync(process.execPath, [join(link, "cli"), "--help"], { encoding: "utf8" });
+      expect(`${bare.stdout}${bare.stderr}`, "said nothing named without its extension").toContain("usage:");
     } finally {
       // The link alone, never what it points at.
       await unlink(link).catch(() => rmdir(link));

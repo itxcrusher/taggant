@@ -48,9 +48,9 @@ const PLACE_PX = 4;
  *
  * A move is not only where a feature lands. A look-alike that happens to sit where a move puts a
  * feature, while facing another way or found at another size, is a coincidence, and counted it
- * made a postcard that repeats nothing map onto itself at 32 places, through a move that turned
- * it a hundred degrees and made it half as big again. Holding each pair to the move's turn and
- * size took that to 5. Copies of a design face the same way to within a few degrees; the levels a
+ * made a postcard that repeats nothing map onto itself at 28 places, through a move that shrank
+ * the whole artwork to a point so that every pair landed. Holding each pair to the move's turn
+ * and size took that to 5. Copies of a design face the same way to within a few degrees; the levels a
  * target is described at are a quarter apart, so fifteen per cent tells one from the next.
  */
 const TURN_TOLERANCE = (20 * Math.PI) / 180;

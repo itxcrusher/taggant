@@ -149,7 +149,7 @@ function reportRecord(report: Report): string {
       "recognised",
       report.recognition === null
         ? "not asked, for the reasons above"
-        : `every turn found it with ${report.recognition.needed} or more points agreeing at ${report.recognition.widthsAgreed} of ${report.recognition.widths} widths${report.pass ? "" : " at the size that came closest"}, ${report.recognition.misplaced === 0 ? "none in the wrong place" : `${report.recognition.misplaced} looks in the wrong place`}`,
+        : `every turn found it with ${report.recognition.needed} or more points agreeing at ${report.recognition.widthsAgreed} of ${report.recognition.widths} widths${report.pass ? "" : " at the size that came closest"}, ${report.recognition.misplaced === 0 ? "none in the wrong place" : `${report.recognition.misplaced} looks in the wrong place`}${report.pass ? "" : " at that size"}`,
     ],
     ["score", `${report.score} of 100, passing at 60`],
   ];
@@ -204,12 +204,13 @@ export interface TargetView {
   scanDistanceMm?: number | undefined;
   /**
    * Set when a compiled target exists and its report is not one this build stands behind:
-   * `broken` when the report is not an object at all, or the target is not; `width` when it was
+   * `unreadable` when the target file is not a target at all; `broken` when its report is not an
+   * object; `width` when it was
    * written before the width carried its distance, and was about four times too small; `verdict`
    * for anything else, an earlier build's or a hand-edited report, whose verdict this build does
    * not stand behind. It said the width was sound there, which a corrupt width made false.
    */
-  staleReport?: "broken" | "width" | "verdict" | undefined;
+  staleReport?: "unreadable" | "broken" | "width" | "verdict" | undefined;
   /** Set when the compiled target asks for more width than the manifest says it is printed at. */
   tooSmall?: string | undefined;
 }
@@ -236,13 +237,15 @@ export function experiencePage(view: ExperienceView): string {
   ${
     target.report
       ? verdict(target.report)
-      : target.staleReport === "broken"
-        ? `<div class="notice gap-md"><p>The compiled target carries a print readiness report that is not one at all. Compile it again to see what this artwork needs.</p></div>`
-        : target.staleReport === "width"
-          ? `<div class="notice gap-md"><p>Compiled by an older build, whose minimum print width was too small to trust. Compile it again to see what this artwork needs.</p></div>`
-          : target.staleReport === "verdict"
-            ? `<div class="notice gap-md"><p>Compiled by an earlier build, or changed since, and this build does not stand behind its verdict. Compile it again to see what this artwork needs.</p></div>`
-            : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
+      : target.staleReport === "unreadable"
+        ? `<div class="notice gap-md"><p>The compiled target file cannot be read as a target. Compile it again to replace it.</p></div>`
+        : target.staleReport === "broken"
+          ? `<div class="notice gap-md"><p>The compiled target carries a print readiness report that is not one at all. Compile it again to see what this artwork needs.</p></div>`
+          : target.staleReport === "width"
+            ? `<div class="notice gap-md"><p>Compiled by an older build, whose minimum print width was too small to trust. Compile it again to see what this artwork needs.</p></div>`
+            : target.staleReport === "verdict"
+              ? `<div class="notice gap-md"><p>Compiled by an earlier build, or changed since, and this build does not stand behind its verdict. Compile it again to see what this artwork needs.</p></div>`
+              : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
   }
   ${target.tooSmall ? `<div class="notice bad gap-md"><p>${esc(target.tooSmall)}</p></div>` : ""}
   <form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/compile" class="gap-md">

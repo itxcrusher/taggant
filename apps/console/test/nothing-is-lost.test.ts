@@ -647,6 +647,14 @@ describe("an internal failure said as a sentence", () => {
       expect(body, name).toContain(expected);
       expect(body, name).not.toContain("Not compiled yet");
     }
+    // A target file that is not a target, or not JSON at all, is said so, not called a report.
+    await workspace.writeTarget("kept", "front", [1, 2, 3]);
+    let body = await (await fetch(`http://127.0.0.1:${port}/e/kept`)).text();
+    expect(body, "an array").toContain("cannot be read as a target");
+    const folder = join(workspace.root, "kept", "targets");
+    for (const name of await readdir(folder)) await writeFile(join(folder, name), "{ this is not json");
+    body = await (await fetch(`http://127.0.0.1:${port}/e/kept`)).text();
+    expect(body, "not JSON").toContain("cannot be read as a target");
   });
 
   it("keeps the compile asked for last, not the one that finished last", async () => {
@@ -1418,6 +1426,9 @@ describe("the command line reached through a link", () => {
       const run = spawnSync(process.execPath, [join(link, "cli.js"), "--help"], { encoding: "utf8" });
       expect(`${run.stdout}${run.stderr}`, "said nothing through the link").toContain("usage:");
       expect(run.status).toBe(0);
+      // And named without its extension, which Node runs as the same file.
+      const bare = spawnSync(process.execPath, [join(link, "cli"), "--help"], { encoding: "utf8" });
+      expect(`${bare.stdout}${bare.stderr}`, "said nothing named without its extension").toContain("usage:");
     } finally {
       // The link alone, never what it points at.
       await unlink(link).catch(() => rmdir(link));
