@@ -390,7 +390,7 @@ describe("readiness is the recogniser's answer", () => {
     expect(at190.report.pass).toBe(at191.report.pass);
     expect(at190.report.smallestUsableScale).toBe(at191.report.smallestUsableScale);
 
-    // A size that passes is shown at all five widths, two per cent apart around its own, and
+    // A size that passes is shown at all five widths, one per cent apart around its own, and
     // nothing else is asked once it has.
     const asked: number[] = [];
     await buildReport({

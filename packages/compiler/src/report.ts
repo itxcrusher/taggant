@@ -531,7 +531,7 @@ export function repeats(repetition: Repetition): boolean {
  * same sheet was ready at 190 mm and not at 191, and a sweep from 150 to 400 mm alternated every
  * few millimetres. Exported at half the size, the same sheet gave the other answer again.
  *
- * Now each size is judged over five widths, two per cent apart and fixed by the size alone, at
+ * Now each size is judged over five widths, one per cent apart and fixed by the size alone, at
  * four turns each: twenty looks, none of which the distance can move. The distance only turns
  * the size that passes into millimetres. Over 96 sizes of 24 pieces, the rule over one width
  * changed its verdict at 10 when the width moved by one per cent, and this one, over five,
