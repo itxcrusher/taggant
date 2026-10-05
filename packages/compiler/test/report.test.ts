@@ -1171,9 +1171,12 @@ describe("a design with a copy the lines do not refuse", () => {
     expect(report.pass).toBe(false);
     expect(report.repetition?.aimed).toEqual({ sizes: 3, views: 20, misplaced: 4 });
     expect(isCurrentReport(JSON.parse(JSON.stringify(report)))).toBe(true);
-    // And a refusal still may not claim more looks in the wrong place than it took.
+    // And a refusal still may not claim more looks in the wrong place than it took, or looks at
+    // no size at all.
     const stored = JSON.parse(JSON.stringify(report));
     stored.repetition.aimed.misplaced = 21;
+    expect(isCurrentReport(stored)).toBe(false);
+    stored.repetition.aimed = { sizes: 0, views: 0, misplaced: 0 };
     expect(isCurrentReport(stored)).toBe(false);
   });
 
