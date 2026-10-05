@@ -20,6 +20,7 @@ import { basename, dirname, join } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { type Report, buildReport } from "@taggant/compiler";
+import type { TargetFeature } from "@taggant/vision";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import { EXIT, FLAGS, USAGE, main } from "../src/cli.js";
@@ -58,10 +59,21 @@ async function currentReport(): Promise<Report> {
   const corners: { x: number; y: number; strength: number }[] = [];
   for (let y = 40; y < 452; y += 40)
     for (let x = 40; x < 640; x += 40) corners.push({ x, y, strength: 1000 });
+  // A feature at each corner, each described unlike the others, so that nothing repeats.
+  let seed = 3;
+  const next = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
+    return seed;
+  };
+  const features: TargetFeature[] = corners.map(({ x, y }) => {
+    const descriptor = new Uint32Array(8);
+    for (let w = 0; w < 8; w++) descriptor[w] = (next() ^ (next() << 16)) >>> 0;
+    return { x, y, strength: 1, angle: 0.3, scale: 1, descriptor };
+  });
   const report = await buildReport({
     image: { width: 640, height: 452 },
     levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners })),
-    features: [],
+    features,
     scanDistanceMm: 190,
     recognises: () => [{ found: true, inliers: 58, misplaced: false }],
   });

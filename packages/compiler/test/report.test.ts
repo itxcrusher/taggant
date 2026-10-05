@@ -28,11 +28,30 @@ const seen = (inliers: number): View => ({ found: true, inliers, misplaced: fals
 const FOUND_EVERYWHERE = (): View[] => [seen(99)];
 
 /**
- * No features, measured: nothing repeats in a list with nothing in it. These tests are about the
- * width, the corner gates and the rule that turns looks into a verdict; whether a design maps
- * onto itself is measured on real features in `artwork.test.ts` and in the vision package.
+ * Features nothing repeats in: a dozen, each in its own place and described unlike the others.
+ * These tests are about the width, the corner gates and the rule that turns looks into a verdict;
+ * whether a design maps onto itself is measured on real features in `artwork.test.ts` and in the
+ * vision package. A list with nothing in it is not this: it is a design nothing was learned about.
  */
-const NO_FEATURES: TargetFeature[] = [];
+const UNREPEATED: TargetFeature[] = (() => {
+  let seed = 5;
+  const next = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
+    return seed;
+  };
+  return Array.from({ length: 12 }, (_, i) => {
+    const descriptor = new Uint32Array(8);
+    for (let w = 0; w < 8; w++) descriptor[w] = (next() ^ (next() << 16)) >>> 0;
+    return {
+      x: 20 + (i % 4) * 90,
+      y: 20 + Math.floor(i / 4) * 120,
+      strength: 1,
+      angle: 0.3,
+      scale: 1,
+      descriptor,
+    };
+  });
+})();
 
 function corners(count: number, spread = 100): Corner[] {
   return Array.from({ length: count }, (_, i) => ({
@@ -49,7 +68,7 @@ describe("buildReport", () => {
       levels: [{ scale: 1, corners: corners(4) }],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(report.pass).toBe(false);
     expect(report.reasons).toContain("too few features to track reliably");
@@ -61,7 +80,7 @@ describe("buildReport", () => {
       levels: [{ scale: 1, corners: corners(300, 400) }],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(report.pass).toBe(true);
     expect(report.reasons).toEqual([]);
@@ -73,7 +92,7 @@ describe("buildReport", () => {
       levels: [{ scale: 1, corners: corners(300, 400) }],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(report.score).toBeGreaterThan(0);
     expect(report.score).toBeLessThanOrEqual(100);
@@ -85,14 +104,14 @@ describe("buildReport", () => {
       levels: [{ scale: 1, corners: corners(300, 400) }],
       scanDistanceMm: 300,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     const far = await buildReport({
       image: { width: 400, height: 400 },
       levels: [{ scale: 1, corners: corners(300, 400) }],
       scanDistanceMm: 900,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(far.minimumWidthMm ?? 0).toBeGreaterThan(near.minimumWidthMm ?? 0);
   });
@@ -103,7 +122,7 @@ describe("buildReport", () => {
       levels: [{ scale: 1, corners: corners(300, 60) }],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(report.reasons).toContain("features are concentrated in part of the artwork");
   });
@@ -119,7 +138,7 @@ describe("buildReport input validation", () => {
           levels: [{ scale: 1, corners: corners(10) }],
           scanDistanceMm: bad,
           recognises: FOUND_EVERYWHERE,
-          features: NO_FEATURES,
+          features: UNREPEATED,
         }),
       ).rejects.toThrow(/scan distance/i);
     }
@@ -132,7 +151,7 @@ describe("buildReport input validation", () => {
         levels: [{ scale: 1, corners: corners(10) }],
         scanDistanceMm: 400,
         recognises: FOUND_EVERYWHERE,
-        features: NO_FEATURES,
+        features: UNREPEATED,
       }),
     ).rejects.toThrow(/image/i);
   });
@@ -145,7 +164,7 @@ describe("the numbers a printer acts on", () => {
       levels: [{ scale: 1, corners: [] }],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(report.minimumWidthMm).toBeNull();
   });
@@ -161,7 +180,7 @@ describe("the numbers a printer acts on", () => {
       levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     const cornersOnlyAtFullSize = await buildReport({
       image,
@@ -173,7 +192,7 @@ describe("the numbers a printer acts on", () => {
       ],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(cornersOnlyAtFullSize.pass).toBe(true);
     expect(cornersOnlyAtFullSize.smallestUsableScale).toBe(0.5);
@@ -186,7 +205,7 @@ describe("the numbers a printer acts on", () => {
       levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     const described = describeWidth(report);
     expect(described).toContain("400 mm away");
@@ -204,7 +223,7 @@ describe("the numbers a printer acts on", () => {
       image: { width: 640, height: 640 },
       levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
       scanDistanceMm: 190,
-      features: NO_FEATURES,
+      features: UNREPEATED,
       recognises: (pixelsAcross) => {
         asked.push(pixelsAcross);
         return [seen(60)];
@@ -234,7 +253,7 @@ describe("the numbers a printer acts on", () => {
       scanDistanceMm: 400,
       // Found well only once the mark is wider than the frame.
       recognises: (pixelsAcross) => [pixelsAcross >= 600 ? seen(60) : seen(8)],
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(onlyAtFullSize.pass).toBe(true);
     expect(onlyAtFullSize.smallestUsableScale).toBe(1);
@@ -252,7 +271,7 @@ describe("the numbers a printer acts on", () => {
       levels: [{ scale: 1, corners: lattice(200, 640) }],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(tooFaint.pass).toBe(false);
     expect(tooFaint.reasons).toEqual(["too few features to track reliably"]);
@@ -266,14 +285,14 @@ describe("the numbers a printer acts on", () => {
       levels,
       scanDistanceMm: 300,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     const far = await buildReport({
       image,
       levels,
       scanDistanceMm: 900,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(far.minimumWidthMm ?? 0).toBeGreaterThan((near.minimumWidthMm ?? 0) * 2);
   });
@@ -287,7 +306,7 @@ describe("the numbers a printer acts on", () => {
           levels: [{ scale: 1, corners: lattice(spacing, 1000) }],
           scanDistanceMm: 400,
           recognises,
-          features: NO_FEATURES,
+          features: UNREPEATED,
         });
         expect(report.pass).toBe(report.score >= 60);
       }
@@ -300,7 +319,7 @@ describe("the numbers a printer acts on", () => {
       levels: [{ scale: 1, corners: [] }],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     // Both are true of artwork with nothing on it, and the point of this case is the one
     // that is not said: nothing about features being bunched together, since there are none.
@@ -323,7 +342,7 @@ describe("the numbers a printer acts on", () => {
       ],
       scanDistanceMm: 400,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(report.areasWithFeatures).toBeLessThanOrEqual(report.areas);
     expect(report.score).toBeGreaterThanOrEqual(0);
@@ -339,7 +358,7 @@ describe("readiness is the recogniser's answer", () => {
     // Every way of deciding readiness from corners alone has been measured wrong, the last a
     // repetition figure that passed a sheet of sixteen identical postcards. A report that was
     // never checked says so rather than saying ready.
-    const report = await buildReport({ image, levels, scanDistanceMm: 300, features: NO_FEATURES });
+    const report = await buildReport({ image, levels, scanDistanceMm: 300, features: UNREPEATED });
     expect(report.pass).toBe(false);
     expect(report.minimumWidthMm).toBeNull();
     expect(report.recognition).toBeNull();
@@ -357,7 +376,7 @@ describe("readiness is the recogniser's answer", () => {
         image,
         levels,
         scanDistanceMm,
-        features: NO_FEATURES,
+        features: UNREPEATED,
         recognises: (pixelsAcross) => {
           asked.push(pixelsAcross);
           return [seen(pixelsAcross % 3 === 0 ? 25 : 15)];
@@ -378,7 +397,7 @@ describe("readiness is the recogniser's answer", () => {
       image,
       levels,
       scanDistanceMm: 190,
-      features: NO_FEATURES,
+      features: UNREPEATED,
       recognises: (pixelsAcross) => {
         asked.push(pixelsAcross);
         return [seen(60)];
@@ -394,7 +413,7 @@ describe("readiness is the recogniser's answer", () => {
       image,
       levels,
       scanDistanceMm: 300,
-      features: NO_FEATURES,
+      features: UNREPEATED,
       recognises: (pixelsAcross) => {
         asked.push(pixelsAcross);
         return [seen(pixelsAcross >= 400 ? 60 : 12)];
@@ -405,7 +424,7 @@ describe("readiness is the recogniser's answer", () => {
       levels,
       scanDistanceMm: 300,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
 
     expect(report.pass).toBe(true);
@@ -432,14 +451,14 @@ describe("readiness is the recogniser's answer", () => {
       levels,
       scanDistanceMm: 190,
       recognises: agreeingAt(3),
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     const two = await buildReport({
       image,
       levels,
       scanDistanceMm: 190,
       recognises: agreeingAt(2),
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(three.smallestUsableScale).toBe(0.5);
     expect(three.recognition).toMatchObject({
@@ -461,14 +480,14 @@ describe("readiness is the recogniser's answer", () => {
       levels,
       scanDistanceMm: 190,
       recognises: turns([90, 90, 90, 15]),
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     const everyTurn = await buildReport({
       image,
       levels,
       scanDistanceMm: 190,
       recognises: turns([21, 22, 20, 25]),
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(oneTurnShort.pass).toBe(false);
     expect(oneTurnShort.recognition?.inliers).toBe(15);
@@ -484,7 +503,7 @@ describe("readiness is the recogniser's answer", () => {
       levels,
       scanDistanceMm: 190,
       recognises: (pixelsAcross) => [{ found: true, inliers: 80, misplaced: pixelsAcross % 2 === 0 }],
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(report.pass).toBe(false);
     // The count is of the looks taken before looking stopped, which is at the first in the wrong
@@ -504,7 +523,7 @@ describe("readiness is the recogniser's answer", () => {
       image,
       levels,
       scanDistanceMm: 190,
-      features: NO_FEATURES,
+      features: UNREPEATED,
       recognises: (pixelsAcross) =>
         pixelsAcross < 330 ? [{ found: true, inliers: 12, misplaced: pixelsAcross === 320 }] : [seen(60)],
     });
@@ -518,7 +537,7 @@ describe("readiness is the recogniser's answer", () => {
       levels,
       scanDistanceMm: 300,
       recognises: () => [seen(13)],
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(report.pass).toBe(false);
     expect(report.minimumWidthMm).toBeNull();
@@ -538,14 +557,14 @@ describe("readiness is the recogniser's answer", () => {
       levels,
       scanDistanceMm: 190,
       recognises: () => [seen(0)],
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     const nearly = await buildReport({
       image,
       levels,
       scanDistanceMm: 190,
       recognises: (pixelsAcross) => [seen([314, 317, 403, 407].includes(pixelsAcross) ? 40 : 12)],
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(nowhere.score).toBe(0);
     expect(nearly.score).toBeGreaterThan(nowhere.score);
@@ -558,7 +577,7 @@ describe("readiness is the recogniser's answer", () => {
       levels,
       scanDistanceMm: 300,
       recognises: () => [{ found: false, inliers: 500, misplaced: false }],
-      features: NO_FEATURES,
+      features: UNREPEATED,
     });
     expect(report.pass).toBe(false);
     expect(report.recognition?.inliers).toBe(0);
@@ -572,7 +591,7 @@ describe("readiness is the recogniser's answer", () => {
       image,
       levels,
       scanDistanceMm: 190,
-      features: NO_FEATURES,
+      features: UNREPEATED,
       recognises: (pixelsAcross) => {
         asked.push(pixelsAcross);
         return [seen(5)];
@@ -591,7 +610,7 @@ describe("readiness is the recogniser's answer", () => {
       image,
       levels,
       scanDistanceMm: 5200,
-      features: NO_FEATURES,
+      features: UNREPEATED,
       recognises: (pixelsAcross) => {
         asked.push(pixelsAcross);
         return [seen(5)];
@@ -609,7 +628,7 @@ describe("readiness is the recogniser's answer", () => {
       image,
       levels,
       scanDistanceMm: 10_000,
-      features: NO_FEATURES,
+      features: UNREPEATED,
       recognises: (pixelsAcross) => {
         asked.push(pixelsAcross);
         return [seen(99)];
@@ -629,7 +648,7 @@ describe("readiness is the recogniser's answer", () => {
       image,
       levels,
       scanDistanceMm: 6000,
-      features: NO_FEATURES,
+      features: UNREPEATED,
       recognises: (pixelsAcross) => [seen(pixelsAcross < 400 ? 0 : 99)],
     });
     expect(report.pass).toBe(false);
@@ -638,23 +657,28 @@ describe("readiness is the recogniser's answer", () => {
     expect(report.reasons.join(" ")).not.toContain("too little distinct detail");
   });
 
-  it("counts each width once on artwork too narrow to show five different ones", async () => {
+  it("refuses a size too narrow to be shown at five different widths, rather than judging it on fewer", async () => {
     // Through the exported function a narrow image rounds two of the five widths to one pixel
-    // count, and the same looks were counted twice: "4 of 5 widths agreed" was three widths.
+    // count: the same looks were once counted twice, "4 of 5 widths agreed" being three widths,
+    // and then a pass on three widths was written that the check of a stored report refuses.
     const asked: number[] = [];
-    const report = await buildReport({
-      image: { width: 100, height: 100 },
-      levels: [1, 0.5].map((scale) => ({ scale, corners: lattice(8, 100) })),
-      scanDistanceMm: 190,
-      features: NO_FEATURES,
-      recognises: (pixelsAcross) => {
-        asked.push(pixelsAcross);
-        return [seen(99)];
-      },
-    });
-    expect(new Set(asked).size).toBe(asked.length);
-    expect(report.recognition?.widths).toBe(new Set(asked.filter((pixels) => pixels < 60)).size);
-    expect(report.recognition?.widths).toBeLessThan(5);
+    const narrow = (width: number) =>
+      buildReport({
+        image: { width, height: width },
+        levels: [1, 0.5].map((scale) => ({ scale, corners: lattice(8, width) })),
+        scanDistanceMm: 190,
+        features: UNREPEATED,
+        recognises: (pixelsAcross) => {
+          asked.push(pixelsAcross);
+          return [seen(99)];
+        },
+      });
+    await expect(narrow(100)).rejects.toThrow(/50 px across is too narrow to be shown at 5 different widths/);
+    expect(asked).toEqual([]);
+    // Half of 200 pixels is wide enough, and the narrowest artwork the loader takes is 256.
+    const report = await narrow(200);
+    expect(report.recognition?.widths).toBe(5);
+    expect(isCurrentReport(JSON.parse(JSON.stringify(report)))).toBe(true);
   });
 });
 
@@ -672,7 +696,7 @@ describe("what a caller may hand the report", () => {
           ],
           scanDistanceMm: 190,
           recognises: FOUND_EVERYWHERE,
-          features: NO_FEATURES,
+          features: UNREPEATED,
         }),
         `a scale of ${scale} was accepted`,
       ).rejects.toThrow(RangeError);
@@ -692,15 +716,31 @@ describe("what a caller may hand the report", () => {
     expect(unmeasured.pass).toBe(false);
     expect(unmeasured.reasons.join(" ")).toContain("never checked for repeating itself");
 
+    // Nor with a list that holds nothing, which passed as a design nothing repeats in.
     const empty = await buildReport({
       image: { width: 640, height: 640 },
       levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
       scanDistanceMm: 190,
       recognises: FOUND_EVERYWHERE,
-      features: NO_FEATURES,
+      features: [],
     });
     expect(empty.repetition).toEqual({ places: 0, of: 0, move: null, ends: null, aimed: null });
-    expect(empty.pass).toBe(true);
+    expect(empty.pass).toBe(false);
+    expect(empty.reasons.join(" ")).toContain("given no features to check for repeating itself");
+    // And a stored pass measured over no places is refused as well.
+    const measured = JSON.parse(
+      JSON.stringify(
+        await buildReport({
+          image: { width: 640, height: 640 },
+          levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
+          scanDistanceMm: 190,
+          recognises: FOUND_EVERYWHERE,
+          features: UNREPEATED,
+        }),
+      ),
+    );
+    expect(isCurrentReport(measured)).toBe(true);
+    expect(isCurrentReport({ ...measured, repetition: { ...measured.repetition, of: 0 } })).toBe(false);
   });
 
   it("refuses features none of which could be read, rather than reading them as nothing repeating", async () => {
@@ -800,7 +840,7 @@ describe("what a stored report has to hold before it is trusted", () => {
           levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
           scanDistanceMm: 190,
           recognises: FOUND_EVERYWHERE,
-          features: NO_FEATURES,
+          features: UNREPEATED,
         }),
       ),
     );
@@ -866,7 +906,7 @@ describe("what a stored report has to hold before it is trusted", () => {
           levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: lattice(40, 640) })),
           scanDistanceMm: 190,
           recognises: () => [seen(0)],
-          features: NO_FEATURES,
+          features: UNREPEATED,
         }),
       ),
     );

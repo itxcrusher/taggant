@@ -12,8 +12,9 @@ export interface ReportInput {
   levels: Level[];
   /**
    * Every feature the target holds, described, at every size, for judging whether the design
-   * maps onto itself. Supplied by whoever built them, which is the compiler. Without them a
-   * report cannot pass, because nothing says the design is not printed twice.
+   * maps onto itself. Supplied by whoever built them, which is the compiler. Without them, or
+   * with none that can be read, a report cannot pass, because nothing says the design is not
+   * printed twice.
    */
   features?: TargetFeature[];
   /**
@@ -325,6 +326,8 @@ export function isCurrentReport(report: unknown): report is Report {
   if (pass) {
     if (featureCount < MIN_FEATURES || areasWithFeatures < MIN_AREAS) return false;
     if (repeats(repeated as unknown as Repetition)) return false;
+    // Measured over places that hold features: a pass measured over none was never measured.
+    if (repeated.of === 0) return false;
     // Pointed at both ends of a move carrying enough places to need it, the same number of looks
     // at each end at each size, and put in the right place every time; not pointed at all for one
     // that carries fewer. Only a pass has every look: a refusal stops at the first wrong one,
@@ -579,6 +582,16 @@ export async function buildReport(input: ReportInput): Promise<Report> {
         `a level's scale is a fraction of the analysed artwork, above 0 and at most 1, and this is ${level.scale}`,
       );
     }
+    // Every size is judged at five widths, and a pass is held to all five. A level this narrow
+    // rounds two of them to one pixel count, and passed on three widths a stored report is then
+    // refused for. The loader's smallest artwork is 256 pixels on its shorter edge, wide enough at
+    // every size the target covers, so only a caller of this function can ask it.
+    const across = new Set(WIDTHS_SHOWN.map((fraction) => Math.round(level.scale * image.width * fraction)));
+    if (across.size < WIDTHS_SHOWN.length) {
+      throw new RangeError(
+        `a level ${Math.round(level.scale * image.width)} px across is too narrow to be shown at ${WIDTHS_SHOWN.length} different widths`,
+      );
+    }
   }
 
   const base = levels.find((level) => level.scale === 1)?.corners ?? levels[0]?.corners ?? [];
@@ -605,11 +618,13 @@ export async function buildReport(input: ReportInput): Promise<Report> {
     reasons.push(
       "it was never checked for repeating itself, so nothing says the content would be drawn on the right copy",
     );
-  } else if (repetition.of === 0 && (input.features?.length ?? 0) > 0) {
-    // Features none of which could be read are not a design that repeats nothing, and measured
-    // as one they read as nothing to fear.
+  } else if (repetition.of === 0) {
+    // No features, or none that could be read, are not a design that repeats nothing, and
+    // measured as one they read as nothing to fear.
     reasons.push(
-      "none of its features could be read to check whether it repeats itself, so nothing says the content would be drawn on the right copy",
+      (input.features?.length ?? 0) > 0
+        ? "none of its features could be read to check whether it repeats itself, so nothing says the content would be drawn on the right copy"
+        : "it was given no features to check for repeating itself, so nothing says the content would be drawn on the right copy",
     );
   } else if (repeats(repetition)) {
     reasons.push(repeatsItself(repetition));
@@ -792,11 +807,11 @@ async function confirmSize(given: {
     }
     return views;
   };
-  // Distinct widths only. On a narrow image two of the five round to one pixel count, and the
-  // same looks were counted twice: "4 of 5 widths agreed" was three widths, two of them twice.
-  const widthsAt = (scale: number): number[] => [
-    ...new Set(WIDTHS_SHOWN.map((fraction) => Math.round(scale * analysisWidth * fraction))),
-  ];
+  // Five different pixel counts at every size: a level too narrow for that is refused on the way
+  // in, where on a narrow image two of the five once rounded to one count and the same looks
+  // were counted twice ("4 of 5 widths agreed" was three widths, two of them twice).
+  const widthsAt = (scale: number): number[] =>
+    WIDTHS_SHOWN.map((fraction) => Math.round(scale * analysisWidth * fraction));
   const widthOf = (scale: number): number => printWidthMm(scale * analysisWidth, scanDistanceMm);
 
   const outcome: SizeOutcome = {

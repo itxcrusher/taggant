@@ -1,4 +1,5 @@
 import { type Report, buildReport } from "@taggant/compiler";
+import type { TargetFeature } from "@taggant/vision";
 
 /**
  * A report as the compiler writes it today, for artwork the recogniser confirms at the smallest
@@ -16,13 +17,27 @@ export async function currentReport(changes: Partial<Report> = {}, scanDistanceM
   const report = await buildReport({
     image: { width: 640, height: 452 },
     levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners })),
-    // Measured over no features, which nothing repeats in: the report says so as one written for
-    // artwork that does not repeat itself would.
-    features: [],
+    // Measured over features nothing repeats in, one at each corner described unlike the rest,
+    // as a report written for artwork that does not repeat itself is.
+    features: unrepeated(corners),
     scanDistanceMm,
     recognises: () => [{ found: true, inliers: 58, misplaced: false }],
   });
   return { ...JSON.parse(JSON.stringify(report)), ...changes };
+}
+
+/** A feature at each point, each described unlike the others, so that nothing repeats. */
+function unrepeated(points: Array<{ x: number; y: number }>): TargetFeature[] {
+  let seed = 3;
+  const next = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
+    return seed;
+  };
+  return points.map(({ x, y }) => {
+    const descriptor = new Uint32Array(8);
+    for (let w = 0; w < 8; w++) descriptor[w] = (next() ^ (next() << 16)) >>> 0;
+    return { x, y, strength: 1, angle: 0.3, scale: 1, descriptor };
+  });
 }
 
 /**
