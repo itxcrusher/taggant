@@ -340,9 +340,9 @@ const MOST_HEADER_BYTES = 16 * 1024;
  * limit is for and keeps it.
  */
 function checkMultipart(body: Buffer, contentType: string): void {
-  // Read by the same rules the platform's parser reads it by (WHATWG MIME types), so the parts
-  // counted here are the parts it would read. A pattern search took a parameter whose name only
-  // ended in "boundary" for the boundary, counted nothing, and let every part through.
+  // Read by the WHATWG rules for MIME types rather than by a pattern search, which took a
+  // parameter whose name only ended in "boundary" for the boundary, counted nothing, and let
+  // every part through.
   let boundary: string | null = null;
   try {
     boundary = new MIMEType(contentType).params.get("boundary");

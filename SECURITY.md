@@ -28,7 +28,7 @@ Nothing here is a service anyone else runs, so this is not a privacy policy for 
 
 **The console, on the operator's machine.** It has no accounts, no cookies and no users other than whoever started it, and it binds to the loopback address by default. What it writes, it writes to three directories the operator owns and mounts: the workspace it authors in, the folder it publishes to, and the resolver's link table. It sends nothing anywhere.
 
-Nothing in this repository reads a secret or holds a credential: the services take their configuration as flags, and the only environment variables read anywhere are the smoke scripts' service addresses and the test suite's list of the browser engines it must find. A test over every tracked file refuses the shapes of a credential (`packages/bundler/test/no-control-characters.test.ts`).
+Nothing in this repository reads a secret or holds a credential: the services take their configuration as flags, and the only environment variables read anywhere are the smoke scripts' service addresses and the test suite's two lists of the browser engines it requires, those that must start and those that must reach content through a camera. A test over every tracked file refuses the shapes of a credential (`packages/bundler/test/no-control-characters.test.ts`).
 
 ## What it is not responsible for
 
