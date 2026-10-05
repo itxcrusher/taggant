@@ -510,16 +510,48 @@ const AGREEING_POINTS_NEEDED = 20;
  * one a third of the way across draws it on the wrong label.
  *
  * A look pointed at one part of the artwork, to check a copy, is judged at that point instead of
- * at the corners, against the same share of the artwork's width. The artwork is then larger than
- * the frame and its corners can be far outside it, where a pose a few pixels out at the middle of
- * the frame is a hundred out: judged there, a design with no copy was refused at two export widths
- * of ten. At the point, the pose that refused it was 4.5 pixels out against a line of 40, and
- * every copy tried from three tenths to three quarters of the design's size was still put in the
- * wrong place. The line itself was measured on centred looks.
+ * at the corners, against the same share of the artwork's width, and by the shape of its pose
+ * (`POSED_WITHIN`). The artwork is then larger than the frame and its corners can be far outside
+ * it, where a pose a few pixels out at the middle of the frame is a hundred out: judged there, a
+ * design with no copy was refused at two export widths of ten. At the point, the pose that
+ * refused it was 4.5 pixels out against a line of 40. The point alone is not enough either: a
+ * pose that settled on a copy near the middle of what it copies is off there by the copy's size
+ * times that distance, under the line, and copies laid on the design or beside it inside a white
+ * margin passed while their looks sat on them. The line itself was measured on centred looks.
  *
  * The same line decides which moves count when the design is checked for mapping onto itself.
  */
 export const MISPLACED_BEYOND = 0.1;
+
+/**
+ * Turns of the print the recogniser is shown, in degrees, at every width it is shown at.
+ *
+ * The count of agreeing points moves by about a fifth as a print turns, and not in the same
+ * direction for every design, so a check made in one pose passes artwork whose margin is gone
+ * in another. Measured on generated artwork printed twice: 28 points upright, 19 at sixty
+ * degrees, against a line of twenty that sat between them. A person holds a label, a bottle or
+ * a card at whatever angle it comes to hand. And it is the turns that show a design put on the
+ * wrong copy of itself: with two of these four instead of all of them, four of five sheets of
+ * four identical designs were called ready.
+ */
+export const TURNS = [0, 30, 60, 90] as const;
+
+/**
+ * How far a pointed look's pose may differ from the truth before it counts as found in the wrong
+ * place whatever it does at the point: in size, as a factor, and in turn, in degrees. Mirrored is
+ * always wrong. The measure holds a pair to the same two figures to call it the same size and turn.
+ *
+ * A pose that settles on a copy of the design shows the copy's size, or its turn, or its other
+ * hand, and a pose that is right shows none of them, however imprecise it is. Over the 781 looks
+ * the compile points that found a design with no copy at another size, in 26 targets (seven
+ * generated designs, one of them exported at ten more widths, and nine parts of the postcard
+ * copied at their own size), the pose was within 5.2 per cent of the truth's size and 0.3 degrees
+ * of its turn, found with as few as ten points. Over the 180 looks that settled on a copy at
+ * another size, its size was off by 30 per cent or more. Judged by the error at the frame's own
+ * corners instead, the worst of the first was 1.34 times the line and the least of the second
+ * 1.35, which is no line at all.
+ */
+export const POSED_WITHIN = { scale: 1.15, turnDegrees: 20 } as const;
 
 /**
  * When a design repeats itself: one move of the whole artwork carries at least this many of its

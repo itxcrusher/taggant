@@ -217,6 +217,26 @@ describe("the report against real artwork", { timeout: 120_000 }, () => {
     }
   });
 
+  it("refuses a copy on the design, or beside it in a white margin, that the looks pointed at it settle on", async () => {
+    // Judged at the point alone, the pose that settled on each copy was off there by less than
+    // the line, because the copy sits near the middle of what it copies, and both were ready for
+    // press while the pose showed the copy's size and moved the rest of the frame by most of its
+    // width. A copy at 40 per cent laid on the postcard's middle, and one at 27 per cent beside it
+    // inside a margin of 200 px.
+    for (const [name, layout, factor] of [
+      ["a copy at 40 per cent on its middle", { on: [0.5, 0.5] as [number, number] }, 0.4],
+      ["a copy at 27 per cent beside it in a margin", { margin: 200 }, 0.27],
+    ] as const) {
+      const compiled = await compileTarget(await postcardWithCopy(factor, layout), {
+        id: "copy",
+        scanDistanceMm: 190,
+      });
+      expect(compiled.report.pass, name).toBe(false);
+      expect(compiled.report.reasons.join(" "), name).toContain("pointed at the part of the artwork");
+      expect(compiled.report.repetition?.aimed?.misplaced, name).toBeGreaterThan(0);
+    }
+  });
+
   it("judges a look pointed at a design where it is pointed, not at corners far outside the frame", async () => {
     // A design with no copy, whose move between two coincidences carries twelve places, is pointed
     // at. Judged at its corners, hundreds of pixels outside the frame, a pose a few pixels out
@@ -269,6 +289,53 @@ describe("the report against real artwork", { timeout: 120_000 }, () => {
     }
   }, 360_000);
 });
+
+/**
+ * The example postcard in grey with a copy of itself at `factor` of its size: laid on it, centred
+ * at (`cx`, `cy`) as shares of its size, or beside it on the right, 16 px away, inside a white
+ * margin of `margin` px round the whole sheet.
+ */
+async function postcardWithCopy(
+  factor: number,
+  layout: { on: [number, number] } | { margin: number },
+): Promise<Buffer> {
+  const read = async (pipeline: sharp.Sharp) => {
+    const { data, info } = await pipeline.raw().toBuffer({ resolveWithObject: true });
+    const one = Buffer.alloc(info.width * info.height);
+    for (let i = 0; i < one.length; i++) one[i] = data[i * info.channels] ?? 255;
+    return { width: info.width, height: info.height, data: one };
+  };
+  const card = await read(
+    sharp(join(EXAMPLE_DIR, "artwork.png")).flatten({ background: "#ffffff" }).grayscale(),
+  );
+  const copy = await read(
+    sharp(card.data, { raw: { width: card.width, height: card.height, channels: 1 } }).resize({
+      width: Math.round(card.width * factor),
+    }),
+  );
+  const margin = "margin" in layout ? layout.margin : 0;
+  const width = "margin" in layout ? card.width + 16 + copy.width + 2 * margin : card.width;
+  const height = "margin" in layout ? Math.max(card.height, copy.height) + 2 * margin : card.height;
+  const sheet = Buffer.alloc(width * height, 255);
+  const put = (piece: typeof card, left: number, top: number) => {
+    for (let y = 0; y < piece.height; y++)
+      for (let x = 0; x < piece.width; x++)
+        sheet[(top + y) * width + left + x] = piece.data[y * piece.width + x] ?? 255;
+  };
+  put(card, margin, margin);
+  if ("on" in layout) {
+    put(
+      copy,
+      Math.round(layout.on[0] * card.width - copy.width / 2),
+      Math.round(layout.on[1] * card.height - copy.height / 2),
+    );
+  } else {
+    put(copy, margin + card.width + 16, margin + Math.round(0.5 * (card.height - copy.height)));
+  }
+  return sharp(sheet, { raw: { width, height, channels: 1 } })
+    .png()
+    .toBuffer();
+}
 
 /** The example postcard and, 16 pixels to its right, a copy of it at `factor` of its size. */
 async function besideItself(factor: number): Promise<Buffer> {

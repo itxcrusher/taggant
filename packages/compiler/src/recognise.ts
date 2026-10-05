@@ -1,5 +1,6 @@
 import {
   type GrayscaleImage,
+  type Homography,
   type TargetFeature,
   applyHomography,
   locate,
@@ -7,20 +8,13 @@ import {
   sample,
   smooth,
 } from "@taggant/vision";
-import { MISPLACED_BEYOND, RECOGNISED_PIXELS_ACROSS_FRAME, type View } from "./report.js";
-
-/**
- * Turns of the print the recogniser is shown, in degrees.
- *
- * The count of agreeing points moves by about a fifth as a print turns, and not in the same
- * direction for every design, so a check made in one pose passes artwork whose margin is gone
- * in another. Measured on generated artwork printed twice: 28 points upright, 19 at sixty
- * degrees, against a line of twenty that sat between them. A person holds a label, a bottle or
- * a card at whatever angle it comes to hand. And it is the turns that show a design put on the
- * wrong copy of itself: with two of these four instead of all of them, four of five sheets of
- * four identical designs were called ready.
- */
-const TURNS = [0, 30, 60, 90] as const;
+import {
+  MISPLACED_BEYOND,
+  POSED_WITHIN,
+  RECOGNISED_PIXELS_ACROSS_FRAME,
+  TURNS,
+  type View,
+} from "./report.js";
 
 /**
  * Show the recogniser the artwork at a given width, the way a camera would hand it over.
@@ -58,16 +52,16 @@ export function recognitionOf(
   ];
   return async (pixelsAcross, aim) => {
     const mark = markAt(image, pixelsAcross);
-    // Where a pose is judged. A centred look is judged at the artwork's corners. A look pointed at
-    // a point is judged at that point, which is where the camera is and what the content drawn
-    // there belongs to. Its corners can be far outside the frame, where a pose a few pixels out at
-    // the middle of the frame is a hundred out, and judged there a design with no copy at all was
-    // refused at some export widths and not at others.
-    const judged: Array<[number, number]> = aim === undefined ? corners : [[aim.x, aim.y]];
     const views: View[] = [];
     for (const degrees of TURNS) {
       await new Promise((settle) => setImmediate(settle));
-      const { frame, truth } = photographed(mark, degrees, image, aim);
+      const { frame, truth, shows } = photographed(mark, degrees, image, aim);
+      // Where a pose is judged. A centred look is judged at the artwork's corners. A look pointed
+      // at a point is judged at that point, which is where the camera is and what the content drawn
+      // there belongs to: its corners can be far outside the frame, where a pose a few pixels out
+      // at the middle of the frame is a hundred out, and judged there a design with no copy was
+      // refused at some export widths and not at others.
+      const judged: Array<[number, number]> = aim === undefined ? corners : [[aim.x, aim.y]];
       const result = locate(frame, target);
       let misplaced = false;
       if (result.found && result.homography) {
@@ -76,6 +70,12 @@ export function recognitionOf(
           const [trueX, trueY] = truth(x, y);
           if (Math.hypot(foundX - trueX, foundY - trueY) > MISPLACED_BEYOND * mark.width) misplaced = true;
         }
+        // And a pointed look is judged by the shape of what it found. Judged at the point alone, a
+        // pose that settled on a small copy near the middle of what it copies was off there by less
+        // than the line, while it showed the copy's size and moved everything else in the frame by
+        // most of the frame's width; judged at the frame's corners instead, a pose that was right
+        // but found with few points was over the line there too.
+        if (aim !== undefined && !posedAsShown(result.homography, frame, shows)) misplaced = true;
       }
       views.push({ found: result.found, inliers: result.found ? result.inliers : 0, misplaced });
     }
@@ -96,8 +96,44 @@ export function markAt(image: GrayscaleImage, pixelsAcross: number): GrayscaleIm
 }
 
 /**
+ * Whether a pose found in a frame shows the artwork at the size, turn and handedness the frame
+ * shows it at: the frame's own corners, taken back onto the artwork and forward through the pose,
+ * enclose an area of the same sign as the frame's and within `POSED_WITHIN` of its size, and their
+ * edges run within its turn of the frame's. A pose on a copy of the design at another size shows
+ * that size, one on a turned copy that turn, and one on a mirrored copy the other hand; a pose that
+ * is right but imprecise shows none of them.
+ */
+export function posedAsShown(
+  homography: Homography,
+  frame: { width: number; height: number },
+  shows: (frameX: number, frameY: number) => [number, number],
+): boolean {
+  type Quad = [[number, number], [number, number], [number, number], [number, number]];
+  const corners: Quad = [
+    [0, 0],
+    [frame.width - 1, 0],
+    [frame.width - 1, frame.height - 1],
+    [0, frame.height - 1],
+  ];
+  const posed = corners.map(([x, y]) => applyHomography(homography, ...shows(x, y))) as Quad;
+  // Twice the signed area each four corners enclose, in order round the frame.
+  const area = ([[x0, y0], [x1, y1], [x2, y2], [x3, y3]]: Quad): number =>
+    x0 * y1 - x1 * y0 + (x1 * y2 - x2 * y1) + (x2 * y3 - x3 * y2) + (x3 * y0 - x0 * y3);
+  // Of the frame's own sign, or the pose is mirrored, and neither collapsed nor undefined.
+  const ratio = area(posed) / area(corners);
+  if (!(ratio > 0 && Number.isFinite(ratio))) return false;
+  // The change of size is the square root of the change of area.
+  if (Math.abs(Math.log(ratio)) / 2 > Math.log(POSED_WITHIN.scale)) return false;
+  const [[x0, y0], [x1, y1], [x2, y2], [x3, y3]] = posed;
+  const across = x1 - x0 + (x2 - x3);
+  const down = y1 - y0 + (y2 - y3);
+  return (Math.abs(Math.atan2(down, across)) * 180) / Math.PI <= POSED_WITHIN.turnDegrees;
+}
+
+/**
  * The mark turned about a point and placed with that point in the middle of a frame, on mid grey,
- * and where that puts each point of the artwork.
+ * where that puts each point of the artwork, and which point of the artwork each point of the
+ * frame shows.
  *
  * The point is the artwork's centre unless another is given, in the artwork's own pixels: a
  * camera pointed at one copy of a design printed twice, which is where it settles on the wrong
@@ -108,7 +144,11 @@ function photographed(
   degrees: number,
   artwork: { width: number; height: number },
   aim?: { x: number; y: number },
-): { frame: GrayscaleImage; truth: (x: number, y: number) => [number, number] } {
+): {
+  frame: GrayscaleImage;
+  truth: (x: number, y: number) => [number, number];
+  shows: (frameX: number, frameY: number) => [number, number];
+} {
   const frameWidth = RECOGNISED_PIXELS_ACROSS_FRAME;
   const frameHeight = Math.round(frameWidth * 0.75);
   const data = new Uint8Array(frameWidth * frameHeight).fill(150);
@@ -136,6 +176,7 @@ function photographed(
     return {
       frame: { width: frameWidth, height: frameHeight, data },
       truth: (x, y) => [x * sx + left, y * sy + top],
+      shows: (frameX, frameY) => [(frameX - left) / sx, (frameY - top) / sy],
     };
   }
   const turn = (degrees * Math.PI) / 180;
@@ -159,6 +200,12 @@ function photographed(
       const u = x * sx - mx;
       const v = y * sy - my;
       return [cos * u - sin * v + cx, sin * u + cos * v + cy];
+    },
+    // And back: the point of the artwork a point of the frame shows.
+    shows: (frameX, frameY) => {
+      const u = cos * (frameX - cx) + sin * (frameY - cy);
+      const v = -sin * (frameX - cx) + cos * (frameY - cy);
+      return [(u + mx) / sx, (v + my) / sy];
     },
   };
 }

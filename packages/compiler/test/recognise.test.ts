@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { buildTrackingFeatures } from "@taggant/vision";
 import { describe, expect, it } from "vitest";
 import { loadGrayscale } from "../src/load.js";
-import { markAt, recognitionOf } from "../src/recognise.js";
+import { markAt, posedAsShown, recognitionOf } from "../src/recognise.js";
 
 const POSTCARD = join(dirname(fileURLToPath(import.meta.url)), "../../../examples/postcard/artwork.png");
 
@@ -48,4 +48,40 @@ describe("the artwork as the recogniser is shown it", () => {
     // Twenty looks. Back to back the timer could run once, at the end.
     expect(ticks, "the timer did not run between looks").toBeGreaterThanOrEqual(10);
   }, 120_000);
+});
+
+describe("the shape of the pose a pointed look found", () => {
+  // A frame the size the recogniser is shown, whose points show the artwork's points of the same
+  // coordinates, and a pose that changes their size by `scale` and turns them by `degrees` about
+  // the frame's centre, mirrored top to bottom if asked: the mirror that keeps the frame's edges
+  // running the way they ran, so nothing but its hand gives it away.
+  const frame = { width: 480, height: 360 };
+  const shows = (x: number, y: number): [number, number] => [x, y];
+  const pose = (scale: number, degrees = 0, mirrored = false, [dx, dy] = [0, 0]): Float64Array => {
+    const turn = (degrees * Math.PI) / 180;
+    const hand = mirrored ? -1 : 1;
+    const [a, b] = [scale * Math.cos(turn), -scale * Math.sin(turn) * hand];
+    const [c, d] = [scale * Math.sin(turn), scale * Math.cos(turn) * hand];
+    return Float64Array.of(a, b, 240 - a * 240 - b * 180 + dx, c, d, 180 - c * 240 - d * 180 + dy, 0, 0, 1);
+  };
+
+  it("takes a pose that is right, or a few per cent out", () => {
+    expect(posedAsShown(pose(1), frame, shows)).toBe(true);
+    expect(posedAsShown(pose(1.1), frame, shows)).toBe(true);
+    expect(posedAsShown(pose(1 / 1.1, 10), frame, shows)).toBe(true);
+    // Where it puts the middle is for the point to judge, not the shape.
+    expect(posedAsShown(pose(1, 0, false, [120, -60]), frame, shows)).toBe(true);
+  });
+
+  it("refuses one at another size, turned, mirrored or collapsed, wherever it puts the middle", () => {
+    // The pose of a copy at a quarter of the design's size, and poses just past each tolerance.
+    expect(posedAsShown(pose(0.27), frame, shows)).toBe(false);
+    expect(posedAsShown(pose(0.27, 0, false, [120, -60]), frame, shows)).toBe(false);
+    expect(posedAsShown(pose(1.2), frame, shows)).toBe(false);
+    expect(posedAsShown(pose(1 / 1.2), frame, shows)).toBe(false);
+    expect(posedAsShown(pose(1, 25), frame, shows)).toBe(false);
+    expect(posedAsShown(pose(1, -25), frame, shows)).toBe(false);
+    expect(posedAsShown(pose(1, 0, true), frame, shows)).toBe(false);
+    expect(posedAsShown(Float64Array.of(0, 0, 0, 0, 0, 0, 0, 0, 1), frame, shows)).toBe(false);
+  });
 });
