@@ -18,26 +18,29 @@ async function artwork(options: {
   blobs: number;
   radius: number;
   size?: number;
+  width?: number;
+  height?: number;
 }): Promise<Buffer> {
-  const size = options.size ?? 600;
-  const pixels = Buffer.alloc(size * size).fill(238);
+  const width = options.width ?? options.size ?? 600;
+  const height = options.height ?? options.size ?? 600;
+  const pixels = Buffer.alloc(width * height).fill(238);
   let seed = 4242;
   for (let i = 0; i < options.blobs; i++) {
     seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
-    const cx = seed % size;
+    const cx = seed % width;
     seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
-    const cy = seed % size;
+    const cy = seed % height;
     seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
     const value = seed % 2 === 0 ? 28 : 140;
     const r = options.radius;
-    for (let y = Math.max(0, cy - r); y < Math.min(size, cy + r); y++) {
-      for (let x = Math.max(0, cx - r); x < Math.min(size, cx + r); x++) {
+    for (let y = Math.max(0, cy - r); y < Math.min(height, cy + r); y++) {
+      for (let x = Math.max(0, cx - r); x < Math.min(width, cx + r); x++) {
         // Half moons rather than discs, so the shapes have corners rather than only edges.
-        if ((x - cx) ** 2 + (y - cy) ** 2 <= r * r && x >= cx - r / 2) pixels[y * size + x] = value;
+        if ((x - cx) ** 2 + (y - cy) ** 2 <= r * r && x >= cx - r / 2) pixels[y * width + x] = value;
       }
     }
   }
-  return sharp(pixels, { raw: { width: size, height: size, channels: 1 } })
+  return sharp(pixels, { raw: { width, height, channels: 1 } })
     .png()
     .toBuffer();
 }
@@ -211,6 +214,21 @@ describe("the report against real artwork", { timeout: 120_000 }, () => {
       expect(compiled.report.minimumWidthMm, name).toBeNull();
       expect(compiled.report.reasons.join(" "), name).toContain("pointed at the part of the artwork");
       expect(compiled.report.repetition?.aimed?.misplaced, name).toBeGreaterThan(0);
+    }
+  });
+
+  it("judges a look pointed at a design where it is pointed, not at corners far outside the frame", async () => {
+    // A design with no copy, whose move between two coincidences carries twelve places, is pointed
+    // at. Judged at its corners, hundreds of pixels outside the frame, a pose a few pixels out
+    // where the camera was pointed was a hundred out there, and the design was refused exported
+    // 400 and 500 pixels wide and ready at 450.
+    const tall = await artwork({ blobs: 40, radius: 40, width: 500, height: 800 });
+    for (const exported of [400, 500]) {
+      const buffer = await sharp(tall).resize({ width: exported }).png().toBuffer();
+      const compiled = await compileTarget(buffer, { id: "tall", scanDistanceMm: 190 });
+      const name = `exported ${exported} wide`;
+      expect(compiled.report.repetition?.aimed, name).not.toBeNull();
+      expect(compiled.report.pass, name).toBe(true);
     }
   });
 

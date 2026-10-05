@@ -58,6 +58,12 @@ export function recognitionOf(
   ];
   return async (pixelsAcross, aim) => {
     const mark = markAt(image, pixelsAcross);
+    // Where a pose is judged. A centred look is judged at the artwork's corners. A look pointed at
+    // a point is judged at that point, which is where the camera is and what the content drawn
+    // there belongs to. Its corners can be far outside the frame, where a pose a few pixels out at
+    // the middle of the frame is a hundred out, and judged there a design with no copy at all was
+    // refused at some export widths and not at others.
+    const judged: Array<[number, number]> = aim === undefined ? corners : [[aim.x, aim.y]];
     const views: View[] = [];
     for (const degrees of TURNS) {
       await new Promise((settle) => setImmediate(settle));
@@ -65,7 +71,7 @@ export function recognitionOf(
       const result = locate(frame, target);
       let misplaced = false;
       if (result.found && result.homography) {
-        for (const [x, y] of corners) {
+        for (const [x, y] of judged) {
           const [foundX, foundY] = applyHomography(result.homography, x, y);
           const [trueX, trueY] = truth(x, y);
           if (Math.hypot(foundX - trueX, foundY - trueY) > MISPLACED_BEYOND * mark.width) misplaced = true;

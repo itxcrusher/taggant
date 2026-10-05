@@ -463,6 +463,14 @@ const AGREEING_POINTS_NEEDED = 20;
  * failures, and this tells them apart: a pose a few per cent out draws content a little off, and
  * one a third of the way across draws it on the wrong label.
  *
+ * A look pointed at one part of the artwork, to check a copy, is judged at that point instead of
+ * at the corners, against the same share of the artwork's width. The artwork is then larger than
+ * the frame and its corners can be far outside it, where a pose a few pixels out at the middle of
+ * the frame is a hundred out: judged there, a design with no copy was refused at two export widths
+ * of ten. At the point, the pose that refused it was 4.5 pixels out against a line of 40, and
+ * every copy tried from three tenths to three quarters of the design's size was still put in the
+ * wrong place. The line itself was measured on centred looks.
+ *
  * The same line decides which moves count when the design is checked for mapping onto itself.
  */
 export const MISPLACED_BEYOND = 0.1;
