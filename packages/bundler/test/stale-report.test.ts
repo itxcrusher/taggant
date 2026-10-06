@@ -273,6 +273,25 @@ describe("a compiled target from an older build", () => {
     await expect(
       bundle({ manifest, targets: { front: { ...blank, report: nothing } }, ...(await scratch()) }),
     ).rejects.toThrow(/found none in the artwork.*will not change that/);
+
+    // Each half of that decides it. Features emptied beside the report of the features they were,
+    // one this build would write, are a file a compile restores; and the report of a compile that
+    // found nothing, edited since, is not one this build stands behind. With either half of the
+    // condition gone, one of the two is told that compiling again would not help.
+    const emptied = { ...features, features: [], report: await currentReport() };
+    expect(isCurrentReport(emptied.report), "emptied").toBe(true);
+    expect(describesTarget(emptied), "emptied").toBe(false);
+    const edited = { ...blank, report: { ...nothing, score: nothing.score + 1 } };
+    expect(isCurrentReport(edited.report), "edited").toBe(false);
+    expect(describesTarget(edited), "edited").toBe(true);
+    for (const [label, front] of [
+      ["emptied", emptied],
+      ["edited", edited],
+    ] as const) {
+      await expect(bundle({ manifest, targets: { front }, ...(await scratch()) }), label).rejects.toThrow(
+        /no features in it\b.*Compile it again\.$/,
+      );
+    }
   });
 
   it("refuses a target that carries no report, which was the way past every check", async () => {

@@ -783,12 +783,12 @@ describe("an internal failure said as a sentence", () => {
 
     // And a target holding no features, carrying the example's report: rebuilt from its own blank
     // artwork, at that report's distance, it is refused for having nothing to track, which no
-    // compile changes and which the refusal says, in one sentence.
+    // compile of that artwork changes and which the refusal says, in one sentence.
     const plain = (await workspace.readTarget("plain", "front")) as Record<string, unknown>;
     await workspace.writeTarget("plain", "front", { ...plain, report: far.report });
     const nothing = await told(await post("/e/plain/publish", ""));
     expect(nothing).toContain(
-      "will not change that; artwork with more detail will. On the way there, front at 600 mm",
+      "or compile again if it has been replaced already. On the way there, front at 600 mm",
     );
     expect(nothing).not.toContain("..");
   }, 240_000);
