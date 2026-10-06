@@ -71,27 +71,38 @@ export async function compile(
   if (!target) {
     throw new WorkspaceError(`${experience.id} has no target called ${targetId}`);
   }
-  // The compiler's range, not one of this console's own. It was 5000 here and 10000 on the
-  // command line, so a target compiled at six metres could not be published from here: the
-  // publish found it needed compiling again and this refused the distance it was compiled at.
+  checkDistance(scanDistanceMm);
+  // One compile of a target at a time, in the order they were asked for. The recogniser hands
+  // the event loop back between looks, so two compiles of one target interleave, and the one
+  // that finished last was the one stored: a compile at 5000 mm sent after one at 190 needs
+  // fewer looks, finished first, and was overwritten, so the operator's last choice was undone
+  // with nothing saying so, and it did in five tries out of five.
+  return await inTurn(compileQueues, compileKey(experience, targetId), () =>
+    compileNow(workspace, experience, target, scanDistanceMm),
+  );
+}
+
+/**
+ * The compiler's range, not one of this console's own. It was 5000 here and 10000 on the
+ * command line, so a target compiled at six metres could not be published from here: the
+ * publish found it needed compiling again and this refused the distance it was compiled at.
+ */
+function checkDistance(scanDistanceMm: number): void {
   const { nearest, furthest } = SCAN_DISTANCE_MM;
   if (!Number.isFinite(scanDistanceMm) || scanDistanceMm < nearest || scanDistanceMm > furthest) {
     throw new WorkspaceError(
       `a scan distance of ${scanDistanceMm} mm is not one a person could hold: ${nearest} to ${furthest}`,
     );
   }
-  // One compile of a target at a time, in the order they were asked for. The recogniser hands
-  // the event loop back between looks, so two compiles of one target interleave, and the one
-  // that finished last was the one stored: a compile at 5000 mm sent after one at 190 needs
-  // fewer looks, finished first, and was overwritten, so the operator's last choice was undone
-  // with nothing saying so, and it did in five tries out of five.
-  return await inTurn(compileQueues, `${queueKey(experience.directory)}\u0000${targetId}`, () =>
-    compileNow(workspace, experience, target, scanDistanceMm),
-  );
 }
 
 /** Compiled targets being written, one queue per target, so the last asked for is the last kept. */
 const compileQueues = new Map<string, Promise<void>>();
+
+/** The queue a target's compiles, and a publish's reading of it, take their turn in. */
+function compileKey(experience: Experience, targetId: string): string {
+  return `${queueKey(experience.directory)}\u0000${targetId}`;
+}
 
 async function compileNow(
   workspace: Workspace,
@@ -220,7 +231,8 @@ async function publishOnce(
   const manifest = publishable(experience);
   const compiled: CompileOutcome[] = [];
   const targets: Record<string, unknown> = {};
-  for (const target of manifest.targets) {
+
+  async function usableTarget(target: { id: string; source: string }): Promise<unknown> {
     // Usable, not merely present. A target file can exist and still be one the runtime
     // cannot read: compiled before the descriptor's sampling pattern changed, half
     // written, or edited by hand. The workspace holds the artwork it was built from, so
@@ -273,7 +285,10 @@ async function publishOnce(
     }
     if (stored === undefined) {
       try {
-        const outcome = await compile(workspace, experience, target.id, rebuildAt);
+        // In the target's turn already, so compiled here rather than queued behind itself.
+        const at = rebuildAt ?? DEFAULT_SCAN_DISTANCE_MM;
+        checkDistance(at);
+        const outcome = await compileNow(workspace, experience, target, at);
         compiled.push(outcome);
         options.onRebuild?.(target.id, outcome.report.scanDistanceMm);
       } catch (error) {
@@ -291,7 +306,20 @@ async function publishOnce(
       }
       stored = await workspace.readTarget(experience.id, target.id);
     }
-    targets[target.id] = stored;
+    return stored;
+  }
+
+  for (const target of manifest.targets) {
+    // Read, judged and rebuilt in the target's own compile queue, so a compile of it asked for
+    // before the publish reached it lands first and is the one read, and one asked for after waits
+    // for the publish to have read. Read outside the queue, a publish sent while a compile at
+    // 600 mm was running read the file as it stood before it. Carrying a report that no longer
+    // described it, the file was rebuilt at that report's 190 mm, after the 600 compile and over
+    // it, and published at 190, in ten tries of ten; carrying its own, it was published as it
+    // stood, at 190, while the file on disk said 600, in six of six.
+    targets[target.id] = await inTurn(compileQueues, compileKey(experience, target.id), () =>
+      usableTarget(target),
+    );
   }
   if (Object.keys(targets).length === 0) {
     throw new WorkspaceError(`${experience.id} has no targets, so there is nothing to recognise`);

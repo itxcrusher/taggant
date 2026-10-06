@@ -276,6 +276,55 @@ describe("a target on disk with no report at all", () => {
   }, 240_000);
 });
 
+describe("a publish sent while the target is being compiled", () => {
+  it("publishes what that compile writes, and does not write over it", async () => {
+    // A publish read the target outside the target's compile queue, so one sent while a compile at
+    // 600 mm was running read the file from the compile before, at 190. Carrying a report that no
+    // longer described it, the file was rebuilt at 190 after the 600 compile and over it; carrying
+    // its own, it was published as it stood while the file on disk said 600. Either way a piece
+    // declared 150 mm wide, which needs 462 at 600, was published as one that needs 147 at 190.
+    const { compile, publish } = await import("../src/operations.js");
+    const { readFile: read, writeFile: write } = await import("node:fs/promises");
+    const artwork = fileURLToPath(new URL("../../../examples/postcard/artwork.png", import.meta.url));
+    const overlay = fileURLToPath(new URL("../../../examples/postcard/overlay.svg", import.meta.url));
+    const runtimeDir = fileURLToPath(new URL("../../../packages/runtime/dist", import.meta.url));
+
+    const created = await workspace.create("asked-during", "Asked during");
+    const source = await workspace.storeFile(created.id, "artwork", "artwork.png", await read(artwork));
+    const media = await workspace.storeFile(created.id, "media", "overlay.svg", await read(overlay));
+    await workspace.save(created.id, {
+      ...created.manifest,
+      targets: [{ id: "front", source, physicalWidthMm: 150, content: [{ type: "image", src: media }] }],
+    });
+
+    type Stored = { features: Array<{ descriptor: number[] }>; report: { scanDistanceMm: number } };
+    const before: Array<[string, (stored: Stored) => Stored]> = [
+      [
+        "a report that no longer describes its file",
+        (stored) => {
+          const [first, ...rest] = stored.features;
+          const flipped = [((first?.descriptor[0] ?? 0) ^ 1) >>> 0, ...(first?.descriptor.slice(1) ?? [])];
+          return { ...stored, features: [{ ...first, descriptor: flipped }, ...rest] };
+        },
+      ],
+      ["its own report", (stored) => stored],
+    ];
+    for (const [label, change] of before) {
+      const outcome = await compile(workspace, await workspace.read(created.id), "front", 190);
+      const path = join(workspace.directoryFor(created.id), outcome.path);
+      await write(path, JSON.stringify(change(JSON.parse(await read(path, "utf8")) as Stored)));
+
+      const experience = await workspace.read(created.id);
+      const compiling = compile(workspace, experience, "front", 600);
+      const publishing = publish(workspace, experience, join(root, "asked-during-out"), { runtimeDir });
+      await expect(publishing, label).rejects.toThrow(/declared 150 mm wide.* at 600 mm/);
+      await compiling;
+      const onDisk = JSON.parse(await read(path, "utf8")) as Stored;
+      expect(onDisk.report.scanDistanceMm, label).toBe(600);
+    }
+  }, 240_000);
+});
+
 describe("registering a code", () => {
   it("leaves every other link on that code alone", async () => {
     // The shape this repository ships as its worked example: an English page, a French
