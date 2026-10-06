@@ -13,6 +13,7 @@ import {
   describeWidth,
   distanceBehind,
   isCurrentReport,
+  widthFromThisModel,
 } from "../src/report.js";
 
 /** One look that found the artwork with this many points agreeing, in the right place. */
@@ -1035,6 +1036,31 @@ describe("what a stored report has to hold before it is trusted", () => {
     // A current report computed at 190 mm. The old arithmetic over its width gives 735.
     expect(distanceBehind(await current())).toBe(190);
     expect(distanceBehind({ minimumWidthMm: "70", smallestUsableScale: 0.5, analysisWidth: 640 })).toBeNull();
+
+    // One of this model's whose distance was removed, or edited to one nobody could hold, is worked
+    // back through this model's width, not the older build's. The example compiled at 600 mm,
+    // 462 mm over 320 px, gave 2310 by the older arithmetic.
+    const example = { minimumWidthMm: 462, smallestUsableScale: 0.5, analysisWidth: 640 };
+    expect(widthFromThisModel(example)).toBe(false);
+    expect(distanceBehind(example)).toBe(2310);
+    expect(distanceBehind({ ...example, targetDigest: "0".repeat(64) })).toBe(600);
+    expect(distanceBehind({ ...example, recognition: null })).toBe(600);
+    // And a report this build wrote at 190: at or just past it, by no more than the millimetre of
+    // width the rounding up can add, turned into distance.
+    const report = await current();
+    const { scanDistanceMm: _gone, ...lost } = report;
+    const slack =
+      (RECOGNISED_PIXELS_ACROSS_FRAME * 1000) /
+      (report.smallestUsableScale * report.analysisWidth * FRAME_WIDTH_MM_AT_1M);
+    for (const [label, stored] of [
+      ["removed", lost],
+      ["edited to -5", { ...lost, scanDistanceMm: -5 }],
+    ] as const) {
+      expect(widthFromThisModel(stored), label).toBe(true);
+      const recovered = distanceBehind(stored) ?? 0;
+      expect(recovered, label).toBeGreaterThanOrEqual(190);
+      expect(recovered - 190, label).toBeLessThanOrEqual(Math.ceil(slack));
+    }
   });
 });
 

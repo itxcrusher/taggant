@@ -77,6 +77,12 @@ describe("a compiled target from an older build", () => {
     await expect(bundle({ manifest, targets: { front: stale }, ...(await scratch()) })).rejects.toThrow(
       /older build/,
     );
+    // One this model wrote, its distance removed since, is refused for what it lacks, and not
+    // blamed on a build that never wrote it.
+    const { scanDistanceMm: _gone, ...lost } = await currentReport();
+    await expect(
+      bundle({ manifest, targets: { front: { ...features, report: lost } }, ...(await scratch()) }),
+    ).rejects.toThrow(/no scan distance a person could hold/);
   });
 
   it("publishes the same numbers once the report says what distance they are for", async () => {

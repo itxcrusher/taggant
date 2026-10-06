@@ -3,7 +3,13 @@ import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/p
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
 import process from "node:process";
-import { carriesItsDistance, describesTarget, isCurrentReport, targetDigest } from "@taggant/compiler";
+import {
+  carriesItsDistance,
+  describesTarget,
+  isCurrentReport,
+  targetDigest,
+  widthFromThisModel,
+} from "@taggant/compiler";
 import { validateManifest } from "@taggant/manifest";
 import { fromTargetFile } from "@taggant/vision";
 import { type CopiedAsset, RENDER_BUDGET_MS, copyAsset, within } from "./assets.js";
@@ -301,10 +307,14 @@ function checkReadiness(
   // A report with no distance was written by the build whose width was computed against the
   // sensor's pixels rather than the recogniser's, so the width in it is about four times
   // too small and this comparison would pass a piece that cannot be read. A gate that is
-  // four times too lenient is worse than an absent one, because it reads as a gate.
+  // four times too lenient is worse than an absent one, because it reads as a gate. Unless
+  // something in it says this model wrote it: then its distance was removed or edited, and the
+  // older build is not the reason to give.
   if (!carriesItsDistance(fields)) {
     throw new Error(
-      `${target.id} was compiled by an older build, whose minimum print width was too small to trust. Compile it again before publishing.`,
+      widthFromThisModel(fields)
+        ? `${target.id} carries a print readiness report with no scan distance a person could hold, so nothing says what its width was worked out for. Compile it again before publishing.`
+        : `${target.id} was compiled by an older build, whose minimum print width was too small to trust. Compile it again before publishing.`,
     );
   }
   // A report that never asked the recogniser is from the build whose readiness was inferred

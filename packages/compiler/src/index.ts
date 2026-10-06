@@ -18,5 +18,6 @@ export {
   distanceBehind,
   isCurrentReport,
   repeats,
+  widthFromThisModel,
 } from "./report.js";
 export type { Aimed, MeasuredRepetition, Recognition, Report, ReportInput, View } from "./report.js";

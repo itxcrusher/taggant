@@ -273,6 +273,22 @@ export function carriesItsDistance(report: unknown): report is Report {
 }
 
 /**
+ * Was a report's width computed by this model, whether or not the report still carries its
+ * distance?
+ *
+ * The distance arrived with this model, so a report without one was taken for the older build's,
+ * and one edited since, its distance removed, was worked back out with the older arithmetic, four
+ * times out: a report compiled at 600 mm gave 2310, and the console compiled it again there,
+ * offered 2310 on its card and called it the older build's. A recognition and a fingerprint were
+ * added to the report after the distance was, so a report holding either was written by this
+ * model. One holding neither, and no distance, is taken for the older build's.
+ */
+export function widthFromThisModel(report: unknown): boolean {
+  if (carriesItsDistance(report)) return true;
+  return isRecord(report) && ("recognition" in report || "targetDigest" in report);
+}
+
+/**
  * The scan distances anything here accepts, in millimetres: a phone held close, to a person
  * standing back from a large piece.
  *
@@ -532,18 +548,21 @@ function printWidthMm(pixelsAcross: number, scanDistanceMm: number): number {
 }
 
 /**
- * The distance an older report was computed for, worked back out of it.
+ * The distance a report was computed for, worked back out of it when it no longer says.
  *
- * The build that wrote these files divided by a sensor figure of 1.6 pixels per millimetre
- * at a metre, so its width was `ceil(pixelsNeeded * distance / 1600)` and the distance comes
- * straight back out. Against this repository's own example: 70 mm over 320 px gives exactly
- * 350, which is the distance it was compiled at.
+ * The older build divided by a sensor figure of 1.6 pixels per millimetre at a metre, so its
+ * width was `ceil(pixelsNeeded * distance / 1600)` and the distance comes straight back out.
+ * Against this repository's own example: 70 mm over 320 px gives exactly 350, which is the
+ * distance it was compiled at. A report of this model's that has lost its distance is worked
+ * back through this model's own width, `printWidthMm`, turned the other way: the example
+ * compiled at 600 mm, 462 mm over 320 px, gives 600.
  *
  * Worth doing rather than falling back to a default, because the default is closer than
  * anything an operator who chose 350 mm meant, and recompiling at it turns a piece the
- * publish gate should refuse into one that sails through. The rounding in the original
- * `ceil` is worth under `1600 / pixelsNeeded` millimetres and errs long, which puts the
- * recovered distance at or just past the real one, and further is the cautious direction.
+ * publish gate should refuse into one that sails through. The rounding in either `ceil` is
+ * worth under `1600 / pixelsNeeded` millimetres of distance in the older arithmetic, and about
+ * a quarter of that in this model's, and errs long, which puts the recovered distance at or
+ * just past the real one, and further is the cautious direction.
  *
  * Null when the fields are not there or do not give a distance anyone could hold, and the
  * caller then has to say so rather than guess.
@@ -565,6 +584,12 @@ export function distanceBehind(report: unknown): number | null {
   if (typeof width !== "number" || typeof scale !== "number" || typeof across !== "number") return null;
   const pixelsNeeded = scale * across;
   if (!(pixelsNeeded > 0) || !(width > 0)) return null;
+  if (widthFromThisModel(report)) {
+    const distance = Math.round(
+      (width * RECOGNISED_PIXELS_ACROSS_FRAME * 1000) / (pixelsNeeded * FRAME_WIDTH_MM_AT_1M),
+    );
+    return distance >= SCAN_DISTANCE_MM.nearest && distance <= SCAN_DISTANCE_MM.furthest ? distance : null;
+  }
   const distance = Math.round((width * 1600) / pixelsNeeded);
   return distance >= 50 && distance <= 5000 ? distance : null;
 }

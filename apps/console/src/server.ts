@@ -15,10 +15,10 @@ import { type IncomingMessage, type Server, type ServerResponse, createServer } 
 import { MIMEType } from "node:util";
 import {
   type Report,
-  carriesItsDistance,
   describesTarget,
   distanceBehind,
   isCurrentReport,
+  widthFromThisModel,
 } from "@taggant/compiler";
 import { manifestSchema } from "@taggant/manifest";
 import { fromTargetFile } from "@taggant/vision";
@@ -497,7 +497,9 @@ export function createConsole(options: ConsoleOptions): Server {
         if (!isObject(compiled) || !readableTarget(compiled)) {
           view.staleReport = "unreadable";
         } else if (report !== undefined && !isCurrentReport(report)) {
-          view.staleReport = !isObject(report) ? "broken" : carriesItsDistance(report) ? "verdict" : "width";
+          // The older build's only when nothing in it says this model wrote it: one of this model's
+          // that lost its distance was called the older build's, with a width too small to trust.
+          view.staleReport = !isObject(report) ? "broken" : widthFromThisModel(report) ? "verdict" : "width";
         } else if (report !== undefined && !describesTarget(compiled)) {
           // A report this build wrote that does not describe this target file: the publish gate
           // refuses it, and its verdict and width are not this artwork's, so none of it is shown.

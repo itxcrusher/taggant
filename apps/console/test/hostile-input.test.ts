@@ -154,6 +154,8 @@ describe("a target on disk the runtime cannot read", () => {
     // in a later format, or holding a descriptor word past 32 bits, kept a report compiled for
     // 600 mm and was rebuilt at 150, where this artwork needs 116 mm: a piece declared 120 mm wide
     // and refused at 600 was published, and the 600 chosen was gone from disk. Its card offered 150.
+    // And a report that lost its distance was worked back with the older build's arithmetic, to
+    // 2310 mm, rebuilt there, offered there, and called the older build's.
     const { compile, publish } = await import("../src/operations.js");
     const { readFile: read, writeFile: write } = await import("node:fs/promises");
     const artwork = fileURLToPath(new URL("../../../examples/postcard/artwork.png", import.meta.url));
@@ -184,6 +186,14 @@ describe("a target on disk the runtime cannot read", () => {
           };
         },
         unreadable,
+      ],
+      [
+        "its distance removed",
+        (stored) => {
+          const { scanDistanceMm: _gone, ...report } = stored.report;
+          return { ...stored, report };
+        },
+        "this build does not stand behind its verdict",
       ],
     ];
     for (const [label, damage, cardSays] of damaged) {
@@ -236,8 +246,9 @@ describe("a target on disk from a build whose print widths were wrong", () => {
     const stored = JSON.parse(await read(path, "utf8"));
 
     // Rewritten as the previous build would have written it: no distance, and the width its
-    // own arithmetic gave, which divided by a sensor figure of 1.6 px per mm at a metre.
-    const { scanDistanceMm: _dropped, ...oldShape } = stored.report;
+    // own arithmetic gave, which divided by a sensor figure of 1.6 px per mm at a metre. Nor a
+    // recognition or a fingerprint, which came later and mark a report as this model's.
+    const { scanDistanceMm: _dropped, recognition: _asked, targetDigest: _tied, ...oldShape } = stored.report;
     const pixelsNeeded = stored.report.smallestUsableScale * stored.report.analysisWidth;
     const asTheOldBuildWroteIt = Math.ceil((pixelsNeeded * chosenDistanceMm) / 1600);
     expect(asTheOldBuildWroteIt).toBeLessThan(stored.report.minimumWidthMm);
