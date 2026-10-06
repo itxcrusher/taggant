@@ -245,7 +245,7 @@ describe("what a table may not say", () => {
     }
   });
 
-  it("refuses languages, a media type and a default that a scan could not be answered from", () => {
+  it("refuses languages, a media type, a default, a link type or a title a scan could not be answered from", () => {
     // The languages are searched for the one a phone asks in, and every browser sends one, so a
     // list that was not a list of tags was a 500 on the commonest scan there is, at any identifier
     // with two links of a type, while readiness said ready. A default written as a string was no
@@ -268,12 +268,23 @@ describe("what a table may not say", () => {
       [{ type: "text/html;" }, /not a media type/],
       [{ default: "true" }, /true or false/],
       [{ default: 1 }, /true or false/],
+      // A media type broken across lines is not one, and a GS1 link type with no term names
+      // nothing in the vocabulary.
+      [{ type: `text/html${String.fromCharCode(10)}; charset=utf-8` }, /not a media type/],
+      [{ linkType: "gs1:" }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: "https://gs1.org/voc/" }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: "pip" }, /not a GS1 vocabulary term or an absolute URI/],
+      // The C1 controls are control characters too; U+0085 is a line break to some parsers.
+      [{ title: `a${String.fromCharCode(0x85)}b` }, /control character/],
+      [{ title: `a${String.fromCharCode(0x9b)}b` }, /control character/],
     ];
     for (const [fields, expected] of refused) {
       expect(() => parseTable(table(fields)), JSON.stringify(fields)).toThrow(expected);
     }
     // And what a table does say is still read.
     for (const fields of [
+      { linkType: "urn:example:rel" },
+      { linkType: "tag:example.com,2026:manual" },
       { hreflang: [] },
       { hreflang: ["en", "fr-CA", "zh-Hant-TW", "es-419"] },
       { type: "text/html" },

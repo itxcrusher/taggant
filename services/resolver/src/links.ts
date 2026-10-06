@@ -86,10 +86,13 @@ export function parseTable(value: unknown): LinkTable {
         }
       }
       // A relation name has to be a URI once expanded, which RFC 9264 requires of any
-      // extension relation. It also stops a link type called `anchor` from overwriting the
-      // subject of the whole linkset, which is what happened when anything was allowed.
+      // extension relation, of any scheme: only http and https were let through, so a `urn:`
+      // or a `tag:` relation was refused under a message calling it something other than an
+      // absolute URI. It also stops a link type called `anchor` from overwriting the subject
+      // of the whole linkset, which is what happened when anything was allowed; and `gs1:`
+      // with no term after it names nothing in the vocabulary.
       const relation = expandLinkType(link.linkType);
-      if (!/^https?:\/\/\S+$/.test(relation)) {
+      if (!/^[A-Za-z][A-Za-z0-9+.-]*:\S+$/.test(relation) || relation === GS1_VOCAB) {
         throw new TypeError(
           `the link type ${JSON.stringify(link.linkType)} under ${path} is not a GS1 vocabulary term or an absolute URI`,
         );
@@ -161,10 +164,10 @@ const LANGUAGE_TAG = /^[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*$/;
 
 /**
  * A media type as RFC 6838 names one, with any parameters after it: `text/html` and
- * `text/html; charset=utf-8`, and not `html`, `text/html;` or a number.
+ * `text/html; charset=utf-8`, and not `html`, `text/html;`, a number, or one broken across lines.
  */
 const MEDIA_TYPE =
-  /^[A-Za-z0-9][\w!#$&^.+-]{0,126}\/[A-Za-z0-9][\w!#$&^.+-]{0,126}(?:\s*;\s*[\w!#$%&'*+.^`|~-]+=(?:[\w!#$%&'*+.^`|~-]+|"[ !#-[\]-~]*"))*$/;
+  /^[A-Za-z0-9][\w!#$&^.+-]{0,126}\/[A-Za-z0-9][\w!#$&^.+-]{0,126}(?:[ \t]*;[ \t]*[\w!#$%&'*+.^`|~-]+=(?:[\w!#$%&'*+.^`|~-]+|"[ !#-[\]-~]*"))*$/;
 
 function isLanguageList(value: unknown): boolean {
   return Array.isArray(value) && value.every((tag) => typeof tag === "string" && LANGUAGE_TAG.test(tag));
@@ -175,13 +178,15 @@ function isLanguageList(value: unknown): boolean {
  *
  * Code points rather than a regular expression, because a regular expression holding
  * control characters is nearly always a mistake and the linter is right to refuse one;
- * this is the single place where they are the subject rather than an accident. U+2028 and
- * U+2029 are in with them: a parser treats them as line breaks and an editor shows nothing.
+ * this is the single place where they are the subject rather than an accident. The C1 controls,
+ * U+0080 to U+009F, are control characters as much as the C0 ones, and U+0085 is a line break to
+ * some parsers; U+2028 and U+2029 are in with them too: a parser treats them as line breaks and
+ * an editor shows nothing.
  */
 function holdsControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index++) {
     const code = value.charCodeAt(index);
-    if (code < 0x20 || code === 0x7f || code === 0x2028 || code === 0x2029) return true;
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029) return true;
   }
   return false;
 }
