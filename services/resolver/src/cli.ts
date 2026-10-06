@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import process, { argv, stderr, stdout } from "node:process";
 import { fileURLToPath } from "node:url";
-import { parseTable } from "./links.js";
+import { parseTableText } from "./links.js";
 import { createResolver } from "./server.js";
 import { stampFor, watchTable } from "./table-source.js";
 
@@ -112,9 +112,9 @@ export async function main(args: string[], started?: (stop: () => Promise<void>)
   // Stamped before it is read, so that a save between the two is a change the watch sees
   // rather than the state it starts from.
   const since = await stampFor(path);
-  let table: ReturnType<typeof parseTable>;
+  let table: ReturnType<typeof parseTableText>;
   try {
-    table = parseTable(JSON.parse(await readFile(path, "utf8")));
+    table = parseTableText(await readFile(path, "utf8"));
   } catch (error) {
     stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return EXIT.cannotRead;
@@ -128,7 +128,7 @@ export async function main(args: string[], started?: (stop: () => Promise<void>)
   let stale: string | null = null;
   const reload = async (): Promise<void> => {
     try {
-      current = parseTable(JSON.parse(await readFile(path, "utf8")));
+      current = parseTableText(await readFile(path, "utf8"));
       stale = null;
       stderr.write(`  reloaded ${Object.keys(current.entries).length} identifiers from ${path}\n`);
     } catch (error) {

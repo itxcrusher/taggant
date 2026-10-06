@@ -26,6 +26,7 @@ import {
   type StoredLink,
   parseDigitalLink,
   parseTable,
+  parseTableText,
   sameLinkType,
 } from "@taggant/resolver";
 import { fromTargetFile } from "@taggant/vision";
@@ -427,7 +428,7 @@ async function writeCode(
 
   let current: LinkTable;
   try {
-    current = parseTable(JSON.parse(await readFile(tablePath, "utf8")));
+    current = parseTableText(await readFile(tablePath, "utf8"));
   } catch (error) {
     // A table that is not there yet is the ordinary case for a first code. A table that
     // is there and unreadable is not, and overwriting it would lose every other code.

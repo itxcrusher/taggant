@@ -19,6 +19,7 @@ export {
   languageMatch,
   parseAcceptLanguage,
   parseTable,
+  parseTableText,
   sameLinkType,
 } from "./links.js";
 export type { Candidate, ChoiceRequest, LinkTable, StoredLink } from "./links.js";

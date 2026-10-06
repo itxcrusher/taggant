@@ -99,7 +99,10 @@ describe("the command line, running", () => {
         version: 1,
         entries: { "/01/09520123456788": [{ href, linkType: "gs1:pip", title: "T", default: true }] },
       });
-    await writeFile(table, links("https://example.com/first"));
+    // Saved with a byte-order mark in front, as some editors save UTF-8: such a table was refused
+    // at start-up and on reload, in a message naming a character nobody can see.
+    const marked = (text: string) => `${String.fromCharCode(0xfeff)}${text}`;
+    await writeFile(table, marked(links("https://example.com/first")));
     const port = await freePort();
     const out: string[] = [];
     const err: string[] = [];
@@ -119,8 +122,11 @@ describe("the command line, running", () => {
       };
       expect(described.resolverRoot).toBe("http://localhost:8080");
       expect((await fetch(`${at}/01/09520123456788`, { redirect: "manual" })).status).toBe(307);
-      await writeFile(table, links("https://example.com/second"));
+      await writeFile(table, marked(links("https://example.com/second")));
       expect(await until(() => err.join("").includes("reloaded")), "the edit was never picked up").toBe(true);
+      expect((await fetch(`${at}/01/09520123456788`, { redirect: "manual" })).headers.get("location")).toBe(
+        "https://example.com/second",
+      );
       // And a save that cannot be read is said on standard error too, not in the event stream.
       await writeFile(table, "{ not json");
       const heard = () => `${err.join("")}${out.join("")}`.includes("could not be read");
@@ -145,8 +151,8 @@ describe("the command line, running", () => {
       .join("")
       .split("\n")
       .filter((line) => line !== "");
-    expect(lines.length, `standard output held ${JSON.stringify(out)}`).toBe(1);
-    expect(JSON.parse(lines[0] ?? "")).toMatchObject({ type: "scan", outcome: "redirect" });
+    expect(lines.length, `standard output held ${JSON.stringify(out)}`).toBe(2);
+    for (const line of lines) expect(JSON.parse(line)).toMatchObject({ type: "scan", outcome: "redirect" });
   });
 
   it("says in a sentence that its port is taken, with an exit code of its own", async () => {

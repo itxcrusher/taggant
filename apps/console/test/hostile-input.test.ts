@@ -449,6 +449,21 @@ describe("registering a code", () => {
     expect(defaults[0]?.href).toBe("https://new.example/here");
   });
 
+  it("reads a table saved with a byte-order mark, and keeps the codes already in it", async () => {
+    // Saved by an editor that puts a mark in front of UTF-8, the table could not be read, and the
+    // code was refused rather than written beside the ones already there.
+    const table = join(root, "marked.json");
+    const existing = { href: "https://a.example/kept", linkType: "gs1:pip", title: "Kept", default: true };
+    await writeFile(
+      table,
+      `${String.fromCharCode(0xfeff)}${JSON.stringify({ version: 1, entries: { "/01/09520123456702": [existing] } })}`,
+    );
+    await registerCode(table, { path: "/01/09520123456788", href: "https://a.example/new", title: "New" });
+    const after = JSON.parse(await readFile(table, "utf8"));
+    expect(Object.keys(after.entries).sort()).toEqual(["/01/09520123456702", "/01/09520123456788"]);
+    expect(after.entries["/01/09520123456702"]).toEqual([existing]);
+  });
+
   it("adds rather than replaces when the code carried nothing of that kind", async () => {
     const table = join(root, "fresh.json");
     const written = await registerCode(table, {

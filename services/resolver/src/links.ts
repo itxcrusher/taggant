@@ -38,6 +38,17 @@ export function emptyTable(): LinkTable {
   return { version: 1, entries: {} };
 }
 
+/**
+ * The table as it is written to disk, read from its text.
+ *
+ * A byte-order mark in front is dropped, as RFC 8259 lets a reader do: an editor that saves UTF-8
+ * with one wrote a table the resolver would not start on, and the message named a character
+ * nobody can see.
+ */
+export function parseTableText(text: string): LinkTable {
+  return parseTable(JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text));
+}
+
 export function parseTable(value: unknown): LinkTable {
   if (typeof value !== "object" || value === null) throw new TypeError("the link table must be an object");
   const table = value as Partial<LinkTable>;
@@ -172,11 +183,19 @@ export function parseTable(value: unknown): LinkTable {
 const LANGUAGE_TAG = /^[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*$/;
 
 /**
- * A media type as RFC 6838 names one, with any parameters after it: `text/html` and
- * `text/html; charset=utf-8`, and not `html`, `text/html;`, a number, or one broken across lines.
+ * A media type as RFC 6838 names one, with parameters after it as RFC 9110 writes them: `text/html`,
+ * `text/html; charset=utf-8`, `text/html;`, whose parameter is empty, and a quoted value holding a
+ * tab or an escaped character; and not `html`, a number, or one broken across lines. The last three
+ * of those were refused here, so a type RFC 9110 allows kept a resolver from starting.
+ *
+ * Each space has one place it can belong. Were the spaces after a `;` taken whether a parameter
+ * followed or not, those between two semicolons could belong to either, and a value of ` ; ` sixteen
+ * times and an `x` would take a second to refuse, eighteen times eight seconds, and twenty a minute
+ * and a half, measured, while the table is checked before the resolver starts. Spaces after a `;`
+ * belong to the parameter that follows them, or to the next `;`, or end the value if a `;` ends it.
  */
 const MEDIA_TYPE =
-  /^[A-Za-z0-9][\w!#$&^.+-]{0,126}\/[A-Za-z0-9][\w!#$&^.+-]{0,126}(?:[ \t]*;[ \t]*[\w!#$%&'*+.^`|~-]+=(?:[\w!#$%&'*+.^`|~-]+|"[ !#-[\]-~]*"))*$/;
+  /^[A-Za-z0-9][\w!#$&^.+-]{0,126}\/[A-Za-z0-9][\w!#$&^.+-]{0,126}(?:[ \t]*;(?:[ \t]*[\w!#$%&'*+.^`|~-]+=(?:[\w!#$%&'*+.^`|~-]+|"(?:[\t !#-[\]-~]|\\[\t -~])*"))?)*(?:(?<=;)[ \t]+)?$/;
 
 function isLanguageList(value: unknown): boolean {
   return Array.isArray(value) && value.every((tag) => typeof tag === "string" && LANGUAGE_TAG.test(tag));

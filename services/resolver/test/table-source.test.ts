@@ -2,7 +2,7 @@ import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { parseTable } from "../src/links.js";
+import { parseTable, parseTableText } from "../src/links.js";
 import { stampFor, watchTable } from "../src/table-source.js";
 
 /** Every folder a test makes, removed after it, or each run leaves one per test behind. */
@@ -205,6 +205,34 @@ describe("noticing that the table changed", () => {
 });
 
 describe("what a table may not say", () => {
+  it("refuses a media type in time however many empty parameters it holds", () => {
+    // Spaces that can belong to two places make a pattern's time grow with every ` ; ` added: a
+    // second to refuse sixteen of them and an `x`, and the table is checked before the resolver
+    // starts. The first value takes the measured second where the spaces are ambiguous.
+    const link = { href: "https://a.example/", linkType: "gs1:pip", title: "A", default: true };
+    for (const type of [`text/html${" ; ".repeat(16)}x`, `text/html${" ; ".repeat(100_000)}x`]) {
+      const started = performance.now();
+      expect(() =>
+        parseTable({ version: 1, entries: { "/01/09520123456788": [{ ...link, type }] } }),
+      ).toThrow(/not a media type/);
+      expect(performance.now() - started, `${type.length} characters`).toBeLessThan(250);
+    }
+  });
+
+  it("reads a table saved with a byte-order mark as one without it", () => {
+    // RFC 8259 lets a reader drop the mark, and an editor that saves UTF-8 with one in front wrote
+    // a table the resolver would not start on, naming a character nobody can see.
+    const text = JSON.stringify({
+      version: 1,
+      entries: {
+        "/01/09520123456788": [
+          { href: "https://a.example/", linkType: "gs1:pip", title: "A", default: true },
+        ],
+      },
+    });
+    expect(parseTableText(`${String.fromCharCode(0xfeff)}${text}`)).toEqual(parseTableText(text));
+  });
+
   it("refuses two default links of one type under one identifier", () => {
     // Both were accepted, the resolver followed the first, and the linkset published both
     // as `gs1:defaultLink`, so a client reading the linkset and a client following a plain
@@ -265,7 +293,9 @@ describe("what a table may not say", () => {
       [{ type: 44 }, /not a media type/],
       [{ type: "" }, /not a media type/],
       [{ type: "html" }, /not a media type/],
-      [{ type: "text/html;" }, /not a media type/],
+      // Spaces only where the grammar has them, after a `;`: not after the type or a parameter.
+      [{ type: "text/html  " }, /not a media type/],
+      [{ type: "text/html; a=b " }, /not a media type/],
       [{ default: "true" }, /true or false/],
       [{ default: 1 }, /true or false/],
       // A media type broken across lines is not one, and a GS1 link type with no term names
@@ -300,6 +330,12 @@ describe("what a table may not say", () => {
       { type: "text/html; charset=utf-8" },
       { type: 'text/html; charset="utf-8"' },
       { type: "application/ld+json" },
+      // As RFC 9110 writes a media type: an empty parameter, an escaped quote, and a tab inside a
+      // quoted value. Each kept a resolver from starting.
+      { type: "text/html;" },
+      { type: 'text/html; title="a\\"b"' },
+      { type: `text/html; title="a${String.fromCharCode(9)}b"` },
+      { type: "text/html; " },
       { default: false },
     ]) {
       expect(() => parseTable(table(fields)), JSON.stringify(fields)).not.toThrow();
