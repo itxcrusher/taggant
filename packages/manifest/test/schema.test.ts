@@ -30,12 +30,13 @@ describe("manifest schema", () => {
       expect(found, `the format document has no row for ${field}`).toBeDefined();
       return found ?? "";
     };
-    // The number and not a longer one starting with it: "at most 640" contains "at most 64".
+    // The number and not a longer one starting with it: "at most 640" contains "at most 64", and
+    // a word boundary after it still let "at most 64,000" and "at most 32.5" through.
     expect(row("targets"), "the targets row does not say how many are allowed").toMatch(
-      new RegExp(`at most ${schema.properties.targets.maxItems}\\b`),
+      new RegExp(`at most ${schema.properties.targets.maxItems}(?!\\d|[.,]\\d)`),
     );
     expect(row("content"), "the content row does not say how many pieces are allowed").toMatch(
-      new RegExp(`at most ${schema.$defs.target.properties.content.maxItems}\\b`),
+      new RegExp(`at most ${schema.$defs.target.properties.content.maxItems}(?!\\d|[.,]\\d)`),
     );
   });
 

@@ -114,6 +114,30 @@ describe("the third-party licence inventory", () => {
       (row) => !installed.has(row) && !platforms.has(row.slice(0, row.lastIndexOf(" "))),
     );
     expect(gone, `named in the inventory and not installed: ${gone.join(", ")}`).toEqual([]);
+
+    // The platform rows describe packages a machine does not install, so the walk cannot check
+    // their versions: a row left at an old version passed. The lockfile names every one of them,
+    // installed here or not, so each row has to name a version the lockfile holds for its family,
+    // and each family and version the lockfile holds has to have its row.
+    const lock = await readFile(join(REPO, "pnpm-lock.yaml"), "utf8");
+    const locked = new Set(
+      [...lock.matchAll(/^ {2}'(@img\/sharp-[^@']+)@(\d[^':]*)':\r?$/gm)].map(
+        ([, name, version]) => `${familyOf(name ?? "")} ${version}`,
+      ),
+    );
+    expect(
+      locked.size,
+      "no platform package was found in the lockfile, so this checked nothing",
+    ).toBeGreaterThan(2);
+    const platformRows = [...named].filter((row) => platforms.has(row.slice(0, row.lastIndexOf(" "))));
+    expect(
+      platformRows.filter((row) => !locked.has(row)),
+      "platform rows at a version the lockfile does not hold",
+    ).toEqual([]);
+    expect(
+      [...locked].filter((row) => !named.has(row)),
+      "platform packages the lockfile holds with no row",
+    ).toEqual([]);
   }, 120_000);
 
   it("is declared in every package's own manifest, not only in the root file", async () => {
