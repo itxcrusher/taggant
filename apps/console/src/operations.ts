@@ -280,6 +280,13 @@ async function publishOnce(
           rebuildAt = report.scanDistanceMm;
         }
       } catch {
+        // One the runtime cannot read can still carry its report, and the report the distance
+        // it was compiled for: a file damaged in its features, or written in a format this build
+        // does not read, kept the report and was rebuilt at the default, so the 600 mm chosen
+        // was gone from disk and a piece refused there was published at 150.
+        const report =
+          typeof stored === "object" && stored !== null ? (stored as { report?: unknown }).report : undefined;
+        rebuildAt = distanceBehind(report) ?? options.scanDistanceMm;
         stored = undefined;
       }
     }

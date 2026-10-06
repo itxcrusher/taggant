@@ -510,10 +510,12 @@ export function createConsole(options: ConsoleOptions): Server {
             view.tooSmall = `This target is set to print ${target.physicalWidthMm} mm wide and the compile says it needs at least ${needed} mm at that reading distance. Printed as it stands it will not be recognised.`;
           }
         }
-        if (view.staleReport !== undefined && view.staleReport !== "unreadable") {
+        if (view.staleReport !== undefined) {
           // Compiling again from the card starts at the distance a publish would rebuild at: the
           // report's own, or the one an older report's figures give back. Offered the default, a
           // piece compiled for 600 mm was compiled again at 150, and the distance chosen was gone.
+          // A file the runtime cannot read is no exception when its report survived: the publish
+          // rebuilds it at that report's distance, and the card offered 150 beside it.
           view.scanDistanceMm = distanceBehind(report) ?? undefined;
         }
       }

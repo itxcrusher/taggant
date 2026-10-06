@@ -130,7 +130,9 @@ describe("a target on disk the runtime cannot read", () => {
     const media = await workspace.storeFile(created.id, "media", "overlay.svg", await read(overlay));
     await workspace.save(created.id, {
       ...created.manifest,
-      targets: [{ id: "front", source, physicalWidthMm: 148, content: [{ type: "image", src: media }] }],
+      // Wide enough for 350 mm, where this artwork needs 270. Declared 148 this passed only because
+      // the rebuild fell back to 150 mm, the defect the test after this one is about.
+      targets: [{ id: "front", source, physicalWidthMm: 300, content: [{ type: "image", src: media }] }],
     });
 
     const outcome = await compile(workspace, await workspace.read(created.id), "front", 350);
@@ -142,9 +144,67 @@ describe("a target on disk the runtime cannot read", () => {
     const out = join(root, "republished");
     const published = await publish(workspace, await workspace.read(created.id), out, { runtimeDir });
     expect(published.compiled).toHaveLength(1);
+    expect(published.compiled[0]?.report.scanDistanceMm).toBe(350);
     const shipped = JSON.parse(await read(join(out, "targets", "front.json"), "utf8"));
     expect(shipped.formatVersion).toBe(2);
   }, 60_000);
+
+  it("is rebuilt at the distance its report was compiled for, when the report survived", async () => {
+    // A file the runtime cannot read can still carry its report, and the report its distance. One
+    // in a later format, or holding a descriptor word past 32 bits, kept a report compiled for
+    // 600 mm and was rebuilt at 150, where this artwork needs 116 mm: a piece declared 120 mm wide
+    // and refused at 600 was published, and the 600 chosen was gone from disk. Its card offered 150.
+    const { compile, publish } = await import("../src/operations.js");
+    const { readFile: read, writeFile: write } = await import("node:fs/promises");
+    const artwork = fileURLToPath(new URL("../../../examples/postcard/artwork.png", import.meta.url));
+    const overlay = fileURLToPath(new URL("../../../examples/postcard/overlay.svg", import.meta.url));
+    const runtimeDir = fileURLToPath(new URL("../../../packages/runtime/dist", import.meta.url));
+
+    const created = await workspace.create("late-format", "Late format");
+    const source = await workspace.storeFile(created.id, "artwork", "artwork.png", await read(artwork));
+    const media = await workspace.storeFile(created.id, "media", "overlay.svg", await read(overlay));
+    await workspace.save(created.id, {
+      ...created.manifest,
+      targets: [{ id: "front", source, physicalWidthMm: 120, content: [{ type: "image", src: media }] }],
+    });
+    const outcome = await compile(workspace, await workspace.read(created.id), "front", 600);
+    const path = join(workspace.directoryFor(created.id), outcome.path);
+
+    type Stored = { features: Array<{ descriptor: number[] }>; report: { scanDistanceMm: number } };
+    const unreadable = "cannot be read as a target";
+    const damaged: Array<[string, (stored: Stored) => unknown, string]> = [
+      ["a later format", (stored) => ({ ...stored, formatVersion: 3 }), unreadable],
+      [
+        "a descriptor word past 32 bits",
+        (stored) => {
+          const [first, ...rest] = stored.features;
+          return {
+            ...stored,
+            features: [{ ...first, descriptor: [2 ** 32, ...(first?.descriptor.slice(1) ?? [])] }, ...rest],
+          };
+        },
+        unreadable,
+      ],
+    ];
+    for (const [label, damage, cardSays] of damaged) {
+      const stored = JSON.parse(await read(path, "utf8")) as Stored;
+      expect(stored.report.scanDistanceMm, label).toBe(600);
+      await write(path, JSON.stringify(damage(stored)));
+      const card = await (await fetch(`${origin}/e/late-format`)).text();
+      expect(card, label).toContain(cardSays);
+      expect(card, label).toMatch(/name="scanDistanceMm"[^>]*value="600"/);
+
+      const rebuiltAt: number[] = [];
+      await expect(
+        publish(workspace, await workspace.read(created.id), join(root, "late-format-out"), {
+          runtimeDir,
+          onRebuild: (_id: string, at: number) => rebuiltAt.push(at),
+        }),
+        label,
+      ).rejects.toThrow(/declared 120 mm wide.* at 600 mm/);
+      expect(rebuiltAt, label).toEqual([600]);
+    }
+  }, 240_000);
 });
 
 describe("a target on disk from a build whose print widths were wrong", () => {
