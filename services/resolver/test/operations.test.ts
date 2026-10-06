@@ -254,11 +254,14 @@ describe("what a scan event may not carry", () => {
     await new Promise<void>((resolve) => bilingual.listen(0, "127.0.0.1", resolve));
     const at = `http://127.0.0.1:${(bilingual.address() as AddressInfo).port}`;
     try {
-      const cases: [string, string, string][] = [
+      const cases: [string, string, string | undefined][] = [
         // header, where it goes, what is recorded
         ["en;q=0, fr", "https://example.com/both", "fr"],
         ["en;q=0.5, fr", "https://example.com/both", "fr"],
         ["de", "https://example.com/deutsch", "de"],
+        // Refused and nothing else asked: the default is the choice, and a tag the header said
+        // was not acceptable is not recorded as the reason, though it is on the link chosen.
+        ["en;q=0", "https://example.com/both", undefined],
       ];
       for (const [header, target, language] of cases) {
         recorded.length = 0;
