@@ -744,7 +744,9 @@ describe("an internal failure said as a sentence", () => {
     // Rebuilt at the distance on record it is refused, and the refusal says what was compiled on
     // the way, after one stop where a message ending in its own had printed two.
     const { post, told, workspace } = await drive();
-    const postcard = await readFile(fileURLToPath(new URL("../../../examples/postcard/artwork.png", import.meta.url)));
+    const postcard = await readFile(
+      fileURLToPath(new URL("../../../examples/postcard/artwork.png", import.meta.url)),
+    );
     const blank = await sharp({ create: { width: 600, height: 400, channels: 3, background: "#ffffff" } })
       .png()
       .toBuffer();
@@ -785,7 +787,9 @@ describe("an internal failure said as a sentence", () => {
     const plain = (await workspace.readTarget("plain", "front")) as Record<string, unknown>;
     await workspace.writeTarget("plain", "front", { ...plain, report: far.report });
     const nothing = await told(await post("/e/plain/publish", ""));
-    expect(nothing).toContain("will not change that; artwork with more detail will. On the way there, front at 600 mm");
+    expect(nothing).toContain(
+      "will not change that; artwork with more detail will. On the way there, front at 600 mm",
+    );
     expect(nothing).not.toContain("..");
   }, 240_000);
 
