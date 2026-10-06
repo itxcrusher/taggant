@@ -31,7 +31,10 @@ export interface ScanEvent {
   identifier: string;
   /** What the client got. */
   outcome: "redirect" | "linkset" | "unresolved";
-  /** The link type asked for, if the request named one. */
+  /**
+   * The link type asked for, if the request named one that the identifier's links have or that
+   * is a term of the GS1 vocabulary. Anything else is left out, being a caller's own text.
+   */
   requested?: string;
   /** Where the client was sent, for a redirect. */
   target?: string;

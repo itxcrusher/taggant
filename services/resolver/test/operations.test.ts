@@ -170,6 +170,60 @@ describe("what a scan event may not carry", () => {
     }
   });
 
+  it("records the link type asked for only when the identifier's links or the GS1 vocabulary name it", async () => {
+    // The type asked for is the caller's own text, and it went into the event whatever it was: an
+    // email address as readily as a type, and fifteen kilobytes as one line of the log.
+    const cases: [string, number, string | undefined][] = [
+      // query, status, what is recorded as the type asked for
+      ["?linkType=gs1:pip", 307, "gs1:pip"],
+      ["?linkType=https://gs1.org/voc/pip", 307, "https://gs1.org/voc/pip"],
+      ["?linkType=gs1:recipeInfo", 307, "gs1:recipeInfo"],
+      // A term of the vocabulary this identifier has no link of: worth counting, and nobody's.
+      ["?linkType=gs1:certificationInfo", 404, "gs1:certificationInfo"],
+      ["?linkType=alice%40example.com", 404, undefined],
+      [`?linkType=${"x".repeat(4000)}`, 404, undefined],
+      ["?linkType=", 307, undefined],
+    ];
+    for (const [query, status, recorded] of cases) {
+      events.length = 0;
+      const response = await get(`/01/09520123456788${query}`);
+      expect(response.status, query.slice(0, 40)).toBe(status);
+      const scan = events.find((event) => event.type === "scan");
+      expect(scan, `${query.slice(0, 40)} recorded no scan`).toBeDefined();
+      expect(scan?.type === "scan" ? scan.requested : undefined, query.slice(0, 40)).toBe(recorded);
+    }
+
+    // And a type outside the vocabulary that this identifier's links have, which is the table's
+    // own word, beside one they do not have, which is the caller's.
+    const logged: Event[] = [];
+    const own = createResolver({
+      table: parseTable({
+        version: 1,
+        entries: {
+          "/01/09520123456788": [
+            { href: "https://example.com/", linkType: "urn:example:rel", title: "T", default: true },
+          ],
+        },
+      }),
+      events: (event) => logged.push(event),
+    });
+    await new Promise<void>((resolve) => own.listen(0, "127.0.0.1", resolve));
+    const at = `http://127.0.0.1:${(own.address() as AddressInfo).port}/01/09520123456788`;
+    try {
+      for (const [type, recorded] of [
+        ["urn:example:rel", "urn:example:rel"],
+        ["urn:example:other", undefined],
+      ] as const) {
+        logged.length = 0;
+        await fetch(`${at}?linkType=${encodeURIComponent(type)}`, { redirect: "manual" });
+        const scan = logged.find((event) => event.type === "scan");
+        expect(scan?.type === "scan" ? scan.requested : "no scan", type).toBe(recorded);
+      }
+    } finally {
+      await new Promise<void>((resolve) => own.close(() => resolve()));
+    }
+  });
+
   it("records the tag the request ranked first, never one it refused, whatever form the type is in", async () => {
     // A link can be for more than one language, and then which of its tags is recorded turns
     // on how the header is read: in the order it was written, with `q=0` kept, `en;q=0, fr`
@@ -498,14 +552,25 @@ describe("what a stranger can put in a header", () => {
       "http://a:99999/01/09520123456788",
       "http://exa%00mple/01/09520123456788",
       "https://[::1/01/09520123456788",
+      // A target in absolute form can carry a user name and password, a query and a fragment,
+      // and none of them is logged: this was, whole, until only the query was dropped.
+      "http://alice%40example.com:secret@[/01/09520123456788?email=bob%40example.com#carol",
+      // And a fragment with no query before it, which cutting at the query alone would keep.
+      "http://[/01/09520123456788#dave",
     ];
     for (const target of targets) {
       expect(await statusOf(target), target).toContain(" 400 ");
     }
     expect(await counter("taggant_bad_requests_total")).toBe(bad + targets.length);
     expect(await counter("taggant_server_errors_total")).toBe(faults);
-    // Each one recorded as a problem.
-    expect(events.filter((event) => event.type === "problem").length).toBe(targets.length);
+    // Each one recorded as a problem, with the target as asked and nothing of the caller's.
+    const problems = events.filter((event) => event.type === "problem");
+    expect(problems.length).toBe(targets.length);
+    expect(problems.slice(-2).map((event) => (event.type === "problem" ? event.path : ""))).toEqual([
+      "http://[/01/09520123456788",
+      "http://[/01/09520123456788",
+    ]);
+    expect(JSON.stringify(problems)).not.toMatch(/alice|secret|bob|carol|dave/);
     // And a well formed one in absolute form is answered from its path, as it was.
     expect(await statusOf("http://id.example.com/01/09520123456788")).toContain(" 307 ");
   });

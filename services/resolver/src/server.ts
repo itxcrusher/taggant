@@ -92,7 +92,7 @@ export function createResolver(options: ResolverOptions): Server {
         type: "problem",
         at: new Date().toISOString(),
         reason: `unhandled: ${error instanceof Error ? error.message : String(error)}`,
-        path: withoutQuery(request.url),
+        path: loggable(request.url),
         status: 500,
       });
       send(response, 500, { "content-type": "text/plain" }, "the resolver could not answer that\n");
@@ -101,16 +101,22 @@ export function createResolver(options: ResolverOptions): Server {
 }
 
 /**
- * The request target up to its query, for a problem event.
+ * The request target as a problem event may carry it: without its query, its fragment, or the
+ * user name and password a target in absolute form can hold.
  *
- * The query is whatever the caller wrote, and a printed code can carry anything in one, an
- * email address included, so it stays out of the log here as it does out of a scan.
+ * Each is whatever the caller wrote, and a printed code can carry anything in one, an email
+ * address or a password included, so none of it goes in the log, as none of it goes in a scan.
+ * Only the query was dropped, and `http://alice%40example.com:secret@[/01/...` was logged whole.
  */
-function withoutQuery(target: string | undefined): string {
+function loggable(target: string | undefined): string {
   const raw = target ?? "";
-  const query = raw.indexOf("?");
-  return query === -1 ? raw : raw.slice(0, query);
+  const cut = raw.search(/[?#]/);
+  const kept = cut === -1 ? raw : raw.slice(0, cut);
+  return kept.replace(/^([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/]*@/, "$1");
 }
+
+/** A term of the GS1 Web vocabulary, written either way, and nothing longer than one. */
+const VOCABULARY_TERM = /^(?:gs1:|https:\/\/gs1\.org\/voc\/)[A-Za-z][A-Za-z0-9]{0,63}$/;
 
 function currentTable(options: ResolverOptions): LinkTable {
   return typeof options.table === "function" ? options.table() : options.table;
@@ -153,7 +159,7 @@ function handle(
       type: "problem",
       at: new Date().toISOString(),
       reason: message,
-      path: withoutQuery(request.url),
+      path: loggable(request.url),
       status: 400,
     });
     send(response, 400, { ...cors, "content-type": "text/plain" }, `${message}\n`);
@@ -294,6 +300,15 @@ function handle(
   }
 
   const requested = url.searchParams.get("linkType") ?? undefined;
+  // In the events, the type asked for only when this identifier's links have it or it is a term
+  // of the GS1 vocabulary. Anything else is a caller's text and can be anything: an email address
+  // went into the log as the type asked for, and fifteen kilobytes of it became one line.
+  const recorded =
+    requested !== undefined &&
+    (VOCABULARY_TERM.test(requested) ||
+      candidates.some((candidate) => sameLinkType(candidate.linkType, requested)))
+      ? { requested }
+      : {};
   const chosen = chooseLink(candidates, {
     linkType: requested,
     acceptLanguage: request.headers["accept-language"],
@@ -304,7 +319,7 @@ function handle(
       at: new Date().toISOString(),
       identifier: link.canonicalPath,
       outcome: "unresolved",
-      ...(requested === undefined ? {} : { requested }),
+      ...recorded,
       tookMs: took(),
     });
     const reason = requested
@@ -339,7 +354,7 @@ function handle(
     at: new Date().toISOString(),
     identifier: link.canonicalPath,
     outcome: "redirect",
-    ...(requested === undefined ? {} : { requested }),
+    ...recorded,
     target: chosen.href,
     ...(decided !== undefined && sameType.length > 1 ? { language: decided } : {}),
     tookMs: took(),
