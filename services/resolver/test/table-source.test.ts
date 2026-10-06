@@ -304,6 +304,21 @@ describe("what a table may not say", () => {
       [{ linkType: "gs1:" }, /not a GS1 vocabulary term or an absolute URI/],
       [{ linkType: "https://gs1.org/voc/" }, /not a GS1 vocabulary term or an absolute URI/],
       [{ linkType: "pip" }, /not a GS1 vocabulary term or an absolute URI/],
+      // Characters a URI cannot hold, and GS1 terms that are not words: each was accepted and
+      // published as a relation name.
+      [{ linkType: "urn:a<b>" }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: 'tag:x"y' }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: `urn:${String.fromCharCode(0xe9)}` }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: "urn:a%zz" }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: "gs1:/" }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: "gs1:#" }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: "gs1:<pip>" }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: "https://gs1.org/voc/pip/x" }, /not a GS1 vocabulary term or an absolute URI/],
+      // A field this format does not have, which was ignored: a misspelled default set none, and
+      // every plain scan of the code answered that no default was set.
+      [{ Default: true }, /does not have/],
+      [{ hrefLang: ["fr"] }, /does not have/],
+      [{ note: "for the spring range" }, /does not have/],
       // The C1 controls are control characters too; U+0085 is a line break to some parsers.
       [{ title: `a${String.fromCharCode(0x85)}b` }, /control character/],
       [{ title: `a${String.fromCharCode(0x9b)}b` }, /control character/],
@@ -336,6 +351,9 @@ describe("what a table may not say", () => {
       { type: 'text/html; title="a\\"b"' },
       { type: `text/html; title="a${String.fromCharCode(9)}b"` },
       { type: "text/html; " },
+      { linkType: "gs1:recipeInfo" },
+      { linkType: "https://example.com/rels/manual?v=2#top" },
+      { linkType: "urn:example:a%20b" },
       { default: false },
     ]) {
       expect(() => parseTable(table(fields)), JSON.stringify(fields)).not.toThrow();

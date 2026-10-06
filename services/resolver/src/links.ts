@@ -49,6 +49,16 @@ export function parseTableText(text: string): LinkTable {
   return parseTable(JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text));
 }
 
+/** The fields a link holds. A misspelled one was accepted and ignored. */
+const LINK_FIELDS: ReadonlySet<string> = new Set([
+  "href",
+  "linkType",
+  "title",
+  "hreflang",
+  "type",
+  "default",
+]);
+
 export function parseTable(value: unknown): LinkTable {
   if (typeof value !== "object" || value === null) throw new TypeError("the link table must be an object");
   const table = value as Partial<LinkTable>;
@@ -96,14 +106,27 @@ export function parseTable(value: unknown): LinkTable {
           throw new TypeError(`a link under ${path} has no ${field}`);
         }
       }
+      // Every field one this format has. A misspelled one was accepted and ignored: with
+      // `"Default": true` the resolver started, readiness said ready, and every plain scan of the
+      // code answered that no default was set; with `"hrefLang"` a French phone got the English link.
+      const unknown = Object.keys(link).find((field) => !LINK_FIELDS.has(field));
+      if (unknown !== undefined) {
+        throw new TypeError(
+          `a link under ${path} has a field called ${JSON.stringify(unknown)}, which this table does not have: a link holds ${[...LINK_FIELDS].join(", ")}`,
+        );
+      }
       // A relation name has to be a URI once expanded, which RFC 9264 requires of any
       // extension relation, of any scheme: only http and https were let through, so a `urn:`
       // or a `tag:` relation was refused under a message calling it something other than an
       // absolute URI. It also stops a link type called `anchor` from overwriting the subject
-      // of the whole linkset, which is what happened when anything was allowed; and `gs1:`
-      // with no term after it names nothing in the vocabulary.
+      // of the whole linkset, which is what happened when anything was allowed. A URI is held
+      // to the characters RFC 3986 lets one hold, and a GS1 term to being a word, so `gs1:` with
+      // nothing after it names nothing in the vocabulary: `urn:a<b>`, `tag:x"y`, a URN holding an
+      // accented letter, `gs1:/`, `gs1:#` and `gs1:<pip>` were each accepted and published as a
+      // relation name.
       const relation = expandLinkType(link.linkType);
-      if (!/^[A-Za-z][A-Za-z0-9+.-]*:\S+$/.test(relation) || relation === GS1_VOCAB) {
+      const term = relation.startsWith(GS1_VOCAB) ? relation.slice(GS1_VOCAB.length) : null;
+      if (term === null ? !ABSOLUTE_URI.test(relation) : !GS1_TERM.test(term)) {
         throw new TypeError(
           `the link type ${JSON.stringify(link.linkType)} under ${path} is not a GS1 vocabulary term or an absolute URI`,
         );
@@ -196,6 +219,16 @@ const LANGUAGE_TAG = /^[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*$/;
  */
 const MEDIA_TYPE =
   /^[A-Za-z0-9][\w!#$&^.+-]{0,126}\/[A-Za-z0-9][\w!#$&^.+-]{0,126}(?:[ \t]*;(?:[ \t]*[\w!#$%&'*+.^`|~-]+=(?:[\w!#$%&'*+.^`|~-]+|"(?:[\t !#-[\]-~]|\\[\t -~])*"))?)*(?:(?<=;)[ \t]+)?$/;
+
+/** A term of the GS1 vocabulary is a word: a letter, then letters and digits. */
+const GS1_TERM = /^[A-Za-z][A-Za-z0-9]*$/;
+
+/**
+ * An absolute URI in the characters RFC 3986 allows: a scheme, a colon, and then unreserved and
+ * reserved characters and percent escapes. Its parts are not taken apart, because a relation name
+ * is compared and published as written and never followed.
+ */
+const ABSOLUTE_URI = /^[A-Za-z][A-Za-z0-9+.-]*:(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/?#[\]]|%[0-9A-Fa-f]{2})+$/;
 
 function isLanguageList(value: unknown): boolean {
   return Array.isArray(value) && value.every((tag) => typeof tag === "string" && LANGUAGE_TAG.test(tag));
