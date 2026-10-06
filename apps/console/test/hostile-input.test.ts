@@ -245,7 +245,10 @@ describe("a target on disk with no report at all", () => {
 
     // And a report written for another target, which the gate refuses in terms of that target: it
     // went to the gate as it stood, and the operator was told the other artwork's width. Rebuilt
-    // from this target's own artwork, it publishes on its own report.
+    // from this target's own artwork, it publishes on its own report, and at the distance the
+    // report on record was compiled for: rebuilt at the default instead, a piece compiled for a
+    // longer reading distance, and refused there, passed at the shorter one and was published.
+    await compile(workspace, await workspace.read(created.id), "front", 190);
     const own = JSON.parse(await read(path, "utf8"));
     const [first, ...rest] = own.features as Array<{ descriptor: number[] }>;
     await write(
@@ -265,9 +268,9 @@ describe("a target on disk with no report at all", () => {
     const elsewhere = join(root, "another-out");
     await publish(workspace, await workspace.read(created.id), elsewhere, {
       runtimeDir,
-      onRebuild: (id: string) => again.push(id),
+      onRebuild: (id: string, at: number) => again.push(`${id} at ${at} mm`),
     });
-    expect(again, "another target's report went to the gate as it stood").toEqual(["front"]);
+    expect(again, "another target's report went to the gate as it stood").toEqual(["front at 190 mm"]);
     const republished = JSON.parse(await read(join(elsewhere, "targets", "front.json"), "utf8"));
     expect(republished.report?.pass).toBe(true);
   }, 240_000);

@@ -13,7 +13,13 @@
 import { randomUUID } from "node:crypto";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { MIMEType } from "node:util";
-import { type Report, carriesItsDistance, describesTarget, isCurrentReport } from "@taggant/compiler";
+import {
+  type Report,
+  carriesItsDistance,
+  describesTarget,
+  distanceBehind,
+  isCurrentReport,
+} from "@taggant/compiler";
 import { manifestSchema } from "@taggant/manifest";
 import { fromTargetFile } from "@taggant/vision";
 import { DEFAULT_SCAN_DISTANCE_MM, bundleDirFor, compile, publish, registerCode } from "./operations.js";
@@ -493,8 +499,8 @@ export function createConsole(options: ConsoleOptions): Server {
         } else if (report !== undefined && !isCurrentReport(report)) {
           view.staleReport = !isObject(report) ? "broken" : carriesItsDistance(report) ? "verdict" : "width";
         } else if (report !== undefined && !describesTarget(compiled)) {
-          // A report this build wrote, for another target: the publish gate refuses it, and its
-          // verdict and width are another artwork's, so none of it is shown as this one's.
+          // A report this build wrote that does not describe this target file: the publish gate
+          // refuses it, and its verdict and width are not this artwork's, so none of it is shown.
           view.staleReport = "another";
         } else if (report !== undefined) {
           view.report = report as Report;
@@ -503,6 +509,12 @@ export function createConsole(options: ConsoleOptions): Server {
             // The one thing a person can get wrong here that a press run makes permanent.
             view.tooSmall = `This target is set to print ${target.physicalWidthMm} mm wide and the compile says it needs at least ${needed} mm at that reading distance. Printed as it stands it will not be recognised.`;
           }
+        }
+        if (view.staleReport !== undefined && view.staleReport !== "unreadable") {
+          // Compiling again from the card starts at the distance a publish would rebuild at: the
+          // report's own, or the one an older report's figures give back. Offered the default, a
+          // piece compiled for 600 mm was compiled again at 150, and the distance chosen was gone.
+          view.scanDistanceMm = distanceBehind(report) ?? undefined;
         }
       }
       views.push(view);
@@ -729,7 +741,9 @@ export function createConsole(options: ConsoleOptions): Server {
         // the operator did not type, and nothing was published, so the two facts have to
         // arrive together or the workspace has quietly changed under them.
         if (rebuilt.length === 0) throw error;
-        const why = error instanceof Error ? error.message : String(error);
+        // Without its closing stop, which the sentence after it supplies: a message that ended in
+        // one was printed with two.
+        const why = (error instanceof Error ? error.message : String(error)).replace(/\.+$/, "");
         throw new WorkspaceError(`${why}. On the way there, ${rebuilt.join(", ")} was compiled again.`);
       }
       // A publish can rebuild a target on the way past: one the runtime cannot read, or one

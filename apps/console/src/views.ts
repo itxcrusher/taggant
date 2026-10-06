@@ -258,7 +258,7 @@ export function experiencePage(view: ExperienceView): string {
             : target.staleReport === "verdict"
               ? `<div class="notice gap-md"><p>Compiled by an earlier build, or changed since, and this build does not stand behind its verdict. Compile it again to see what this artwork needs.</p></div>`
               : target.staleReport === "another"
-                ? `<div class="notice gap-md"><p>The compiled target carries the print readiness report of another target, so its verdict and width are not this artwork's. Compile it again to see what this artwork needs.</p></div>`
+                ? `<div class="notice gap-md"><p>The compiled target carries a print readiness report that does not describe it: one written for another target, or for this one before the file was changed. Its verdict and width are not this artwork's. Compile it again to see what this artwork needs.</p></div>`
                 : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
   }
   ${target.tooSmall ? `<div class="notice bad gap-md"><p>${esc(target.tooSmall)}</p></div>` : ""}

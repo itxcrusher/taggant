@@ -696,7 +696,7 @@ describe("an internal failure said as a sentence", () => {
       report: good,
     });
     body = await (await fetch(`http://127.0.0.1:${port}/e/kept`)).text();
-    expect(body, "no features").toContain("carries the print readiness report of another target");
+    expect(body, "no features").toContain("carries a print readiness report that does not describe it");
     expect(body, "no features").not.toContain("ready for press");
     const folder = join(workspace.root, "kept", "targets");
     for (const name of await readdir(folder)) await writeFile(join(folder, name), "{ this is not json");
@@ -715,7 +715,7 @@ describe("an internal failure said as a sentence", () => {
     const page = async () => (await fetch(`http://127.0.0.1:${port}/e/swapped`)).text();
     const own = await page();
     expect(own).toContain("Print it at least");
-    expect(own).not.toContain("report of another target");
+    expect(own).not.toContain("does not describe it");
     const stored = (await workspace.readTarget("swapped", "front")) as {
       features: Array<{ descriptor: number[] }>;
     };
@@ -731,8 +731,62 @@ describe("an internal failure said as a sentence", () => {
       ],
     });
     const swapped = await page();
-    expect(swapped).toContain("carries the print readiness report of another target");
+    expect(swapped).toContain("carries a print readiness report that does not describe it");
     expect(swapped).not.toContain("Print it at least");
+    // And compiling it again from the card starts at the distance on record, 190, where a publish
+    // would rebuild it, not at the default.
+    expect(swapped).toMatch(/name="scanDistanceMm"[^>]*value="190"/);
+  }, 240_000);
+
+  it("publishes a target whose report is not its own only at the report's distance, and says so", async () => {
+    // Publishing rebuilt such a target at the default distance, 150 mm: the example compiled for
+    // 600 mm, where a piece 120 mm wide is refused, passed when rebuilt at 150 and was published.
+    // Rebuilt at the distance on record it is refused, and the refusal says what was compiled on
+    // the way, after one stop where a message ending in its own had printed two.
+    const { post, told, workspace } = await drive();
+    const postcard = await readFile(fileURLToPath(new URL("../../../examples/postcard/artwork.png", import.meta.url)));
+    const blank = await sharp({ create: { width: 600, height: 400, channels: 3, background: "#ffffff" } })
+      .png()
+      .toBuffer();
+    for (const [id, bytes] of [
+      ["far", postcard],
+      ["plain", blank],
+    ] as const) {
+      await post("/experiences", new URLSearchParams({ id, title: id }));
+      await post(`/e/${id}/targets`, target("front", "front.png", bytes));
+      const content = new FormData();
+      content.append("type", "video");
+      content.append("file", new Blob([MP4], { type: "video/mp4" }), "pour.mp4");
+      await post(`/e/${id}/targets/front/content`, content);
+      await post(`/e/${id}/targets/front/compile`, new URLSearchParams({ scanDistanceMm: "600" }));
+    }
+    const far = (await workspace.readTarget("far", "front")) as {
+      features: Array<{ descriptor: number[] }>;
+      report: unknown;
+    };
+    const [first, ...rest] = far.features;
+    await workspace.writeTarget("far", "front", {
+      ...far,
+      features: [
+        {
+          ...first,
+          descriptor: [((first?.descriptor[0] ?? 0) ^ 1) >>> 0, ...(first?.descriptor.slice(1) ?? [])],
+        },
+        ...rest,
+      ],
+    });
+    const refused = await told(await post("/e/far/publish", ""));
+    expect(refused).toMatch(/declared 120 mm wide.* at 600 mm/);
+    expect(refused).toContain("On the way there, front at 600 mm was compiled again.");
+
+    // And a target holding no features, carrying the example's report: rebuilt from its own blank
+    // artwork, at that report's distance, it is refused for having nothing to track, which no
+    // compile changes and which the refusal says, in one sentence.
+    const plain = (await workspace.readTarget("plain", "front")) as Record<string, unknown>;
+    await workspace.writeTarget("plain", "front", { ...plain, report: far.report });
+    const nothing = await told(await post("/e/plain/publish", ""));
+    expect(nothing).toContain("will not change that; artwork with more detail will. On the way there, front at 600 mm");
+    expect(nothing).not.toContain("..");
   }, 240_000);
 
   it("shows soft artwork its own refusal, not another target's report or an unreadable file", async () => {
@@ -753,7 +807,7 @@ describe("an internal failure said as a sentence", () => {
     }
     const page = await (await fetch(`http://127.0.0.1:${port}/e/soft`)).text();
     expect(page).toContain("too few features to track reliably");
-    expect(page).not.toContain("report of another target");
+    expect(page).not.toContain("does not describe it");
     expect(page).not.toContain("cannot be read as a target");
   }, 240_000);
 

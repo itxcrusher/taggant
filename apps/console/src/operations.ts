@@ -258,11 +258,14 @@ async function publishOnce(
             ? report.scanDistanceMm
             : (distanceBehind(report) ?? options.scanDistanceMm);
         } else if (!describesTarget(stored)) {
-          // A report this build wrote, for another target: its verdict and its width are another
-          // artwork's, and the gate would refuse it. Rebuilt from this target's own artwork, at the
-          // distance asked for, since the report's distance was chosen for the other one.
+          // A report this build wrote that does not describe this target file: written for another
+          // target, or for this one before the file was changed. Its verdict and width are not
+          // this file's, and the gate would refuse it, so the target is rebuilt from its own
+          // artwork, at the report's distance, the only one on record for it. Rebuilt at the
+          // default instead, a piece compiled for 600 mm and refused there was rebuilt at 150,
+          // where it passed, and published.
           stored = undefined;
-          rebuildAt = options.scanDistanceMm;
+          rebuildAt = report.scanDistanceMm;
         }
       } catch {
         stored = undefined;
