@@ -109,6 +109,15 @@ export function parseTable(value: unknown): LinkTable {
       if (target.protocol !== "http:" && target.protocol !== "https:") {
         throw new TypeError(`the href ${JSON.stringify(link.href)} under ${path} is not http or https`);
       }
+      // `new URL` takes an href with spaces round it, or a tab or a line break inside it, and
+      // cleans them away, so such an href passed and was then published as written, in the
+      // linkset and in every scan's line, while the Location sent was the cleaned one. An href
+      // is used exactly as it is written, so it is held to being an address exactly.
+      if (/\s/.test(link.href) || holdsControlCharacter(link.href)) {
+        throw new TypeError(
+          `the href ${JSON.stringify(link.href)} under ${path} holds a space or a control character, which an address never does`,
+        );
+      }
 
       if (link.default === true) {
         if (defaults.has(relation)) {
@@ -174,14 +183,16 @@ function isLanguageList(value: unknown): boolean {
 }
 
 /**
- * Whether a string holds a character that cannot go in a header, or cannot be seen.
+ * Whether a string holds a control character, or one a parser takes for a line break.
  *
  * Code points rather than a regular expression, because a regular expression holding
  * control characters is nearly always a mistake and the linter is right to refuse one;
  * this is the single place where they are the subject rather than an accident. The C1 controls,
  * U+0080 to U+009F, are control characters as much as the C0 ones, and U+0085 is a line break to
  * some parsers; U+2028 and U+2029 are in with them too: a parser treats them as line breaks and
- * an editor shows nothing.
+ * an editor shows nothing. Format characters, zero-width joiners and spaces and the marks that
+ * set a direction, are not refused, though most show nothing: Persian, Arabic and the Indic
+ * scripts write words with them, and a title in one of those is a title.
  */
 function holdsControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index++) {

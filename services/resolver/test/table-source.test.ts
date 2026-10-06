@@ -277,12 +277,21 @@ describe("what a table may not say", () => {
       // The C1 controls are control characters too; U+0085 is a line break to some parsers.
       [{ title: `a${String.fromCharCode(0x85)}b` }, /control character/],
       [{ title: `a${String.fromCharCode(0x9b)}b` }, /control character/],
+      // An href with spaces round it, or a tab or a line break inside: `new URL` cleans them
+      // away, and the linkset and the log published the href as written.
+      [{ href: " https://a.example/ " }, /space or a control character/],
+      [{ href: `https://a.example/a${String.fromCharCode(9)}b` }, /space or a control character/],
+      [{ href: `https://a.example/a${String.fromCharCode(10)}` }, /space or a control character/],
+      [{ href: "https://a.example/a b" }, /space or a control character/],
     ];
     for (const [fields, expected] of refused) {
       expect(() => parseTable(table(fields)), JSON.stringify(fields)).toThrow(expected);
     }
     // And what a table does say is still read.
     for (const fields of [
+      { href: "https://a.example/a%20b" },
+      // A zero-width non-joiner is part of how Persian is written, so a title holding one is kept.
+      { title: `mi${String.fromCharCode(0x200c)}khaham` },
       { linkType: "urn:example:rel" },
       { linkType: "tag:example.com,2026:manual" },
       { hreflang: [] },
