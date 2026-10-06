@@ -924,12 +924,14 @@ describe("what a stored report has to hold before it is trusted", () => {
     expect(isCurrentReport(far(190)), "the width worked out here is not the report's own").toBe(true);
     // The score is worked out again from a report's own figures, so a shape that changes a figure
     // the score reads is refused by the score before the line it is there for, unless it carries
-    // the score those figures give. Three below do, and here are their twins one step inside each
-    // line, with theirs, accepted: what refuses each of the three is its own line.
+    // the score those figures give. Four below do, and here are their twins one step inside each
+    // line, with theirs, accepted: what refuses each of the four is its own line. A feature count
+    // written as a string is worked out as a number, so it carries the score three hundred gives.
     for (const [label, twin] of [
       ["sixty features", { ...report, featureCount: 60, score: 76 }],
       ["features in eight areas", { ...report, areasWithFeatures: 8, score: 82 }],
       ["a whole feature count one higher", { ...report, featureCount: report.featureCount + 1 }],
+      ["three hundred features, as a number", { ...report, featureCount: 300, score: 100 }],
     ] as const) {
       expect(isCurrentReport(twin), label).toBe(true);
     }
@@ -942,7 +944,7 @@ describe("what a stored report has to hold before it is trusted", () => {
       ["reasons that are not words", { ...failing, reasons: [7] }],
       ["a pass with a reason against it", { ...report, reasons: ["too few features to track reliably"] }],
       ["a failure with no reason", { ...failing, reasons: [] }],
-      ["a feature count that is not a count", { ...report, featureCount: "300" }],
+      ["a feature count that is not a count", { ...report, featureCount: "300", score: 100 }],
       ["a feature count that is not a whole number", { ...report, featureCount: report.featureCount + 0.5 }],
       ["a grid of twenty-five areas", { ...report, areas: 25 }],
       ["more areas reached than there are", { ...report, areasWithFeatures: 17 }],
