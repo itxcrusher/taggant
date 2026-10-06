@@ -102,17 +102,34 @@ export function createResolver(options: ResolverOptions): Server {
 
 /**
  * The request target as a problem event may carry it: without its query, its fragment, or the
- * user name and password a target in absolute form can hold.
+ * user name and password a target in absolute form can hold, or one that only reads as if it
+ * held them.
  *
  * Each is whatever the caller wrote, and a printed code can carry anything in one, an email
  * address or a password included, so none of it goes in the log, as none of it goes in a scan.
- * Only the query was dropped, and `http://alice%40example.com:secret@[/01/...` was logged whole.
+ * Only the query was dropped, and `http://alice%40example.com:secret@[/01/...` was logged whole;
+ * then only the absolute form was cut, and `//alice%40example.com:secret@[/01/...` and the same
+ * after `/\`, which anything resolving a reference reads as an authority, were logged whole.
  */
 function loggable(target: string | undefined): string {
   const raw = target ?? "";
   const cut = raw.search(/[?#]/);
   const kept = cut === -1 ? raw : raw.slice(0, cut);
-  return kept.replace(/^([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^/]*@/, "$1");
+  return kept.replace(/^((?:[A-Za-z][A-Za-z0-9+.-]*:)?[/\\]{2})[^/\\]*@/, "$1");
+}
+
+/**
+ * The request target as a URL, a path read as a path.
+ *
+ * Resolved against the base, a target starting with two slashes, or a slash and a backslash, is a
+ * reference whose first segment is a host. A code printed with its slash doubled, which a browser
+ * sends as `//01/09520123456788`, had its `01` taken for a host and was refused as a path with no
+ * primary key, while the same identifier under any other prefix was answered. A target in origin
+ * form is a path, so it is appended to the base rather than resolved against it; one in absolute
+ * form, which a proxy sends, is parsed as the URL it is.
+ */
+function requestUrl(target: string): URL {
+  return target.startsWith("/") ? new URL(`${PARSE_BASE}${target}`) : new URL(target, PARSE_BASE);
 }
 
 /** A term of the GS1 Web vocabulary, written either way, and nothing longer than one. */
@@ -152,7 +169,7 @@ function handle(
   // that could not be read, and is answered and counted as one.
   let url: URL;
   try {
-    url = new URL(request.url ?? "/", PARSE_BASE);
+    url = requestUrl(request.url ?? "/");
   } catch {
     const message = "the request target could not be read as a URL";
     emit({
@@ -232,7 +249,13 @@ function handle(
     const message = error instanceof DigitalLinkError ? error.message : "the request could not be read";
     // Not a scan: nothing was identified, so there is nothing to count it against. It is
     // still worth recording, because it is usually a code printed wrong.
-    emit({ type: "problem", at: new Date().toISOString(), reason: message, path: url.pathname, status: 400 });
+    emit({
+      type: "problem",
+      at: new Date().toISOString(),
+      reason: message,
+      path: loggable(url.pathname),
+      status: 400,
+    });
     send(response, 400, { ...cors, "content-type": "text/plain" }, `${message}\n`);
     return;
   }

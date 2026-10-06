@@ -578,6 +578,46 @@ describe("what a stranger can put in a header", () => {
     expect(await statusOf("http://id.example.com/01/09520123456788")).toContain(" 307 ");
   });
 
+  it("reads a path that starts with two slashes as a path, and logs no user name from one", async () => {
+    // Resolved against the base, `//01/09520123456788`, which is what a browser sends for a code
+    // printed with its slash doubled, was a reference to a host called `01`: the identifier lost
+    // its first segment and the scan was refused. And a target reading `//name:password@host/`,
+    // or the same after `/\`, was an authority to the parser, so it threw, and the problem line
+    // carried it whole, user name and password with it.
+    const { connect } = await import("node:net");
+    const url = new URL(origin);
+    const statusOf = (target: string) =>
+      new Promise<string>((settle, fail) => {
+        const socket = connect(Number(url.port), url.hostname, () => {
+          socket.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+        });
+        const chunks: Buffer[] = [];
+        socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+        socket.on("error", fail);
+        socket.on("end", () => settle(Buffer.concat(chunks).toString("utf8").split("\r\n")[0] ?? ""));
+      });
+    for (const target of ["//01/09520123456788", "/\\01/09520123456788"]) {
+      expect(await statusOf(target), target).toContain(" 307 ");
+    }
+    expect(scans().map((event) => (event.type === "scan" ? event.identifier : ""))).toEqual([
+      "/01/09520123456788",
+      "/01/09520123456788",
+    ]);
+
+    events.length = 0;
+    for (const target of [
+      "//alice%40example.com:secret@[/01/09520123456788",
+      "//bob%40example.com:hunter2@id.example.com:99999/01/09520123456788",
+      "/\\carol%40example.com:pa55word@[/01/09520123456788",
+      "//dave%40example.com:letmein@[/nothing/here",
+    ]) {
+      expect(await statusOf(target), target).toMatch(/ (307|400) /);
+    }
+    const lines = JSON.stringify(events);
+    expect(events.length, "nothing was recorded, so nothing was inspected").toBe(4);
+    expect(lines).not.toMatch(/alice|secret|bob|hunter2|carol|pa55word|dave|letmein/);
+  });
+
   it("never puts an internal error message in a response", async () => {
     for (const path of ["/a%0d%0aX/01/09520123456788", "/01/09520123456788"]) {
       const body = await (await get(path)).text();
