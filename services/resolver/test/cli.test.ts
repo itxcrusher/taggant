@@ -79,7 +79,8 @@ describe("the command line reached through a link", () => {
       await unlink(link).catch(() => rmdir(link));
       await rm(dir, { recursive: true, force: true });
     }
-  });
+    // Two processes started one after the other, which a loaded machine can take seconds over.
+  }, 30_000);
 });
 
 describe("the command line, running", () => {
@@ -120,6 +121,20 @@ describe("the command line, running", () => {
       expect((await fetch(`${at}/01/09520123456788`, { redirect: "manual" })).status).toBe(307);
       await writeFile(table, links("https://example.com/second"));
       expect(await until(() => err.join("").includes("reloaded")), "the edit was never picked up").toBe(true);
+      // And a save that cannot be read is said on standard error too, not in the event stream.
+      await writeFile(table, "{ not json");
+      const heard = () => `${err.join("")}${out.join("")}`.includes("could not be read");
+      expect(await until(heard), "the unreadable save was never noticed").toBe(true);
+      // Stopped, it reads the table no more: an edit after the stop is never picked up.
+      await stop?.();
+      stop = undefined;
+      const said = err.length + out.length;
+      await writeFile(table, links("https://example.com/third"));
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      expect(
+        err.length + out.length,
+        `read the table after it was stopped: ${err.slice(said).join("")}`,
+      ).toBe(said);
     } finally {
       restore();
       await stop?.();
@@ -174,6 +189,23 @@ describe("the command line, running", () => {
       ]);
       clearTimeout(deadline);
       expect(ended, "a taken port was never answered").toBe(EXIT.cannotListen);
+      // And nothing of it is left running: an edit to the table after it gave up is never read.
+      const said = err.length + out.length;
+      await writeFile(
+        table,
+        JSON.stringify({
+          version: 1,
+          entries: {
+            "/01/09520123456788": [
+              { href: "https://example.org/", linkType: "gs1:pip", title: "T", default: true },
+            ],
+          },
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      expect(err.length + out.length, `read the table after giving up: ${err.slice(said).join("")}`).toBe(
+        said,
+      );
     } finally {
       restore();
       await new Promise<void>((resolve) => blocker.close(() => resolve()));
