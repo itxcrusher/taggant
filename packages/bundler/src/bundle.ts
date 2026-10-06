@@ -354,7 +354,7 @@ function checkReadiness(
     const own =
       fields.targetDigest ===
       targetDigest({ width: compiled.width, height: compiled.height, features: compiled.features });
-    // A size only a passing report confirms; a refusal's is the full size, confirming nothing.
+    // Named only for a passing report: a refusal's size is no width a printer acts on.
     const confirmed = fields.pass === true;
     const said = `the report says the artwork was analysed ${String(fields.analysisWidth)} px wide, with ${String(fields.featureCount)} features at full size${confirmed ? `, and confirmed at ${String(fields.smallestUsableScale)} of that` : ""}`;
     const ofTarget = [

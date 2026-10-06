@@ -286,14 +286,15 @@ export const SCAN_DISTANCE_MM = { nearest: 50, furthest: 10_000 } as const;
  * Does the report a compiled target carries describe that target, and not another?
  *
  * Its analysed width is the target's width, the size a passing report confirms is one the target
- * holds features at, its count of features is the target's at full size, and its fingerprint is
- * the target's own. A refusal confirmed no size, and keeps the full size there whether or not the
- * target holds features at it: soft artwork, with none at full size, is refused for too few, and
- * its own report was called another target's.
- * The first three are shared by any two landscape artworks with the same count of features, and
- * the report of one published on the target of the other; the fingerprint is not. This ties a
- * report to its target and does not sign it: a report whose every figure was edited to match is
- * not caught. Whether the report is one this build stands behind at all is `isCurrentReport`.
+ * holds features at, its count of features is the target's at full size, and its fingerprint is the
+ * target's own. A refusal is not held to the size: its size is the smallest the corners hold up at,
+ * or one the recogniser confirmed before pointed looks refused the design, and no printer acts on
+ * it; held to it, soft artwork, refused at full size for too few features and holding none there,
+ * had its own report called another target's. The first three are shared by any two landscape
+ * artworks with the same count of features, and the report of one published on the target of the
+ * other; the fingerprint is not. This ties a report to its target and does not sign it: a report
+ * whose every figure was edited to match is not caught. Whether the report is one this build stands
+ * behind at all is `isCurrentReport`.
  */
 export function describesTarget(compiled: unknown): boolean {
   if (!isRecord(compiled) || !isRecord(compiled.report)) return false;
@@ -329,6 +330,13 @@ export function isCurrentReport(report: unknown): report is Report {
   // checked the verdict, the width's type and the recognition's counts, and accepted a report
   // decided on one width, a pass scoring 10, a pass with three features, and a width edited to
   // 1 mm, which turned the bundler's comparison off for a piece that needs 147.
+  //
+  // Against what a compile can write, that is, and not against what one compile did. The looks at
+  // a confirmed size are held to the bounds any recogniser keeps a report within, a whole number
+  // of turns at every width and at most four, not to the four the compiler's own recogniser takes,
+  // because `buildReport` takes whichever it is handed; and a recognition is not held to having
+  // been asked only of a design nothing before it refused. A report edited into one of those shapes
+  // is accepted, as one edited in every figure is: the tie to a target is a check, not a signature.
   if (typeof pass !== "boolean") return false;
   // A passing report has nothing against it and a failing one says why. A report with no list
   // here took the console's page down with a TypeError.
@@ -668,16 +676,17 @@ export const POSED_WITHIN = { scale: 1.15, turnDegrees: 20 } as const;
  * fewer look-alikes to put behind the wrong pose than a look needs to count. A fifth, because a
  * small part of a design printed twice, a logo on a label, is not the design repeating while the
  * rest of the design carries most of its places (a label that is mostly words, with a word or a
- * line set twice, measured 0.20 to 0.26 and is refused, though the looks put it in the right
- * place): a square a quarter of a generated design's area copied elsewhere on it measured 114
- * places at 0.147, and was put in the right place in every one of 1200 looks at two sizes, and
- * squares a fifth of the postcard's area, copied between eight pairs of places, measured 0.110 to
- * 0.152. A larger part can cross it: squares a quarter of the postcard's area measured 0.128 to
- * 0.208 over the same eight, and one is refused. And a large part under it can still be put in the
- * wrong place: with the top 30 per cent of a generated design repeated at its bottom, the design
- * measured 0.158 to 0.170 at four export widths, and its looks put it in the wrong place at two of
- * them and not at the other two. The looks catch a part that large only sometimes, and nothing else
- * catches it. What this leaves to the recogniser's own looks is a design less than a fifth of which
+ * line set twice, can cross it: labels measured 0.20 to 0.28 and were refused, though looks pointed
+ * at both copies in a probe put them in the right place, and others measured 0.04 to 0.12 and were
+ * not): a square a quarter of a generated design's area copied elsewhere on it measured 114 places
+ * at 0.147, and was put in the right place in every one of 1200 looks at two sizes, and squares a
+ * fifth of the postcard's area, copied between eight pairs of places, measured 0.110 to 0.152. A
+ * larger part can cross it: squares a quarter of the postcard's area measured 0.128 to 0.208 over
+ * the same eight, and one is refused. And a large part under it can still be put in the wrong
+ * place: with the top 30 per cent of a generated design repeated at its bottom, the design measured
+ * 0.158 to 0.170 at four export widths, and its looks put it in the wrong place at two of them and
+ * not at the other two. The looks catch a part that large only sometimes, and nothing else catches
+ * it. What this leaves to the recogniser's own looks is a design less than a fifth of which
  * repeats, and a periodic texture, whose many moves each carry a part of it: a brick wall measured
  * 124 places at 0.124 and a grid 66 at 0.192.
  */
@@ -703,15 +712,15 @@ export const REPEATS_FROM = { places: AGREEING_POINTS_NEEDED, share: 0.2 } as co
  * designs still passed.
  *
  * Measured on the postcard and a generated design beside copies of themselves, at the side, below
- * and turned: copies at three tenths to three quarters of the design's size carried 14 to 111
- * places, none of them a fifth of its places, and every one was refused by these looks. A copy at
- * three quarters can carry more than a fifth, and the lines refuse it before any look: set 20
- * pixels below the postcard it carries 131 of 641, a share of 0.204, turned beside the postcard
- * 0.221 and 0.227, and beside, below or turned beside the generated design 0.215 to 0.251. Twelve,
- * because the 35 per cent copy carried 14. In other layouts copies at three tenths to a third
- * carried as few as 7, and smaller copies fewer still; those are reached by `AIMED_BEYOND_FROM`. Of
- * the 198 pieces repeating nothing above, twelve carry twelve or more, up to 21, and are asked too,
- * which costs them a second or two.
+ * and turned: copies at three tenths to three quarters of the design's size that the lines did not
+ * refuse carried 14 to 111 places, none of them a fifth of its places, and every one was refused by
+ * these looks. A copy at three quarters can carry more than a fifth, and the lines refuse it before
+ * any look: set 20 pixels below the postcard it carries 131 of 641, a share of 0.204, turned beside
+ * the postcard 0.221 and 0.227, and beside, below or turned beside the generated design 0.215 to
+ * 0.251. Twelve, because the 35 per cent copy carried 14. In other layouts copies at three tenths
+ * to a third carried as few as 7, and smaller copies fewer still; those are reached by
+ * `AIMED_BEYOND_FROM`. Of the 198 pieces repeating nothing above, twelve carry twelve or more, up
+ * to 21, and are asked too, which costs them a second or two.
  */
 export const AIMED_FROM = 12;
 
