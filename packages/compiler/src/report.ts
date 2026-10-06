@@ -304,9 +304,9 @@ export const SCAN_DISTANCE_MM = { nearest: 50, furthest: 10_000 } as const;
  * Its analysed width is the target's width, the size a passing report confirms is one the target
  * holds features at, its count of features is the target's at full size, and its fingerprint is the
  * target's own. A refusal is not held to the size: its size is the smallest the corners hold up at,
- * or one the recogniser confirmed before pointed looks refused the design, and no printer acts on
- * it; held to it, soft artwork, refused at full size for too few features and holding none there,
- * had its own report called another target's. The first three are shared by any two landscape
+ * full size where they hold up at none, or one the recogniser confirmed before pointed looks refused
+ * the design, and no printer acts on it; held to it, soft artwork, refused at full size for too few
+ * features and holding none there, had its own report called another target's. The first three are shared by any two landscape
  * artworks with the same count of features, and the report of one published on the target of the
  * other; the fingerprint is not. This ties a report to its target and does not sign it: a report
  * whose every figure was edited to match is not caught. Whether the report is one this build stands
@@ -348,11 +348,14 @@ export function isCurrentReport(report: unknown): report is Report {
   // 1 mm, which turned the bundler's comparison off for a piece that needs 147.
   //
   // Against what a compile can write, that is, and not against what one compile did. The looks at
-  // a confirmed size are held to the bounds any recogniser keeps a report within, a whole number
-  // of turns at every width and at most four, not to the four the compiler's own recogniser takes,
-  // because `buildReport` takes whichever it is handed; and a recognition is not held to having
-  // been asked only of a design nothing before it refused. A report edited into one of those shapes
-  // is accepted, as one edited in every figure is: the tie to a target is a check, not a signature.
+  // a confirmed size are held by their total and not width by width: at least one a width, a whole
+  // number of times the widths, and at most four times them, the turns the compiler's own
+  // recogniser takes at each, because `buildReport` takes whichever recogniser it is handed. So
+  // twenty looks spread eight, one, one, one and nine across the five widths are accepted, and a
+  // recogniser that looks five times at every width writes a report this refuses. Nor is a
+  // recognition held to having been asked only of a design nothing before it refused. A report
+  // edited into one of those shapes is accepted, as one edited in every figure is: the tie to a
+  // target is a check, not a signature.
   if (typeof pass !== "boolean") return false;
   // A passing report has nothing against it and a failing one says why. A report with no list
   // here took the console's page down with a TypeError.

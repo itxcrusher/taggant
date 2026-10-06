@@ -193,9 +193,9 @@ export async function mountExperience(options: {
   const recogniser = createRecogniser(options.targets);
 
   // Two loops, deliberately. Drawing follows the display and runs every frame; recognition
-  // takes tens of milliseconds a call on a desktop, several frames, and longer on a phone,
-  // where it is unmeasured, and runs as often as it can finish, with frames that arrive
-  // meanwhile dropped rather than queued. Between answers the last pose stands, which is why
+  // takes tens of milliseconds a call on a desktop, several frames, and has not been measured
+  // on a phone, and runs as often as it can finish, with frames that arrive meanwhile dropped
+  // rather than queued. Between answers the last pose stands, which is why
   // the content follows the camera smoothly at a fraction of the frame rate.
   const draw = () => {
     if (!running) return;

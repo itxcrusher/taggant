@@ -11,9 +11,10 @@ export interface Pose {
  * How long a frame may sit with the worker before it is treated as gone.
  *
  * Generous next to what recognition takes, tens of milliseconds a call on a desktop and
- * unmeasured on a phone, because a busy phone can be slow without being broken. A worker that is terminated fires neither a
- * reply nor an error, so without this the loop waits on a promise that never settles and
- * the page goes on claiming it is tracking with content frozen on screen.
+ * unmeasured on a phone, because a busy phone can be slow without being broken. A worker
+ * that is terminated fires neither a reply nor an error, so without this the loop waits on
+ * a promise that never settles and the page goes on claiming it is tracking with content
+ * frozen on screen.
  */
 const REPLY_TIMEOUT_MS = 5000;
 
