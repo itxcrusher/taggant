@@ -97,7 +97,7 @@ export class Counters {
       lines.push(`taggant_scans_total{outcome="${outcome}"} ${this.scans.get(outcome) ?? 0}`);
     }
     lines.push(
-      "# HELP taggant_bad_requests_total Requests that could not be read as a Digital Link.",
+      "# HELP taggant_bad_requests_total Requests the resolver could not read as a Digital Link. One the HTTP parser refuses is answered before it reaches the resolver, and is not counted.",
       "# TYPE taggant_bad_requests_total counter",
       `taggant_bad_requests_total ${this.badRequests}`,
       // There was a `taggant_answered_total` here as the denominator for the line above,

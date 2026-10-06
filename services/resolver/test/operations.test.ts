@@ -625,6 +625,34 @@ describe("what a stranger can put in a header", () => {
     expect(lines).not.toMatch(/alice|secret|bob|hunter2|carol|pa55word|dave|letmein/);
   });
 
+  it("says what it counts as a bad request, which is not a request the HTTP parser refused", async () => {
+    // The help text said every request that could not be read as a Digital Link, and a request
+    // the parser refuses never reaches the resolver: a space in the target, or a header with no
+    // name, is answered 400 by Node and moves nothing. The text says so now, and this holds it to it.
+    const { connect } = await import("node:net");
+    const url = new URL(origin);
+    const metrics = async (): Promise<string> => (await get("/metrics")).text();
+    const counted = (text: string): number =>
+      Number(text.match(/^taggant_bad_requests_total (\d+)$/m)?.[1] ?? Number.NaN);
+    const before = await metrics();
+    expect(before).toMatch(/# HELP taggant_bad_requests_total .*HTTP parser refuses.*not counted/);
+    for (const request of [
+      "GET /01/0952 0123456788 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+      "GET /01/09520123456788 HTTP/1.1\r\nHost: 127.0.0.1\r\n: no name\r\n\r\n",
+    ]) {
+      const first = await new Promise<string>((settle, fail) => {
+        const socket = connect(Number(url.port), url.hostname, () => socket.write(request));
+        const chunks: Buffer[] = [];
+        socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+        socket.on("error", fail);
+        socket.on("close", () => settle(Buffer.concat(chunks).toString("utf8").split("\r\n")[0] ?? ""));
+      });
+      expect(first, JSON.stringify(request)).toContain(" 400 ");
+    }
+    expect(counted(await metrics())).toBe(counted(before));
+    expect(events).toEqual([]);
+  });
+
   it("never puts an internal error message in a response", async () => {
     for (const path of ["/a%0d%0aX/01/09520123456788", "/01/09520123456788"]) {
       const body = await (await get(path)).text();

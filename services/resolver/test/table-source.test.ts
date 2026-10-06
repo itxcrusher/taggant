@@ -285,10 +285,10 @@ describe("what a table may not say", () => {
     ).toThrow(/two default links/);
   });
 
-  it("refuses a title holding a control character, because a title goes in a header", () => {
-    // A title is published in a `Link` header. Node refuses to write a header holding a
-    // carriage return, so this was a 500 for whoever scanned the code, and a line separator
-    // is invisible in the editor of whoever wrote the table.
+  it("refuses a title holding a control character or a line break", () => {
+    // A title is for a person, shown by whatever reads the linkset to choose a link: a line break
+    // splits it wherever it is printed, and a line separator is invisible in the editor of
+    // whoever wrote the table.
     // Built from code points rather than written as escapes. Written as escapes they have
     // arrived in this file as the characters themselves twice, which the repository's own
     // sweep for control characters in tracked files then refuses, correctly.

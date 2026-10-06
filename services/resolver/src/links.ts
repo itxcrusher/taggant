@@ -162,13 +162,13 @@ export function parseTable(value: unknown): LinkTable {
         defaults.add(relation);
       }
 
-      // A title goes into a `Link` header, where a control character is at best a header
-      // Node refuses to write, which used to become a 500 for whoever scanned the code,
-      // and a line separator is invisible in every editor the author of the table has.
-      // Refused where the table is read rather than where it is served.
+      // A title is for a person, shown by whatever reads the linkset to choose a link, and a
+      // control character in one is at best nothing on that screen: a line break splits the title
+      // wherever it is printed, and a line separator is invisible in every editor the author of
+      // the table has. Refused where the table is read rather than left for a client to show.
       if (holdsControlCharacter(link.title)) {
         throw new TypeError(
-          `the title under ${path} holds a control character, which cannot go in a Link header`,
+          `the title under ${path} holds a control character or a line break, which no title shown to a person needs`,
         );
       }
 
