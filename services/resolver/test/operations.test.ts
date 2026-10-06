@@ -183,6 +183,9 @@ describe("what a scan event may not carry", () => {
       ["?linkType=alice%40example.com", 404, undefined],
       [`?linkType=${"x".repeat(4000)}`, 404, undefined],
       ["?linkType=", 307, undefined],
+      // A term's shape is not a term: a name and a birth date written as one were recorded.
+      ["?linkType=gs1:JohnSmith19800101", 404, undefined],
+      ["?linkType=https://gs1.org/voc/tel447700900123", 404, undefined],
     ];
     for (const [query, status, recorded] of cases) {
       events.length = 0;

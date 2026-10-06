@@ -2,14 +2,17 @@ import { type IncomingMessage, type Server, type ServerResponse, createServer } 
 import { DigitalLinkError, SUPPORTED_PRIMARY_KEYS, parseDigitalLink } from "./digital-link.js";
 import { Counters, type EventSink, jsonLines } from "./events.js";
 import {
+  GS1_VOCAB,
   type LinkTable,
   candidatesFor,
   chooseLink,
+  expandLinkType,
   languageMatch,
   parseAcceptLanguage,
   sameLinkType,
 } from "./links.js";
 import { CONTEXT, buildLinkset } from "./linkset.js";
+import { GS1_LINK_TYPES } from "./vocabulary.js";
 
 export interface ResolverOptions {
   /**
@@ -132,8 +135,11 @@ function requestUrl(target: string): URL {
   return target.startsWith("/") ? new URL(`${PARSE_BASE}${target}`) : new URL(target, PARSE_BASE);
 }
 
-/** A term of the GS1 Web vocabulary, written either way, and nothing longer than one. */
-const VOCABULARY_TERM = /^(?:gs1:|https:\/\/gs1\.org\/voc\/)[A-Za-z][A-Za-z0-9]{0,63}$/;
+/** A link type of the GS1 Web vocabulary, written either way, and nothing else. */
+function isVocabularyTerm(linkType: string): boolean {
+  const expanded = expandLinkType(linkType);
+  return expanded.startsWith(GS1_VOCAB) && GS1_LINK_TYPES.has(expanded.slice(GS1_VOCAB.length));
+}
 
 function currentTable(options: ResolverOptions): LinkTable {
   return typeof options.table === "function" ? options.table() : options.table;
@@ -323,12 +329,12 @@ function handle(
   }
 
   const requested = url.searchParams.get("linkType") ?? undefined;
-  // In the events, the type asked for only when this identifier's links have it or it is a term
-  // of the GS1 vocabulary. Anything else is a caller's text and can be anything: an email address
-  // went into the log as the type asked for, and fifteen kilobytes of it became one line.
+  // In the events, the type asked for only when this identifier's links have it or it is a link
+  // type of the GS1 vocabulary. Anything else is a caller's text and can be anything: an email
+  // address went into the log as the type asked for, and fifteen kilobytes of it became one line.
   const recorded =
     requested !== undefined &&
-    (VOCABULARY_TERM.test(requested) ||
+    (isVocabularyTerm(requested) ||
       candidates.some((candidate) => sameLinkType(candidate.linkType, requested)))
       ? { requested }
       : {};
