@@ -163,6 +163,15 @@ describe("SHALL respond to linkType=linkset and to Accept: application/linkset+j
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("application/linkset+json");
   });
+
+  it("does not answer an Accept header that refuses the linkset with one, however q is spelt", async () => {
+    // `q=0` means not this, and HTTP takes the parameter's name in either case: `;Q=0` was read
+    // as carrying no weight, and a client that refused the linkset was sent one.
+    for (const accept of ["application/linkset+json;q=0", "application/linkset+json;Q=0"]) {
+      const response = await get("/01/09520123456788", { accept });
+      expect(response.headers.get("content-type"), accept).not.toBe("application/linkset+json");
+    }
+  });
 });
 
 describe("Links at each level up to the primary key SHALL be included in the linkset", () => {

@@ -325,7 +325,9 @@ export function parseAcceptLanguage(header: string | undefined): string[] {
     .split(",")
     .map((part) => {
       const [tag = "", ...rest] = part.trim().split(";");
-      const quality = rest.find((piece) => piece.trim().startsWith("q="));
+      // `q` in any case, as HTTP spells its parameter names: `fr;Q=0`, which refuses French, was
+      // read as French at full weight, chose the French link and was recorded as the reason.
+      const quality = rest.find((piece) => /^q=/i.test(piece.trim()));
       return { tag: tag.trim().toLowerCase(), q: quality ? Number(quality.trim().slice(2)) : 1 };
     })
     .filter((entry) => entry.tag.length > 0 && Number.isFinite(entry.q) && entry.q > 0)

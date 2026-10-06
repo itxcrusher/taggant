@@ -447,7 +447,8 @@ export function accepts(header: string | undefined, type: string): boolean {
   for (const part of header.split(",")) {
     const [name = "", ...parameters] = part.trim().split(";");
     if (name.trim().toLowerCase() !== type) continue;
-    const quality = parameters.find((parameter) => parameter.trim().startsWith("q="));
+    // `q` in any case, as HTTP spells its parameter names: `Q=0` was read as no weight at all.
+    const quality = parameters.find((parameter) => /^q=/i.test(parameter.trim()));
     return quality === undefined || Number(quality.trim().slice(2)) > 0;
   }
   return false;

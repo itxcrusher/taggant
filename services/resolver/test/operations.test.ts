@@ -155,6 +155,10 @@ describe("what a scan event may not carry", () => {
       ["de", "https://example.com/product", undefined],
       ["fr;q=0", "https://example.com/product", undefined],
       ["fr;q=0, de", "https://example.com/product", undefined],
+      // The same weight spelt in capitals, which HTTP allows: `fr;Q=0` went to the French link
+      // and was recorded as the language that chose it.
+      ["fr;Q=0", "https://example.com/product", undefined],
+      ["fr;Q=0, de", "https://example.com/product", undefined],
       ["*", "https://example.com/product", undefined],
       // A private subtag truncates to `fr`, so the French link is right and the field is
       // two characters where the header was four kilobytes, which was the point of it.
