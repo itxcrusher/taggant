@@ -187,6 +187,41 @@ describe("noticing that the table changed", () => {
     source.stop();
   });
 
+  it("finishes a change it is handling before it says it has stopped, and starts none after", async () => {
+    // A reload in flight went on after the stop: the command line read the table and said it had
+    // reloaded it after the stop it hands a caller had resolved, every time, against a large table.
+    const path = await scratch();
+    await writeFile(path, "1");
+    let release: () => void = () => undefined;
+    const handling = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let begun = 0;
+    let finished = 0;
+    const source = await watchTable(path, {
+      pollMs: 20,
+      onChange: async () => {
+        begun++;
+        await handling;
+        finished++;
+      },
+    });
+    await writeFile(path, "22");
+    expect(await until(() => begun === 1), "the change was never noticed").toBe(true);
+    let stopped = false;
+    const stopping = source.stop().then(() => {
+      stopped = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(stopped, "the stop resolved while a change was still being handled").toBe(false);
+    release();
+    await stopping;
+    expect(finished).toBe(1);
+    await writeFile(path, "333");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(begun, "a change was handled after the stop").toBe(1);
+  });
+
   it("stops when it is stopped", async () => {
     const path = await scratch();
     await writeFile(path, "1");

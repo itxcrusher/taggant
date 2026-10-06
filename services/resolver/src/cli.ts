@@ -165,7 +165,7 @@ export async function main(args: string[], started?: (stop: () => Promise<void>)
   });
   if (listening !== null) {
     // Nothing left running: the watch would go on reading a table that nothing serves.
-    source.stop();
+    await source.stop();
     stderr.write(`${listening}\n`);
     return EXIT.cannotListen;
   }
@@ -178,7 +178,7 @@ export async function main(args: string[], started?: (stop: () => Promise<void>)
   );
   stderr.write("  description at /.well-known/gs1resolver\n\n");
   started?.(async () => {
-    source.stop();
+    await source.stop();
     await new Promise<void>((done) => server.close(() => done()));
   });
   return EXIT.ok;

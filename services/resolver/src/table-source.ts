@@ -48,7 +48,11 @@ export interface TableSourceOptions {
 export interface TableSource {
   /** Check now rather than waiting for the timer, and say whether it had changed. */
   check(): Promise<boolean>;
-  stop(): void;
+  /**
+   * Stop checking. A check already under way, and the change it finds, are finished before this
+   * resolves, and no check begins once it has been called.
+   */
+  stop(): Promise<void>;
   /**
    * Drop the fast path and leave the timer alone.
    *
@@ -91,20 +95,23 @@ export async function watchTable(path: string, options: TableSourceOptions): Pro
   // small and it is a window in the one mechanism this module exists to close.
   let stamp = options.since ?? (await stampOf(path));
   let stopped = false;
-  let running = false;
+  let running: Promise<boolean> | null = null;
 
-  const check = async (): Promise<boolean> => {
-    if (stopped || running) return false;
-    running = true;
-    try {
-      const now = await stampOf(path);
-      if (now === stamp) return false;
-      stamp = now;
-      await options.onChange();
-      return true;
-    } finally {
-      running = false;
-    }
+  const check = (): Promise<boolean> => {
+    if (stopped || running !== null) return Promise.resolve(false);
+    const checking = (async () => {
+      try {
+        const now = await stampOf(path);
+        if (now === stamp) return false;
+        stamp = now;
+        await options.onChange();
+        return true;
+      } finally {
+        running = null;
+      }
+    })();
+    running = checking;
+    return checking;
   };
 
   // `check` is called from a timer and from a watcher, so a rejecting `onChange` has
@@ -144,10 +151,14 @@ export async function watchTable(path: string, options: TableSourceOptions): Pro
       watcher?.close();
       watcher = undefined;
     },
-    stop() {
+    async stop() {
       stopped = true;
       clearInterval(timer);
       watcher?.close();
+      // A reload in flight when the stop came went on after it: against a large table the command
+      // line read the file and said it had reloaded it after the stop it hands a caller had
+      // resolved, in twenty runs of twenty. Its failure is the caller's `onError`, not the stop's.
+      await running?.catch(() => false);
     },
   };
 }
