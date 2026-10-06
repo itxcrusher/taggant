@@ -163,9 +163,17 @@ describe("the command line, running", () => {
     const err: string[] = [];
     const restore = capture(out, err);
     try {
-      expect(await main([table, "--origin", "http://localhost:8080", "--port", String(port)])).toBe(
-        EXIT.cannotListen,
-      );
+      // Raced against a deadline, so that without the answer this fails rather than hangs: an
+      // unhandled listen error leaves the command line waiting for a server that never starts.
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      const ended = await Promise.race([
+        main([table, "--origin", "http://localhost:8080", "--port", String(port)]),
+        new Promise<string>((resolve) => {
+          deadline = setTimeout(() => resolve("still waiting"), 10_000);
+        }),
+      ]);
+      clearTimeout(deadline);
+      expect(ended, "a taken port was never answered").toBe(EXIT.cannotListen);
     } finally {
       restore();
       await new Promise<void>((resolve) => blocker.close(() => resolve()));
