@@ -435,8 +435,14 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     // is a legal array, so a target truncated in a copy or built from artwork that produced
     // nothing publishes a bundle that points a camera at a page and can never answer.
     if (Array.isArray(compiled.features) && compiled.features.length === 0) {
+      // Said for what it is. A target whose own compile found nothing is artwork too plain or too
+      // soft to track, which no compile changes, and the console's card gives the compile's reason;
+      // it was told to compile again, as a file that lost its features in a copy is.
+      const foundNothing = isCurrentReport(compiled.report) && describesTarget(compiled);
       throw new Error(
-        `${target.id} has no features in it, so nothing in a camera frame could ever match it. Compile it again.`,
+        foundNothing
+          ? `${target.id} has no features in it, so nothing in a camera frame could ever match it: its compile found none in the artwork, which is too plain or too soft to track. Compiling it again will not change that; artwork with more detail will.`
+          : `${target.id} has no features in it, so nothing in a camera frame could ever match it. Compile it again.`,
       );
     }
     // A target with no report was let through, as never claimed to have been checked, and that

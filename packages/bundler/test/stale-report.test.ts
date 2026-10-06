@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isCurrentReport, targetDigest } from "@taggant/compiler";
+import { buildReport, describesTarget, isCurrentReport, targetDigest } from "@taggant/compiler";
 import sharp from "sharp";
 import { afterEach, describe, expect, it } from "vitest";
 import { bundle } from "../src/bundle.js";
@@ -245,8 +245,28 @@ describe("a compiled target from an older build", () => {
     // truncated in a copy publishes a bundle that can never recognise anything.
     const empty = { ...features, features: [] };
     await expect(bundle({ manifest, targets: { front: empty }, ...(await scratch()) })).rejects.toThrow(
-      /no features in it/,
+      /no features in it\b.*Compile it again\.$/,
     );
+
+    // And one whose own compile found nothing in the artwork, which compiling again cannot change:
+    // it was sent to compile again, while the console's card gave the compile's own reason.
+    const blank = { ...features, features: [] };
+    const nothing = JSON.parse(
+      JSON.stringify(
+        await buildReport({
+          image: { width: 640, height: 452 },
+          levels: [1, 0.79, 0.63, 0.5].map((scale) => ({ scale, corners: [] })),
+          features: [],
+          target: blank,
+          scanDistanceMm: 190,
+          recognises: () => [{ found: false, inliers: 0, misplaced: false }],
+        }),
+      ),
+    );
+    expect(isCurrentReport(nothing) && describesTarget({ ...blank, report: nothing })).toBe(true);
+    await expect(
+      bundle({ manifest, targets: { front: { ...blank, report: nothing } }, ...(await scratch()) }),
+    ).rejects.toThrow(/found none in the artwork.*will not change that/);
   });
 
   it("refuses a target that carries no report, which was the way past every check", async () => {
