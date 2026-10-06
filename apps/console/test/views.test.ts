@@ -78,6 +78,40 @@ describe("what a stored report is said to be", () => {
     expect(page("unreadable")).not.toContain("not one at all");
   });
 
+  it("offers a distance its field will send, whatever distance the report was compiled at", () => {
+    // The card offers to compile again at the report's own distance, and that can be 195 or 735. A
+    // field in steps of ten held either as a value the browser would not send, and the button did
+    // nothing at all.
+    for (const offered of [195, 735, 192.5, 10_000]) {
+      const html = experiencePage({
+        id: "botanica-500",
+        manifest: MANIFEST as never,
+        problems: [],
+        targets: [
+          {
+            id: "front-panel",
+            source: "artwork/front.png",
+            physicalWidthMm: 62,
+            contentCount: 0,
+            staleReport: "another",
+            scanDistanceMm: offered,
+          },
+        ],
+      });
+      const field = html.match(/<input[^>]*name="scanDistanceMm"[^>]*>/)?.[0] ?? "";
+      const attribute = (name: string) => field.match(new RegExp(` ${name}="([^"]*)"`))?.[1];
+      expect(attribute("value"), String(offered)).toBe(String(offered));
+      // What a browser asks of a number field before it sends the form: a value within its range,
+      // and a whole number of steps from its minimum unless its step is "any".
+      const value = Number(attribute("value"));
+      expect(value).toBeGreaterThanOrEqual(Number(attribute("min")));
+      expect(value).toBeLessThanOrEqual(Number(attribute("max")));
+      const step = attribute("step");
+      const steps = step === "any" ? 0 : (value - Number(attribute("min"))) / Number(step);
+      expect(Number.isInteger(steps), `${offered} is not a whole number of steps of ${step}`).toBe(true);
+    }
+  });
+
   it("offers no printable size for artwork that is not ready at any size", () => {
     // A refusal still carries what the corners said, and the record read "50% of that" beside a
     // recogniser that found nothing anywhere.

@@ -212,15 +212,21 @@ export interface TargetView {
   physicalWidthMm: number;
   contentCount: number;
   report?: Report | undefined;
+  /**
+   * The distance the card offers to compile again at. Its field takes any number in range, since
+   * the one offered can be a report's own, 195 or 735, and a field in steps of ten would not send
+   * either: the browser refused the form and the button did nothing.
+   */
   scanDistanceMm?: number | undefined;
   /**
    * Set when a compiled target exists and its report is not one this build stands behind:
    * `unreadable` when the target file is not a target at all; `broken` when its report is not an
-   * object; `width` when it was
-   * written before the width carried its distance, and was about four times too small; `verdict`
-   * for anything else, an earlier build's or a hand-edited report, whose verdict this build does
-   * not stand behind. It said the width was sound there, which a corrupt width made false.
-   * `another` when the report is one this build wrote, for another target.
+   * object; `width` when it was written before the width carried its distance, and was about four
+   * times too small; `verdict` for anything else, an earlier build's or a hand-edited report, whose
+   * verdict this build does not stand behind. It said the width was sound there, which a corrupt
+   * width made false. `another` when the report is one this build would write and it does not
+   * describe the file beside it: written for another target, for this one before the file was
+   * changed, or edited by hand.
    */
   staleReport?: "unreadable" | "broken" | "width" | "verdict" | "another" | undefined;
   /** Set when the compiled target asks for more width than the manifest says it is printed at. */
@@ -266,7 +272,7 @@ export function experiencePage(view: ExperienceView): string {
     <div class="row bottom">
       <div class="field narrow">
         <label for="d-${esc(target.id)}">Read from, mm</label>
-        <input id="d-${esc(target.id)}" name="scanDistanceMm" type="number" min="${SCAN_DISTANCE_MM.nearest}" max="${SCAN_DISTANCE_MM.furthest}" step="10" value="${esc(target.scanDistanceMm ?? target.report?.scanDistanceMm ?? DEFAULT_SCAN_DISTANCE_MM)}">
+        <input id="d-${esc(target.id)}" name="scanDistanceMm" type="number" min="${SCAN_DISTANCE_MM.nearest}" max="${SCAN_DISTANCE_MM.furthest}" step="any" value="${esc(target.scanDistanceMm ?? target.report?.scanDistanceMm ?? DEFAULT_SCAN_DISTANCE_MM)}">
       </div>
       <button type="submit">${target.report || target.staleReport ? "Compile again" : "Compile"}</button>
     </div>
