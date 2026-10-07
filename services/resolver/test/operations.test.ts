@@ -81,6 +81,17 @@ describe("what counts as a scan", () => {
     expect(scans()[0]).toMatchObject({ outcome: "unresolved", identifier: "/01/09520123456702" });
   });
 
+  it("counts an assigned code asked for a link type it lacks as unresolved as well", async () => {
+    // So the unresolved count is not by itself a count of codes nobody assigned, and anyone can
+    // add to it. Those are the ones with nothing linked to them at all, as above.
+    expect((await get("/01/09520123456788?linkType=gs1:allergenInfo")).status).toBe(404);
+    expect(scans()[0]).toMatchObject({
+      outcome: "unresolved",
+      identifier: "/01/09520123456788",
+      requested: "gs1:allergenInfo",
+    });
+  });
+
   it("counts a HEAD, because clients follow links with it", async () => {
     await get("/01/09520123456788", { method: "HEAD" });
     expect(scans().length).toBe(1);
@@ -128,8 +139,8 @@ describe("what a scan event may not carry", () => {
   it("records the table's href, not the target the caller's query was appended to", async () => {
     // The query string is carried on to the target because the standard asks for it, and it
     // is also whatever a stranger wrote: `?email=alice@example.com&uid=99123&fbclid=...`
-    // went verbatim into the event, in a log the security policy promises holds "nothing
-    // that identifies a person". The `Location` still carries it, because a campaign
+    // went verbatim into the event, in a log the security policy promises holds nothing
+    // about whoever scanned. The `Location` still carries it, because a campaign
     // parameter on a printed code is the point; the event records where the table sent the
     // scan, which is what a report needs and is the operator's own data.
     const response = await get("/01/09520123456788?email=alice%40example.com&uid=99123&fbclid=IwAR9x");

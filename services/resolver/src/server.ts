@@ -377,8 +377,8 @@ function handle(
   // The table's own href, not the target. The target carries the caller's query string
   // through, which is what the standard asks for and is also whatever a stranger wrote:
   // `?email=alice@example.com&uid=99123` went verbatim into the event, in a log the
-  // documents promise holds "nothing that identifies a person". Where a scan was sent, as
-  // a report needs it, is the link the table chose.
+  // documents promise holds nothing about whoever scanned. Where a scan was sent, as a
+  // report needs it, is the link the table chose.
   const target = withPassedThroughQuery(chosen.href, url);
   emit({
     type: "scan",

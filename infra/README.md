@@ -85,4 +85,4 @@ One JSON object per line on standard output, which is the format every log colle
 
 **What a scan is** is written down in `services/resolver/src/events.ts` and pinned by tests. Everyone selling this kind of system counts scans and almost nobody says what one is, which is how two reports of the same week disagree by a factor of three. Briefly: an answer about an identifier is a scan, including a linkset, and including an identifier nothing is linked to; a request that never named an identifier is not one, because there is nothing to count it against.
 
-Nothing identifying a person is recorded: no address, no user agent, no cookie. The language is kept, because it decides which link is chosen and a report that cannot explain its own redirects is not much of a report.
+Nothing about whoever scanned is recorded: no address, no user agent, no cookie. The identifier is the code's own, though, and a code can name a person, as `SECURITY.md` says, so a log of scans holds whatever its codes name. The language is kept, because it decides which link is chosen and a report that cannot explain its own redirects is not much of a report.

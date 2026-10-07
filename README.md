@@ -250,9 +250,9 @@ Then it stops the resolver and checks the bundle still serves. That is the conti
 
 Everyone who sells this kind of system counts scans and almost nobody says what one is, which is how two reports of the same week disagree by a factor of three. The definition is written down in `services/resolver/src/events.ts` and pinned by tests.
 
-An answer about an identifier is a scan. A redirect is one, and so is a linkset. A HEAD is one, because clients follow links with it and excluding it undercounts silently. An identifier nothing is linked to is one, recorded as unresolved, and it is the most useful number here: it is how a code that was printed but never assigned gets found. A request that could not be read as a Digital Link is not a scan, because it never named an identifier.
+An answer about an identifier is a scan. A redirect is one, and so is a linkset. A HEAD is one, because clients follow links with it and excluding it undercounts silently. A request the table has no link to answer with is one, recorded as unresolved: an identifier nothing is linked to, a link type its links do not have, or no default when no type was asked for. Of those, an identifier with nothing linked to it or further up its hierarchy is how a code that was printed but never assigned gets found. The count is of requests, which anyone can send, so it says which codes to look at rather than how many people looked. A request that could not be read as a Digital Link is not a scan, because it never named an identifier.
 
-Nothing identifying a person is recorded: no address, no user agent, no cookie. The language is kept, because it decides which link is chosen and a report that cannot explain its own redirects is not much of a report.
+Nothing about whoever scanned is recorded: no address, no user agent, no cookie. The identifier is the code's own, though, and a code can name a person, as `SECURITY.md` says, so a log of scans holds whatever its codes name. The language is kept, because it decides which link is chosen and a report that cannot explain its own redirects is not much of a report.
 
 Events go out as one JSON object per line. `/metrics` carries the same counts in the text format Prometheus and its imitators read. `/healthz` says the process is up; `/readyz` says it has a table worth asking about, and answers 503 until it does.
 

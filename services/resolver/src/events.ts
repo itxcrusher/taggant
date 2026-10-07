@@ -12,16 +12,22 @@
  *   one, because both are a client getting an answer about an identifier.
  * - A request that could not be read as a Digital Link is not a scan. It never named an
  *   identifier, so there is nothing to count it against.
- * - A request for an identifier nothing is linked to is a scan, recorded as unresolved. It
- *   is a real person pointing a camera at a real printed thing, and it is the most useful
- *   number in the system: it is how a code that was printed but never assigned is found.
+ * - A request the table has no link to answer with is a scan, recorded as unresolved: an
+ *   identifier nothing is linked to, a link type its links do not have, or no default when
+ *   no type was asked for. Of those, an identifier with nothing linked to it or further up
+ *   its hierarchy is how a code that was printed but never assigned is found. The count is of
+ *   requests, which anyone can send, so it says which codes to look at rather than how many
+ *   people looked.
  * - The description file and the context file are not scans. They are about the resolver.
  * - A HEAD is a scan, because clients use it to follow a link without fetching it, and
  *   excluding it undercounts silently.
  *
- * What is deliberately not here: anything identifying a person. No address, no user agent
- * string, no cookie. The language is kept because it decided which link was chosen and a
- * report that cannot explain its own redirects is not much of a report.
+ * What is deliberately not here: anything about whoever scanned. No address, no user agent
+ * string, no cookie. The identifier is the code's own, and a code can name a person: a
+ * service relation number names the recipient of a service, and a serial number or a lot
+ * holds whatever was printed in it, so a log of these events holds whatever its codes name.
+ * The language is kept because it decided which link was chosen and a report that cannot
+ * explain its own redirects is not much of a report.
  */
 export interface ScanEvent {
   type: "scan";
@@ -32,11 +38,15 @@ export interface ScanEvent {
   /** What the client got. */
   outcome: "redirect" | "linkset" | "unresolved";
   /**
-   * The link type asked for, if the request named one that the identifier's links have or that
-   * is a term of the GS1 vocabulary. Anything else is left out, being a caller's own text.
+   * The link type asked for, if the request named one that the identifier's links have or one
+   * of the link types of the GS1 vocabulary. Anything else is left out, being a caller's own
+   * text, and a term of the vocabulary that is not a link type, such as `gs1:Product`, with it.
    */
   requested?: string;
-  /** Where the client was sent, for a redirect. */
+  /**
+   * The link the table chose, for a redirect: where the client was sent, without the query string
+   * the redirect carried on to it from the request.
+   */
   target?: string;
   /** The language that decided the choice, when one did. */
   language?: string;
