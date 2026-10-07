@@ -4,6 +4,10 @@ import { type DigitalLink, ancestry, canonicalise, parseDigitalLink } from "./di
 export const GS1_VOCAB = "https://gs1.org/voc/";
 
 export interface StoredLink {
+  /**
+   * An http or https address. A resolver answers with the address a URL parser reads in it,
+   * which is the one its redirect sends, whatever spelling the table holds.
+   */
   href: string;
   /**
    * A GS1 Web vocabulary term such as `gs1:pip`, or a full URI for anything outside it.
@@ -59,6 +63,10 @@ const LINK_FIELDS: ReadonlySet<string> = new Set([
   "default",
 ]);
 
+/**
+ * Check a table and return it as it is, throwing a `TypeError` that names the entry for anything a
+ * scan could not be answered from.
+ */
 export function parseTable(value: unknown): LinkTable {
   if (typeof value !== "object" || value === null) throw new TypeError("the link table must be an object");
   const table = value as Partial<LinkTable>;
@@ -143,10 +151,11 @@ export function parseTable(value: unknown): LinkTable {
       if (target.protocol !== "http:" && target.protocol !== "https:") {
         throw new TypeError(`the href ${JSON.stringify(link.href)} under ${path} is not http or https`);
       }
-      // `new URL` takes an href with spaces round it, or a tab or a line break inside it, and
-      // cleans them away, so such an href passed and was then published as written, in the
-      // linkset and in every scan's line, while the Location sent was the cleaned one. An href
-      // is used exactly as it is written, so it is held to being an address exactly.
+      // A resolver answers with the address the URL parser reads in an href (`candidatesFor`), so
+      // what is refused here is what that parser drops or escapes rather than reads as written:
+      // spaces round an href and a tab or a line break inside it, which it drops, and a space or
+      // another control character inside it, which it escapes. An href holding one is not written
+      // as the address it names.
       if (/\s/.test(link.href) || holdsControlCharacter(link.href)) {
         throw new TypeError(
           `the href ${JSON.stringify(link.href)} under ${path} holds a space or a control character, which an address never does`,
@@ -297,7 +306,13 @@ export function candidatesFor(table: LinkTable, link: DigitalLink): Candidate[] 
       const key = `${expandLinkType(stored.linkType)} ${stored.href}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      found.push({ ...stored, anchor: level });
+      // With the address the URL parser reads in the href, which is the one a redirect sends, so
+      // that the linkset, a scan's line and the Location name one place. As written, they did not:
+      // `https://evil.example\@good.example/` was published with its backslash, which some parsers
+      // read as a user name before a host of good.example, and sent to evil.example; a zero-width
+      // space in a path was published raw and sent escaped. Two spellings of one address are still
+      // two links above, so neither can take the other's place as the default.
+      found.push({ ...stored, href: new URL(stored.href).href, anchor: level });
     }
   }
   return found;

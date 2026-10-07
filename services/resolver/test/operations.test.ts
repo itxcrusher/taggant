@@ -141,6 +141,77 @@ describe("what a scan event may not carry", () => {
     expect(scan?.type === "scan" ? scan.target : "").toBe("https://example.com/product");
   });
 
+  it("records and publishes the address the scan was sent to, whatever spelling the table holds", async () => {
+    // A backslash before an `@` is a path to a browser and a user name to other parsers, and a
+    // zero-width space or a right-to-left override is invisible where it is printed: written so,
+    // the linkset and the line named an address the Location did not send.
+    const backslash = String.fromCharCode(92);
+    const cases: Array<[string, string]> = [
+      [
+        `https://evil.example${backslash}@good.example/a${String.fromCharCode(0x200b)}b`,
+        "https://evil.example/@good.example/a%E2%80%8Bb",
+      ],
+      [`https://a.example/a${String.fromCharCode(0x202e)}b`, "https://a.example/a%E2%80%AEb"],
+      [`https://a.example/caf${String.fromCharCode(0xe9)}`, "https://a.example/caf%C3%A9"],
+      [`https://b${String.fromCharCode(0xfc)}cher.example/`, "https://xn--bcher-kva.example/"],
+      ["https://Example.COM:443/a/../b", "https://example.com/b"],
+      ["https://example.com", "https://example.com/"],
+    ];
+    for (const [written, address] of cases) {
+      const seen: Event[] = [];
+      const resolver = createResolver({
+        table: parseTable({
+          version: 1,
+          entries: {
+            "/01/09520123456788": [{ href: written, linkType: "gs1:pip", title: "A", default: true }],
+          },
+        }),
+        events: (event) => seen.push(event),
+      });
+      await new Promise<void>((resolve) => resolver.listen(0, "127.0.0.1", resolve));
+      try {
+        const at = `http://127.0.0.1:${(resolver.address() as AddressInfo).port}`;
+        const sent = (await fetch(`${at}/01/09520123456788`, { redirect: "manual" })).headers.get("location");
+        const linkset = (await (
+          await fetch(`${at}/01/09520123456788`, { headers: { accept: "application/linkset+json" } })
+        ).json()) as { linkset: Array<Record<string, Array<{ href: string }>>> };
+        const published = linkset.linkset[0]?.["https://gs1.org/voc/pip"]?.[0]?.href;
+        const recorded = seen.find((event) => event.type === "scan" && event.outcome === "redirect");
+        expect(sent, written).toBe(address);
+        expect(published, written).toBe(address);
+        expect(recorded?.type === "scan" ? recorded.target : undefined, written).toBe(address);
+      } finally {
+        await new Promise<void>((resolve) => resolver.close(() => resolve()));
+      }
+    }
+  });
+
+  it("keeps two spellings of one address as two links, so either can be the default", async () => {
+    // Told apart by the table's own spelling: taken for copies, the second would be dropped, and
+    // the default it carries with it, and a plain scan of the code would find no default.
+    const resolver = createResolver({
+      table: parseTable({
+        version: 1,
+        entries: {
+          "/01/09520123456788": [
+            { href: "https://a.example", linkType: "gs1:pip", title: "A" },
+            { href: "https://a.example/", linkType: "gs1:pip", title: "A again", default: true },
+          ],
+        },
+      }),
+      events: () => {},
+    });
+    await new Promise<void>((resolve) => resolver.listen(0, "127.0.0.1", resolve));
+    try {
+      const at = `http://127.0.0.1:${(resolver.address() as AddressInfo).port}`;
+      const scan = await fetch(`${at}/01/09520123456788`, { redirect: "manual" });
+      expect(scan.status).toBe(307);
+      expect(scan.headers.get("location")).toBe("https://a.example/");
+    } finally {
+      await new Promise<void>((resolve) => resolver.close(() => resolve()));
+    }
+  });
+
   it("records the language that chose, and only when the language chose", async () => {
     // The field was the raw `Accept-Language` header, recorded whenever more than one link
     // of the type existed, without asking whether the header matched anything: a German

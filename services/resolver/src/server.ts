@@ -16,7 +16,8 @@ import { GS1_LINK_TYPES } from "./vocabulary.js";
 
 export interface ResolverOptions {
   /**
-   * The link table, or a way of asking for the current one.
+   * The link table, or a way of asking for the current one, checked by `parseTable` or
+   * `parseTableText`; a table that was not is answered from unchecked.
    *
    * A function, because the table is mounted from outside the process and the operator is
    * told to edit it. Read once at startup, editing it did nothing and readiness went on
