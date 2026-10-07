@@ -7,7 +7,7 @@ import { type TrackingTarget, locate } from "@taggant/vision";
  * time where the camera preview does not repaint and nothing the viewer touches responds.
  * `bench/cost.mjs` measures it against the compiled example at 480 by 360: on a desktop,
  * medians of 49 ms and 73 ms across two runs, single calls from 22 ms to 168 ms. The
- * spread matters more than the median, and a phone is slower by an unmeasured amount.
+ * spread matters more than the median, and nothing has been measured on a phone.
  */
 
 interface SetTargets {
