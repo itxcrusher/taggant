@@ -1045,6 +1045,25 @@ describe("what a stored report has to hold before it is trusted", () => {
     expect(distanceBehind(example)).toBe(2310);
     expect(distanceBehind({ ...example, targetDigest: "0".repeat(64) })).toBe(600);
     expect(distanceBehind({ ...example, recognition: null })).toBe(600);
+    // The older build's command line compiled to ten metres, and its reports are worked back within
+    // the range anything here takes. Held to five metres, one compiled at six gave nothing back, and
+    // so did one at five whose rounding put it a millimetre past; the console rebuilt both at 150.
+    const older = (distance: number, pixelsNeeded: number) => ({
+      minimumWidthMm: Math.ceil((pixelsNeeded * distance) / 1600),
+      smallestUsableScale: 0.5,
+      analysisWidth: pixelsNeeded * 2,
+    });
+    expect(distanceBehind(older(6000, 320))).toBe(6000);
+    expect(distanceBehind(older(10_000, 320))).toBe(10_000);
+    // An upright piece analysed 454 px wide, which the rounding puts a few millimetres past.
+    const upright = distanceBehind(older(5000, 227)) ?? 0;
+    expect(upright).toBeGreaterThanOrEqual(5000);
+    expect(upright).toBeLessThan(5008);
+    // Ten metres rounded past it is ten metres, in either arithmetic; further than the rounding can
+    // reach is no distance anyone could hold.
+    expect(distanceBehind(older(10_000, 227))).toBe(10_000);
+    expect(distanceBehind({ ...example, minimumWidthMm: 7699, targetDigest: "0".repeat(64) })).toBe(10_000);
+    expect(distanceBehind({ minimumWidthMm: 5000, smallestUsableScale: 0.5, analysisWidth: 454 })).toBeNull();
     // And a report this build wrote at 190: at or just past it, by no more than the millimetre of
     // width the rounding up can add, turned into distance.
     const report = await current();

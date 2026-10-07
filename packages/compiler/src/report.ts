@@ -567,6 +567,13 @@ function printWidthMm(pixelsAcross: number, scanDistanceMm: number): number {
  * a quarter of that in this model's, and errs long, which puts the recovered distance at or
  * just past the real one, and further is the cautious direction.
  *
+ * Held to the range anything here accepts, `SCAN_DISTANCE_MM`, for both arithmetics: the older
+ * build's command line compiled to ten metres and its console to five. Held to five, a report
+ * compiled at six metres gave nothing back, and so did one compiled at five metres whose
+ * rounding put it a millimetre past, and the console rebuilt both at 150 mm, the nearest
+ * distance of all, and published them. A distance past ten metres by no more than the rounding
+ * can add is ten metres.
+ *
  * Null when the fields are not there or do not give a distance anyone could hold, and the
  * caller then has to say so rather than guess.
  */
@@ -587,14 +594,16 @@ export function distanceBehind(report: unknown): number | null {
   if (typeof width !== "number" || typeof scale !== "number" || typeof across !== "number") return null;
   const pixelsNeeded = scale * across;
   if (!(pixelsNeeded > 0) || !(width > 0)) return null;
-  if (widthFromThisModel(report)) {
-    const distance = Math.round(
-      (width * RECOGNISED_PIXELS_ACROSS_FRAME * 1000) / (pixelsNeeded * FRAME_WIDTH_MM_AT_1M),
-    );
-    return distance >= SCAN_DISTANCE_MM.nearest && distance <= SCAN_DISTANCE_MM.furthest ? distance : null;
-  }
-  const distance = Math.round((width * 1600) / pixelsNeeded);
-  return distance >= 50 && distance <= 5000 ? distance : null;
+  // Millimetres of distance a millimetre of width is worth, which is also the most the rounding up
+  // of the width can have added to the distance worked back.
+  const perMm = widthFromThisModel(report)
+    ? (RECOGNISED_PIXELS_ACROSS_FRAME * 1000) / (pixelsNeeded * FRAME_WIDTH_MM_AT_1M)
+    : 1600 / pixelsNeeded;
+  const exact = width * perMm;
+  const distance = Math.round(exact);
+  if (distance < SCAN_DISTANCE_MM.nearest) return null;
+  if (distance <= SCAN_DISTANCE_MM.furthest) return distance;
+  return exact - perMm <= SCAN_DISTANCE_MM.furthest ? SCAN_DISTANCE_MM.furthest : null;
 }
 
 /**
