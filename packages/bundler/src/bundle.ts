@@ -448,12 +448,14 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       // Said for what it is. A target whose own compile found nothing was compiled from artwork with
       // too little detail away from its edges, which compiling that artwork again does not change,
       // and the console's card gives the compile's reason; it was told to compile again, as a file
-      // that lost its features in a copy is. The artwork can have been replaced since, and then a
-      // compile does change it, so the sentence names the artwork it was compiled from and says so.
+      // that lost its features in a copy is. The sentence names the file the manifest gives, and
+      // says what helps without a condition: it was told to compile again if the artwork had been
+      // replaced, and the console, which has just compiled it on the way, printed that beside the
+      // compile it had made.
       const foundNothing = isCurrentReport(compiled.report) && describesTarget(compiled);
       throw new Error(
         foundNothing
-          ? `${target.id} has no features in it, so nothing in a camera frame could ever match it: its compile found none in the artwork it was compiled from, which has too little detail away from its edges to track. Compiling the same artwork again will not change that. Replace it with artwork that has more, or compile again if it has been replaced already.`
+          ? `${target.id} has no features in it, so nothing in a camera frame could ever match it: its compile found none in its artwork, ${target.source} as the manifest names it, which has too little detail away from its edges to track. Compiling the same artwork again will not change that; artwork with more detail will, once the target is compiled from it.`
           : `${target.id} has no features in it, so nothing in a camera frame could ever match it. Compile it again.`,
       );
     }

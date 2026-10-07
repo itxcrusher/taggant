@@ -272,7 +272,10 @@ describe("a compiled target from an older build", () => {
     expect(isCurrentReport(nothing) && describesTarget({ ...blank, report: nothing })).toBe(true);
     await expect(
       bundle({ manifest, targets: { front: { ...blank, report: nothing } }, ...(await scratch()) }),
-    ).rejects.toThrow(/found none in the artwork.*will not change that/);
+    ).rejects.toThrow(
+      // The file named, and what helps said without a condition the console may already have met.
+      /found none in its artwork, art\.png as the manifest names it, .*will not change that; artwork with more detail will, once the target is compiled from it\.$/,
+    );
 
     // Each half of that decides it. Features emptied beside the report of the features they were,
     // one this build would write, are a file a compile restores; and the report of a compile that
