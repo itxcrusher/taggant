@@ -225,7 +225,9 @@ const LANGUAGE_TAG = /^[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*$/;
  * A media type as RFC 6838 names one, with parameters after it as RFC 9110 writes them: `text/html`,
  * `text/html; charset=utf-8`, `text/html;`, whose parameter is empty, and a quoted value holding a
  * tab or an escaped character; and not `html`, a number, or one broken across lines. The last three
- * of those were refused here, so a type RFC 9110 allows kept a resolver from starting.
+ * of those were refused here, so a type RFC 9110 allows kept a resolver from starting. A quoted
+ * value holds ASCII and nothing past it: RFC 9110 lets one hold bytes above ASCII only as obsolete
+ * text, so a title with an accented letter in it is refused.
  *
  * Each space has one place it can belong. Were the spaces after a `;` taken whether a parameter
  * followed or not, those between two semicolons could belong to either, and a value of ` ; ` sixteen
