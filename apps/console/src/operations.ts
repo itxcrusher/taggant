@@ -171,7 +171,7 @@ export interface PublishOutcome {
  *   a staging path per publish and this queue         0 of 14
  *
  * The failures are a raw ENOENT or EPERM naming a path that is ours, reaching an operator
- * who was told how many files had been written; one round of the middle row left the
+ * who was told how many files had been written; one run of the middle row left the
  * destination empty with nothing published at all. So serialising is what makes the
  * sentence true, and the unique staging path is what makes the loser's work discarded
  * whole rather than half of it surviving.
