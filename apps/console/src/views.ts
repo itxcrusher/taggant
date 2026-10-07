@@ -215,7 +215,9 @@ export interface TargetView {
   /**
    * The distance the card offers to compile again at. Its field takes any number in range, since
    * the one offered can be a report's own, 195 or 735, and a field in steps of ten would not send
-   * either: the browser refused the form and the button did nothing.
+   * either: the browser refused the form and the button did nothing. And it takes no empty value:
+   * emptied, the field was sent as nothing, which the server reads as the default, so a piece the
+   * operator meant for 600 mm was compiled at 150 and called ready for press.
    */
   scanDistanceMm?: number | undefined;
   /**
@@ -272,7 +274,7 @@ export function experiencePage(view: ExperienceView): string {
     <div class="row bottom">
       <div class="field narrow">
         <label for="d-${esc(target.id)}">Read from, mm</label>
-        <input id="d-${esc(target.id)}" name="scanDistanceMm" type="number" min="${SCAN_DISTANCE_MM.nearest}" max="${SCAN_DISTANCE_MM.furthest}" step="any" value="${esc(target.scanDistanceMm ?? target.report?.scanDistanceMm ?? DEFAULT_SCAN_DISTANCE_MM)}">
+        <input id="d-${esc(target.id)}" name="scanDistanceMm" type="number" min="${SCAN_DISTANCE_MM.nearest}" max="${SCAN_DISTANCE_MM.furthest}" step="any" required value="${esc(target.scanDistanceMm ?? target.report?.scanDistanceMm ?? DEFAULT_SCAN_DISTANCE_MM)}">
       </div>
       <button type="submit">${target.report || target.staleReport ? "Compile again" : "Compile"}</button>
     </div>

@@ -109,6 +109,9 @@ describe("what a stored report is said to be", () => {
       const step = attribute("step");
       const steps = step === "any" ? 0 : (value - Number(attribute("min"))) / Number(step);
       expect(Number.isInteger(steps), `${offered} is not a whole number of steps of ${step}`).toBe(true);
+      // And a value is asked for before the form is sent: emptied, the field was sent as nothing,
+      // and the server compiled at its default distance without a word.
+      expect(field, `${offered}: the field can be sent empty`).toMatch(/\srequired[\s>]/);
     }
   });
 
