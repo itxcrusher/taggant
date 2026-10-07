@@ -242,9 +242,12 @@ function isLanguageList(value: unknown): boolean {
  * this is the single place where they are the subject rather than an accident. The C1 controls,
  * U+0080 to U+009F, are control characters as much as the C0 ones, and U+0085 is a line break to
  * some parsers; U+2028 and U+2029 are in with them too: a parser treats them as line breaks and
- * an editor shows nothing. Format characters, zero-width joiners and spaces and the marks that
- * set a direction, are not refused, though most show nothing: Persian, Arabic and the Indic
- * scripts write words with them, and a title in one of those is a title.
+ * an editor shows nothing. Format characters are not refused, though most show nothing. The
+ * zero-width non-joiner and joiner are how Persian, Arabic and the Indic scripts write words, and
+ * a title in one of those is a title. The zero-width space and the controls that set a direction
+ * are kept with them though no title here needs them, the override among them that can reverse
+ * what a reader of the linkset sees: a title is written by the table's author, who already
+ * decides where every scan goes.
  */
 function holdsControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index++) {
