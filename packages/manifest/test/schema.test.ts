@@ -33,8 +33,9 @@ describe("manifest schema", () => {
     // The number and not a longer one starting with it: "at most 640" contains "at most 64", a
     // word boundary after it still let "at most 64,000" and "at most 32.5" through, and so did
     // "at most 64 000" with a space between the thousands, a no-break space, a narrow one, or an
-    // apostrophe, which is how much of the world writes the number.
-    const exactly = (count: number) => new RegExp(`at most ${count}(?!\\d|[.,'\\u2019_\\s]\\d)`);
+    // apostrophe, which is how much of the world writes the number, and an Arabic comma after
+    // the list of those was written. So nothing but a letter may stand between it and a digit.
+    const exactly = (count: number) => new RegExp(`at most ${count}(?!\\d|\\P{L}\\d)`, "u");
     expect(row("targets"), "the targets row does not say how many are allowed").toMatch(
       exactly(schema.properties.targets.maxItems),
     );
