@@ -31,8 +31,8 @@ export interface ResolverOptions {
   staleReason?: () => string | null;
   /**
    * The origin this resolver is reached at, used as the subject of the facts it presents.
-   * Taken from the Host header when it is not given, which is right for development and
-   * wrong behind a proxy, so a deployment should set it.
+   * When it is not given, the subject is `http://localhost`, never anything a request says,
+   * so a deployment sets it.
    */
   origin?: string;
 }
