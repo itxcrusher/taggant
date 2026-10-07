@@ -220,6 +220,10 @@ describe("noticing that the table changed", () => {
     await writeFile(path, "333");
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(begun, "a change was handled after the stop").toBe(1);
+    // Nor does a check asked for after the stop, though the file has changed since: the timer and
+    // the watch are gone by then, so this is the only way one could begin.
+    expect(await source.check(), "a check after the stop found the change").toBe(false);
+    expect(begun, "a check after the stop handled the change").toBe(1);
   });
 
   it("stops when it is stopped", async () => {
