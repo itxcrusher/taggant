@@ -134,7 +134,14 @@ export function parseTable(value: unknown): LinkTable {
       // relation name.
       const relation = expandLinkType(link.linkType);
       const term = relation.startsWith(GS1_VOCAB) ? relation.slice(GS1_VOCAB.length) : null;
-      if (term === null ? !ABSOLUTE_URI.test(relation) : !GS1_TERM.test(term)) {
+      if (term !== null && !GS1_TERM.test(term)) {
+        // Said as what it is: `https://gs1.org/voc/pip?v=2` is an absolute URI, and was refused
+        // as though it were not one.
+        throw new TypeError(
+          `the link type ${JSON.stringify(link.linkType)} under ${path} names no term of the GS1 vocabulary: after gs1: or ${GS1_VOCAB} comes a word, a letter and then letters and digits, such as gs1:pip`,
+        );
+      }
+      if (term === null && !ABSOLUTE_URI.test(relation)) {
         throw new TypeError(
           `the link type ${JSON.stringify(link.linkType)} under ${path} is not a GS1 vocabulary term or an absolute URI`,
         );

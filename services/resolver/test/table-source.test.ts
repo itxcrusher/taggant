@@ -336,8 +336,8 @@ describe("what a table may not say", () => {
       // A media type broken across lines is not one, and a GS1 link type with no term names
       // nothing in the vocabulary.
       [{ type: `text/html${String.fromCharCode(10)}; charset=utf-8` }, /not a media type/],
-      [{ linkType: "gs1:" }, /not a GS1 vocabulary term or an absolute URI/],
-      [{ linkType: "https://gs1.org/voc/" }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: "gs1:" }, /names no term of the GS1 vocabulary/],
+      [{ linkType: "https://gs1.org/voc/" }, /names no term of the GS1 vocabulary/],
       [{ linkType: "pip" }, /not a GS1 vocabulary term or an absolute URI/],
       // Characters a URI cannot hold, and GS1 terms that are not words: each was accepted and
       // published as a relation name.
@@ -345,10 +345,13 @@ describe("what a table may not say", () => {
       [{ linkType: 'tag:x"y' }, /not a GS1 vocabulary term or an absolute URI/],
       [{ linkType: `urn:${String.fromCharCode(0xe9)}` }, /not a GS1 vocabulary term or an absolute URI/],
       [{ linkType: "urn:a%zz" }, /not a GS1 vocabulary term or an absolute URI/],
-      [{ linkType: "gs1:/" }, /not a GS1 vocabulary term or an absolute URI/],
-      [{ linkType: "gs1:#" }, /not a GS1 vocabulary term or an absolute URI/],
-      [{ linkType: "gs1:<pip>" }, /not a GS1 vocabulary term or an absolute URI/],
-      [{ linkType: "https://gs1.org/voc/pip/x" }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: "gs1:/" }, /names no term of the GS1 vocabulary/],
+      [{ linkType: "gs1:#" }, /names no term of the GS1 vocabulary/],
+      [{ linkType: "gs1:<pip>" }, /names no term of the GS1 vocabulary/],
+      [{ linkType: "https://gs1.org/voc/pip/x" }, /names no term of the GS1 vocabulary/],
+      // Absolute URIs, in GS1's namespace and naming no word of it.
+      [{ linkType: "https://gs1.org/voc/pip?v=2" }, /names no term of the GS1 vocabulary/],
+      [{ linkType: "https://gs1.org/voc/pip#x" }, /names no term of the GS1 vocabulary/],
       // A field this format does not have, which was ignored: a misspelled default set none, and
       // every plain scan of the code answered that no default was set.
       [{ Default: true }, /does not have/],
