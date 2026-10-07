@@ -3,7 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Event } from "../src/events.js";
 import { type LinkTable, parseTable } from "../src/links.js";
-import { createResolver } from "../src/server.js";
+import { createResolver, loggable } from "../src/server.js";
 
 /**
  * The operational surface: what a scan is, and what an orchestrator can ask.
@@ -623,6 +623,61 @@ describe("what a stranger can put in a header", () => {
     const lines = JSON.stringify(events);
     expect(events.length, "nothing was recorded, so nothing was inspected").toBe(4);
     expect(lines).not.toMatch(/alice|secret|bob|hunter2|carol|pa55word|dave|letmein/);
+
+    // A parser reads an authority after two or more slashes or backslashes as readily as after
+    // two, and after a scheme followed by any number. Each of these is refused, so each reaches
+    // the line that logs it, and that line keeps the rest of the target and loses the credentials.
+    events.length = 0;
+    const backslash = String.fromCharCode(92);
+    const credentials = "erin%40example.com:secret@";
+    const refused: Array<[string, string]> = [
+      [`///${credentials}id.example.com/nothing/here`, "///id.example.com/nothing/here"],
+      [`////${credentials}id.example.com/nothing/here`, "////id.example.com/nothing/here"],
+      [`/${backslash}/${credentials}id.example.com/nothing/here`, "///id.example.com/nothing/here"],
+      [`//${backslash}${credentials}id.example.com/nothing/here`, "///id.example.com/nothing/here"],
+      [
+        `/${backslash}${backslash}${credentials}id.example.com/nothing/here`,
+        "///id.example.com/nothing/here",
+      ],
+      [`http:///${credentials}[/01/09520123456788`, "http:///[/01/09520123456788"],
+      [`http:////${credentials}[/01/09520123456788`, "http:////[/01/09520123456788"],
+    ];
+    for (const [target] of refused) {
+      expect(await statusOf(target), target).toContain(" 400 ");
+    }
+    expect(events.map((event) => (event.type === "problem" ? event.path : event.type))).toEqual(
+      refused.map(([, logged]) => logged),
+    );
+    expect(JSON.stringify(events)).not.toMatch(/erin|secret/);
+  });
+
+  it("cuts credentials from a target however a parser would find them, and nothing else", () => {
+    // The spellings no request reaches the log with, because Node's own parser refuses them or
+    // reads the target as a path first, and which the line logging an unhandled failure would
+    // still carry as sent.
+    const backslash = String.fromCharCode(92);
+    expect(loggable("http:alice:secret@id.example.com/01/09520123456788")).toBe(
+      "http:id.example.com/01/09520123456788",
+    );
+    expect(loggable(`https:${backslash}${backslash}alice:secret@id.example.com/x`)).toBe(
+      `https:${backslash}${backslash}id.example.com/x`,
+    );
+    expect(loggable(`${backslash}${backslash}alice:secret@id.example.com/x`)).toBe(
+      `${backslash}${backslash}id.example.com/x`,
+    );
+    expect(loggable("//alice:secret@[/01/09520123456788?email=bob%40example.com#carol")).toBe(
+      "//[/01/09520123456788",
+    );
+    // An `@` past the first segment is in a path, where no parser reads a user name.
+    for (const left of [
+      "/01/09520123456788",
+      "/nothing/@here",
+      "/a//b:c@d",
+      `//id.example.com${backslash}path@x`,
+      "http://id.example.com/01/09520123456788",
+    ]) {
+      expect(loggable(left)).toBe(left);
+    }
   });
 
   it("says what it counts as a bad request, which is not a request the HTTP parser refused", async () => {

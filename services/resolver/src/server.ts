@@ -110,15 +110,16 @@ export function createResolver(options: ResolverOptions): Server {
  *
  * Each is whatever the caller wrote, and a printed code can carry anything in one, an email
  * address or a password included, so none of it goes in the log, as none of it goes in a scan.
- * Only the query was dropped, and `http://alice%40example.com:secret@[/01/...` was logged whole;
- * then only the absolute form was cut, and `//alice%40example.com:secret@[/01/...` and the same
- * after `/\`, which anything resolving a reference reads as an authority, were logged whole.
+ * A URL parser reads an authority after a scheme followed by any number of slashes or
+ * backslashes, none included, and after two or more of them at the start of a reference, so
+ * `//`, `///`, `/\/` and `http:///` before `alice%40example.com:secret@` each name a user and a
+ * password; what comes before an `@` in that first segment is cut in every one of those places.
  */
-function loggable(target: string | undefined): string {
+export function loggable(target: string | undefined): string {
   const raw = target ?? "";
   const cut = raw.search(/[?#]/);
   const kept = cut === -1 ? raw : raw.slice(0, cut);
-  return kept.replace(/^((?:[A-Za-z][A-Za-z0-9+.-]*:)?[/\\]{2})[^/\\]*@/, "$1");
+  return kept.replace(/^([A-Za-z][A-Za-z0-9+.-]*:[/\\]*|[/\\]{2,})[^/\\]*@/, "$1");
 }
 
 /**
