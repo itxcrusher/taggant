@@ -1,5 +1,5 @@
 import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { type AddressInfo, connect } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Event } from "../src/events.js";
 import { type LinkTable, parseTable } from "../src/links.js";
@@ -906,6 +906,65 @@ describe("a table an operator wrote by hand", () => {
           entries: { "/01/09520123456788": [{ href, linkType: "gs1:pip", title: "T" }] },
         }),
       ).toThrow(/absolute address|not http or https/);
+    }
+  });
+});
+
+describe("what a link answers with", () => {
+  /** A resolver over a table nobody checked, listening on a free port, and how to stop it. */
+  async function serve(entries: Record<string, unknown[]>, seen: Event[] = []) {
+    const resolver = createResolver({
+      table: { version: 1, entries } as LinkTable,
+      events: (event) => seen.push(event),
+    });
+    await new Promise<void>((resolve) => resolver.listen(0, "127.0.0.1", resolve));
+    const at = `http://127.0.0.1:${(resolver.address() as AddressInfo).port}`;
+    const close = () => new Promise<void>((resolve) => resolver.close(() => resolve()));
+    return { at, close };
+  }
+
+  /** The status line and the Location of a request sent over a socket, as it is written. */
+  function rawGet(at: string, target: string): Promise<{ status: string; location: string | null }> {
+    const url = new URL(at);
+    return new Promise((settle, fail) => {
+      const socket = connect(Number(url.port), url.hostname, () => {
+        socket.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+      });
+      const chunks: Buffer[] = [];
+      socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+      socket.on("error", fail);
+      socket.on("end", () => {
+        const lines = Buffer.concat(chunks).toString("utf8").split("\r\n");
+        const location = lines.find((line) => line.toLowerCase().startsWith("location: "));
+        settle({ status: lines[0] ?? "", location: location?.slice("location: ".length) ?? null });
+      });
+    });
+  }
+
+  it("sends the published address with the request's pairs after its own query, which it leaves as written", async () => {
+    // Appended as a form encodes them, the request's pairs rewrote the href's own query as well:
+    // `a=1;b=2` was sent as `a=1%3Bb%3D2`, a different address, and `%20` as `+`.
+    const href = "https://a.example/p?a=1;b=2&q=red%20shoes&flag&t=~&p=%2b";
+    const seen: Event[] = [];
+    const { at, close } = await serve(
+      { "/01/09520123456788": [{ href, linkType: "gs1:pip", title: "P", default: true }] },
+      seen,
+    );
+    try {
+      const sent = await rawGet(at, "/01/09520123456788?utm_source=print&linkType=gs1:pip&ref=a%20b");
+      expect(sent.status).toContain(" 307 ");
+      expect(sent.location).toBe(`${href}&utm_source=print&ref=a%20b`);
+      // Without pairs of its own, or with only the instruction to the resolver, the address alone.
+      expect((await rawGet(at, "/01/09520123456788")).location).toBe(href);
+      expect((await rawGet(at, "/01/09520123456788?linkType=gs1:pip")).location).toBe(href);
+      const linkset = (await (
+        await fetch(`${at}/01/09520123456788`, { headers: { accept: "application/linkset+json" } })
+      ).json()) as { linkset: Array<Record<string, Array<{ href: string }>>> };
+      expect(linkset.linkset[0]?.["https://gs1.org/voc/pip"]?.[0]?.href).toBe(href);
+      const redirect = seen.find((event) => event.type === "scan" && event.outcome === "redirect");
+      expect(redirect?.type === "scan" ? redirect.target : undefined).toBe(href);
+    } finally {
+      await close();
     }
   });
 });

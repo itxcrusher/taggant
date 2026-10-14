@@ -399,14 +399,22 @@ function handle(
  * The standard requires it, and it is what makes a printed code able to carry a campaign
  * parameter without the resolver having to know anything about it. `linkType` is the one
  * thing dropped, because it was an instruction to the resolver rather than to the target.
+ *
+ * The request's pairs go after the href's own query as the request wrote them, and the href's
+ * own query is left as it is, so the Location is the published address with the request's
+ * query added. Appended as a form would encode them, they rewrote the href's query as well:
+ * `a=1;b=2` became `a=1%3Bb%3D2`, a different address, and `%20` became `+`.
  */
 export function withPassedThroughQuery(href: string, url: URL): string {
   const target = new URL(href);
-  for (const [key, value] of url.searchParams) {
-    if (key === "linkType") continue;
-    target.searchParams.append(key, value);
-  }
-  return target.toString();
+  const passed = url.search
+    .slice(1)
+    .split("&")
+    .filter((pair) => pair !== "" && [...new URLSearchParams(pair).keys()][0] !== "linkType");
+  if (passed.length === 0) return target.href;
+  const own = target.search.slice(1);
+  target.search = (own === "" ? passed : [own, ...passed]).join("&");
+  return target.href;
 }
 
 function describe(origin: string): Record<string, unknown> {
