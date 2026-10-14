@@ -96,7 +96,7 @@ export function createResolver(options: ResolverOptions): Server {
         type: "problem",
         at: new Date().toISOString(),
         reason: `unhandled: ${error instanceof Error ? error.message : String(error)}`,
-        path: loggable(request.url),
+        ...problemPath(request.url),
         status: 500,
       });
       send(response, 500, { "content-type": "text/plain" }, "the resolver could not answer that\n");
@@ -121,6 +121,32 @@ export function loggable(target: string | undefined): string {
   const cut = raw.search(/[?#]/);
   const kept = cut === -1 ? raw : raw.slice(0, cut);
   return kept.replace(/^([A-Za-z][A-Za-z0-9+.-]*:[/\\]*|[/\\]{2,})[^/\\]*@/, "$1");
+}
+
+/**
+ * The most of a path a problem line carries: the longest path the Digital Link parser reads, so
+ * a code printed wrong is there whole. Beyond it the parser refuses a path for its length alone,
+ * and the line holds its first characters and how many more there were. The parser escapes what
+ * an address cannot hold, three characters for each of those, so a line holding every path whole
+ * was three times the length of the request that made it.
+ */
+const LOGGED_PATH_LIMIT = 512;
+
+/**
+ * The path a problem line records for a request target: the path the URL parser reads in it,
+ * where it reads one, so every problem line names a path the same way, cut as `loggable` cuts,
+ * and no longer than `LOGGED_PATH_LIMIT`.
+ */
+function problemPath(target: string | undefined): { path: string; omitted?: number } {
+  let path: string;
+  try {
+    path = loggable(requestUrl(target ?? "/").pathname);
+  } catch {
+    path = loggable(target);
+  }
+  return path.length > LOGGED_PATH_LIMIT
+    ? { path: path.slice(0, LOGGED_PATH_LIMIT), omitted: path.length - LOGGED_PATH_LIMIT }
+    : { path };
 }
 
 /**
@@ -184,7 +210,7 @@ function handle(
       type: "problem",
       at: new Date().toISOString(),
       reason: message,
-      path: loggable(request.url),
+      ...problemPath(request.url),
       status: 400,
     });
     send(response, 400, { ...cors, "content-type": "text/plain" }, `${message}\n`);
@@ -261,7 +287,7 @@ function handle(
       type: "problem",
       at: new Date().toISOString(),
       reason: message,
-      path: loggable(url.pathname),
+      ...problemPath(request.url),
       status: 400,
     });
     send(response, 400, { ...cors, "content-type": "text/plain" }, `${message}\n`);

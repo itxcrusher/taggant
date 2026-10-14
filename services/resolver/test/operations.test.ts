@@ -967,4 +967,53 @@ describe("what a link answers with", () => {
       await close();
     }
   });
+
+  it("keeps a problem line short whatever the length of the path, and says how much it left out", async () => {
+    // Each brace is three characters once the parser escapes it, so a line holding every path
+    // whole was three times the length of the request that made it.
+    const seen: Event[] = [];
+    const { at, close } = await serve({}, seen);
+    try {
+      const target = `/nothing/${"{".repeat(2000)}`;
+      expect((await rawGet(at, target)).status).toContain(" 400 ");
+      const problem = seen.find((event) => event.type === "problem");
+      expect(problem?.type === "problem" ? problem.path : "").toBe(
+        `/nothing/${"%7B".repeat(2000)}`.slice(0, 512),
+      );
+      expect(problem?.type === "problem" ? problem.omitted : undefined).toBe(9 + 3 * 2000 - 512);
+      expect(JSON.stringify(problem).length).toBeLessThan(1000);
+      // A path that fits is whole, and says nothing was left out.
+      seen.length = 0;
+      await rawGet(at, "/nothing/here");
+      expect(seen[0]).toMatchObject({ type: "problem", path: "/nothing/here" });
+      expect(seen[0]).not.toHaveProperty("omitted");
+    } finally {
+      await close();
+    }
+  });
+
+  it("records the path of a failure it did not expect as every other problem line does", async () => {
+    // The line for a failure of the resolver's own carried the target as sent, so a target in
+    // absolute form was cut differently there than on the line for the same path refused.
+    const seen: Event[] = [];
+    const { at, close } = await serve(
+      {
+        "/01/09520123456788": [{ href: "not an address", linkType: "gs1:pip", title: "P", default: true }],
+      },
+      seen,
+    );
+    try {
+      const sent = await rawGet(
+        at,
+        "http://h.example//erin%40example.com:secret@x.example/01/09520123456788",
+      );
+      expect(sent.status).toContain(" 500 ");
+      expect(seen).toEqual([
+        expect.objectContaining({ type: "problem", status: 500, path: "//x.example/01/09520123456788" }),
+      ]);
+      expect(JSON.stringify(seen)).not.toMatch(/erin|secret/);
+    } finally {
+      await close();
+    }
+  });
 });

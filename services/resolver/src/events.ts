@@ -59,8 +59,13 @@ export interface ProblemEvent {
   at: string;
   /** Why the request could not be answered. */
   reason: string;
-  /** The path as asked for, without its query, which is the thing that needs fixing. */
+  /**
+   * The path as asked for, without its query, which is the thing that needs fixing: its first 512
+   * characters, the longest path the resolver reads as a Digital Link.
+   */
   path: string;
+  /** How many characters of the path were left out of `path`, when it was longer than that. */
+  omitted?: number;
   status: number;
 }
 
