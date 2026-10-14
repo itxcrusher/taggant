@@ -286,6 +286,15 @@ export function sameLinkType(a: string, b: string): boolean {
   return expandLinkType(a) === expandLinkType(b);
 }
 
+/** The address the URL parser reads in an href, or the href as written where it reads none. */
+function addressOf(href: string): string {
+  try {
+    return new URL(href).href;
+  } catch {
+    return href;
+  }
+}
+
 export interface Candidate extends StoredLink {
   /** The level this link was attached at, which is also the subject of the fact. */
   anchor: string;
@@ -329,13 +338,13 @@ export function candidatesFor(table: LinkTable, link: DigitalLink): Candidate[] 
       ]);
       if (seen.has(key)) continue;
       seen.add(key);
-      // With the address the URL parser reads in the href, which is the one a redirect sends, so
-      // that the linkset, a scan's line and the Location name one place. As written, they did not:
-      // `https://evil.example\@good.example/` was published with its backslash, which some parsers
-      // read as a user name before a host of good.example, and sent to evil.example; a zero-width
-      // space in a path was published raw and sent escaped. Two spellings of one address are still
-      // two links above, so neither can take the other's place as the default.
-      found.push({ ...stored, href: new URL(stored.href).href, anchor: level });
+      // Each with the address the URL parser reads in its href, which is the one a redirect
+      // sends, so the linkset, a scan's line and the Location name one place whatever spelling
+      // the table holds: `https://evil.example\@good.example/` is answered as
+      // `https://evil.example/@good.example/`, which no reader takes for a user name before
+      // another host. An href the parser cannot read, in a table nobody checked, is answered
+      // with as it is written, as every other link in that table is answered with its address.
+      found.push({ ...stored, href: addressOf(stored.href), anchor: level });
     }
   }
   return found;

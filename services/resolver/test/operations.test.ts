@@ -999,6 +999,32 @@ describe("what a link answers with", () => {
     }
   });
 
+  it("answers from a table nobody checked as before, an href it cannot read published as written", async () => {
+    // Reading every href as an address made one that is not an address a failure of every answer
+    // about the code, the plain scan and the linkset included, where only a redirect to it fails.
+    const { at, close } = await serve({
+      "/01/09520123456788": [
+        { href: "https://a.example/good", linkType: "gs1:pip", title: "Good", default: true },
+        { href: "not an address", linkType: "gs1:recipeInfo", title: "Bad" },
+      ],
+    });
+    try {
+      const scan = await fetch(`${at}/01/09520123456788`, { redirect: "manual" });
+      expect(scan.status).toBe(307);
+      expect(scan.headers.get("location")).toBe("https://a.example/good");
+      const lot = await fetch(`${at}/01/09520123456788/10/ABC`, { redirect: "manual" });
+      expect(lot.status).toBe(307);
+      const linkset = await fetch(`${at}/01/09520123456788`, {
+        headers: { accept: "application/linkset+json" },
+      });
+      expect(linkset.status).toBe(200);
+      const body = (await linkset.json()) as { linkset: Array<Record<string, Array<{ href: string }>>> };
+      expect(body.linkset[0]?.["https://gs1.org/voc/recipeInfo"]?.[0]?.href).toBe("not an address");
+    } finally {
+      await close();
+    }
+  });
+
   it("keeps a problem line short whatever the length of the path, and says how much it left out", async () => {
     // Each brace is three characters once the parser escapes it, so a line holding every path
     // whole was three times the length of the request that made it.
