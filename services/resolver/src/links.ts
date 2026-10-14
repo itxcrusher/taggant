@@ -135,10 +135,15 @@ export function parseTable(value: unknown): LinkTable {
       const relation = expandLinkType(link.linkType);
       const term = relation.startsWith(GS1_VOCAB) ? relation.slice(GS1_VOCAB.length) : null;
       if (term !== null && !GS1_TERM.test(term)) {
-        // Said as what it is: `https://gs1.org/voc/pip?v=2` is an absolute URI, and was refused
-        // as though it were not one.
+        // Refused as what it is, a URI under GS1's address that names no word of the vocabulary,
+        // which `https://gs1.org/voc/pip?v=2` is, rather than as something other than a URI.
         throw new TypeError(
           `the link type ${JSON.stringify(link.linkType)} under ${path} names no term of the GS1 vocabulary: after gs1: or ${GS1_VOCAB} comes a word, a letter and then letters and digits, such as gs1:pip`,
+        );
+      }
+      if (term === null && writesGs1Namespace(relation)) {
+        throw new TypeError(
+          `the link type ${JSON.stringify(link.linkType)} under ${path} is GS1's vocabulary written another way, which a request for the term would not find: write it gs1: or ${GS1_VOCAB} followed by the word, such as gs1:pip`,
         );
       }
       if (term === null && !ABSOLUTE_URI.test(relation)) {
@@ -293,6 +298,29 @@ function addressOf(href: string): string {
   } catch {
     return href;
   }
+}
+
+/**
+ * Whether a relation names GS1's vocabulary in a spelling other than the two read as GS1's, `gs1:`
+ * and `https://gs1.org/voc/`: the prefix in another case, or the address with its scheme or host in
+ * capitals, its default port, an escaped letter, or plain http. Each is the same namespace to a
+ * reader of URIs and a different relation to everything here that compares link types.
+ */
+function writesGs1Namespace(relation: string): boolean {
+  if (/^gs1:/i.test(relation)) return true;
+  let parsed: URL;
+  try {
+    parsed = new URL(relation);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+  if (parsed.hostname !== "gs1.org") return false;
+  const path = parsed.pathname.replace(/%[0-9A-Fa-f]{2}/g, (encoded) => {
+    const character = String.fromCharCode(Number.parseInt(encoded.slice(1), 16));
+    return /[A-Za-z0-9._~-]/.test(character) ? character : encoded;
+  });
+  return path === "/voc" || path.startsWith("/voc/");
 }
 
 export interface Candidate extends StoredLink {

@@ -356,6 +356,15 @@ describe("what a table may not say", () => {
       // Absolute URIs, in GS1's namespace and naming no word of it.
       [{ linkType: "https://gs1.org/voc/pip?v=2" }, /names no term of the GS1 vocabulary/],
       [{ linkType: "https://gs1.org/voc/pip#x" }, /names no term of the GS1 vocabulary/],
+      // GS1's namespace written another way, which no request for the term finds.
+      [{ linkType: "HTTPS://gs1.org/voc/pip/x" }, /GS1's vocabulary written another way/],
+      [{ linkType: "https://GS1.ORG/voc/pip/x" }, /GS1's vocabulary written another way/],
+      [{ linkType: "https://gs1.org:443/voc/pip/x" }, /GS1's vocabulary written another way/],
+      [{ linkType: "https://gs1.org/%76oc/pip/x" }, /GS1's vocabulary written another way/],
+      [{ linkType: "HTTPS://GS1.ORG/voc/pip" }, /GS1's vocabulary written another way/],
+      [{ linkType: "http://gs1.org/voc/pip" }, /GS1's vocabulary written another way/],
+      [{ linkType: "GS1:pip/x" }, /GS1's vocabulary written another way/],
+      [{ linkType: "GS1:pip" }, /GS1's vocabulary written another way/],
       // A field this format does not have, which was ignored: a misspelled default set none, and
       // every plain scan of the code answered that no default was set.
       [{ Default: true }, /does not have/],
@@ -398,6 +407,8 @@ describe("what a table may not say", () => {
       { type: `text/html; title="a${String.fromCharCode(9)}b"` },
       { type: "text/html; " },
       { linkType: "gs1:recipeInfo" },
+      { linkType: "https://gs1.org/voc/recipeInfo" },
+      { linkType: "https://example.com/voc/pip" },
       { linkType: "https://example.com/rels/manual?v=2#top" },
       { linkType: "urn:example:a%20b" },
       { default: false },
