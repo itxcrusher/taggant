@@ -519,6 +519,9 @@ export function createConsole(options: ConsoleOptions): Server {
           // A file the runtime cannot read is no exception when its report survived: the publish
           // rebuilds it at that report's distance, and the card offered 150 beside it.
           view.scanDistanceMm = distanceBehind(report) ?? undefined;
+          // None to give back, from a report that is there: the field is left for the operator to
+          // fill, as the publish asks them to, rather than holding a default nobody chose.
+          view.distanceLost = view.scanDistanceMm === undefined && report !== undefined;
         }
       }
       views.push(view);
@@ -649,7 +652,15 @@ export function createConsole(options: ConsoleOptions): Server {
       const id = assertId(decode(compiling[1], "that experience"));
       const targetId = decode(compiling[2], "that target");
       const form = await readForm(request);
-      const distance = Number(field(form, "scanDistanceMm") || DEFAULT_SCAN_DISTANCE_MM);
+      // Asked for rather than defaulted: a form sent with the field empty, from a page loaded before
+      // the field asked for a value or by hand, was compiled at 150 mm and called ready for press.
+      const given = field(form, "scanDistanceMm");
+      if (given === "") {
+        throw new WorkspaceError(
+          `say how far away ${targetId} will be read from, in millimetres, to compile it`,
+        );
+      }
+      const distance = Number(given);
       const experience = await workspace.read(id);
       const outcome = await compile(workspace, experience, targetId, distance);
       redirect(response, `/e/${encodeURIComponent(id)}`, {

@@ -243,6 +243,11 @@ async function publishOnce(
     // The distance to rebuild at, when a rebuild turns out to be needed. Undefined means
     // nothing better than the default is known.
     let rebuildAt = options.scanDistanceMm;
+    // Set when the target was compiled with a report and the report gives back no distance it
+    // could have been compiled for: refused at an older build, edited by hand, or worked back past
+    // anything a person could hold. Rebuilt at the default, a piece compiled for 2000 mm and
+    // refused there was compiled again at 150, passed, and was published.
+    let distanceLost = false;
     if (await workspace.hasTarget(experience.id, target.id)) {
       try {
         stored = await workspace.readTarget(experience.id, target.id);
@@ -267,9 +272,9 @@ async function publishOnce(
           // A report that carries its own distance was computed for that distance, and only
           // its verdict is in doubt, so it is rebuilt there; the arithmetic below is for the
           // older build that did not carry one.
-          rebuildAt = carriesItsDistance(report)
-            ? report.scanDistanceMm
-            : (distanceBehind(report) ?? options.scanDistanceMm);
+          const behind = carriesItsDistance(report) ? report.scanDistanceMm : distanceBehind(report);
+          if (behind !== null) rebuildAt = behind;
+          else distanceLost = report !== undefined;
         } else if (!describesTarget(stored)) {
           // A report this build wrote that does not describe this target file: written for another
           // target, or for this one before the file was changed. Its verdict and width are not
@@ -287,11 +292,18 @@ async function publishOnce(
         // was gone from disk and a piece refused there was published at 150.
         const report =
           typeof stored === "object" && stored !== null ? (stored as { report?: unknown }).report : undefined;
-        rebuildAt = distanceBehind(report) ?? options.scanDistanceMm;
+        const behind = distanceBehind(report);
+        if (behind !== null) rebuildAt = behind;
+        else distanceLost = report !== undefined;
         stored = undefined;
       }
     }
     if (stored === undefined) {
+      if (distanceLost && rebuildAt === undefined) {
+        throw new WorkspaceError(
+          `${target.id} was compiled for a reading distance its print readiness report no longer gives, so it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish.`,
+        );
+      }
       try {
         // In the target's turn already, so compiled here rather than queued behind itself.
         const at = rebuildAt ?? DEFAULT_SCAN_DISTANCE_MM;

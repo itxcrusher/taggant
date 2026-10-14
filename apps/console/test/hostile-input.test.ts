@@ -347,6 +347,107 @@ describe("a target on disk with no report at all", () => {
   }, 240_000);
 });
 
+describe("a target whose report gives back no distance", () => {
+  it("is not compiled again at a guess: the publish names it and the card asks for a distance", async () => {
+    // Compiled again at 150 mm, the default, a piece compiled for 2000 mm and refused there passed
+    // at 150 and was published, and its card offered 150 as though it were the choice on record.
+    const { compile, publish } = await import("../src/operations.js");
+    const { readFile: read, writeFile: write } = await import("node:fs/promises");
+    const artwork = fileURLToPath(new URL("../../../examples/postcard/artwork.png", import.meta.url));
+    const overlay = fileURLToPath(new URL("../../../examples/postcard/overlay.svg", import.meta.url));
+    const runtimeDir = fileURLToPath(new URL("../../../packages/runtime/dist", import.meta.url));
+
+    const created = await workspace.create("lost-distance", "Lost distance");
+    const source = await workspace.storeFile(created.id, "artwork", "artwork.png", await read(artwork));
+    const media = await workspace.storeFile(created.id, "media", "overlay.svg", await read(overlay));
+    await workspace.save(created.id, {
+      ...created.manifest,
+      targets: [{ id: "front", source, physicalWidthMm: 120, content: [{ type: "image", src: media }] }],
+    });
+    const outcome = await compile(workspace, await workspace.read(created.id), "front", 600);
+    const path = join(workspace.directoryFor(created.id), outcome.path);
+    const compiled = JSON.parse(await read(path, "utf8")) as { report: Record<string, unknown> };
+    const {
+      scanDistanceMm: _distance,
+      recognition: _recognition,
+      targetDigest: _digest,
+      ...older
+    } = compiled.report;
+
+    const lost: Array<[string, Record<string, unknown>, Record<string, unknown>?]> = [
+      // The older build wrote no width for a piece it refused, and no distance at all.
+      ["the older build's refusal", { ...older, pass: false, minimumWidthMm: null }],
+      // The same report beside features the runtime cannot read, which the publish reads apart.
+      [
+        "an unreadable file, its report the same",
+        { ...older, pass: false, minimumWidthMm: null },
+        { formatVersion: 3 },
+      ],
+      // One of this model's that lost its distance and holds no width to work one back from.
+      [
+        "this model's, its distance gone",
+        { ...compiled.report, scanDistanceMm: undefined, minimumWidthMm: null },
+      ],
+      // A width that works back past anything a person could hold.
+      [
+        "a width worked back to 35 m",
+        { ...older, minimumWidthMm: 7000, smallestUsableScale: 0.5, analysisWidth: 640 },
+      ],
+    ];
+    for (const [label, report, file] of lost) {
+      await write(path, JSON.stringify({ ...compiled, ...file, report: JSON.parse(JSON.stringify(report)) }));
+      const card = await (await fetch(`${origin}/e/lost-distance`)).text();
+      expect(card, label).toContain("Its report does not say how far away it was meant to be read from");
+      expect(card, label).toMatch(/name="scanDistanceMm"[^>]*required value=""/);
+
+      const rebuiltAt: number[] = [];
+      await expect(
+        publish(workspace, await workspace.read(created.id), join(root, "lost-distance-out"), {
+          runtimeDir,
+          onRebuild: (_id: string, at: number) => rebuiltAt.push(at),
+        }),
+        label,
+      ).rejects.toThrow(
+        /front was compiled for a reading distance its print readiness report no longer gives/,
+      );
+      expect(rebuiltAt, label).toEqual([]);
+    }
+
+    // A distance the caller gives is not a guess, and is the one the target is compiled again at.
+    const rebuiltAt: number[] = [];
+    await expect(
+      publish(workspace, await workspace.read(created.id), join(root, "lost-distance-out"), {
+        runtimeDir,
+        scanDistanceMm: 600,
+        onRebuild: (_id: string, at: number) => rebuiltAt.push(at),
+      }),
+    ).rejects.toThrow(/declared 120 mm wide.* at 600 mm/);
+    expect(rebuiltAt).toEqual([600]);
+
+    // And the card's form, sent with its field empty, is asked for a distance rather than compiled
+    // at the default: a page loaded before the field asked for one sends exactly that.
+    await write(
+      path,
+      JSON.stringify({ ...compiled, report: { ...older, pass: false, minimumWidthMm: null } }),
+    );
+    const before = await read(path, "utf8");
+    for (const sent of ["", "   "]) {
+      const response = await post(
+        "/e/lost-distance/targets/front/compile",
+        new URLSearchParams({ scanDistanceMm: sent }),
+      );
+      expect(response.status, JSON.stringify(sent)).toBe(303);
+      const page = await (await fetch(`${origin}${response.headers.get("location")}`)).text();
+      expect(page, JSON.stringify(sent)).toContain(
+        "say how far away front will be read from, in millimetres, to compile it",
+      );
+    }
+    const without = await post("/e/lost-distance/targets/front/compile", new URLSearchParams());
+    expect(without.status).toBe(303);
+    expect(await read(path, "utf8"), "a form with no distance compiled the target").toBe(before);
+  }, 240_000);
+});
+
 describe("a publish sent while the target is being compiled", () => {
   it("publishes what that compile writes, and does not write over it", async () => {
     // A publish read the target outside the target's compile queue, so one sent while a compile at

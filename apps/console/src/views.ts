@@ -231,6 +231,11 @@ export interface TargetView {
    * changed, or edited by hand.
    */
   staleReport?: "unreadable" | "broken" | "width" | "verdict" | "another" | undefined;
+  /**
+   * Set when that report gives back no distance it could have been compiled for, so the card offers
+   * none and says why, and the publish refuses to compile it again at a guess.
+   */
+  distanceLost?: boolean | undefined;
   /** Set when the compiled target asks for more width than the manifest says it is printed at. */
   tooSmall?: string | undefined;
 }
@@ -269,12 +274,13 @@ export function experiencePage(view: ExperienceView): string {
                 ? `<div class="notice gap-md"><p>The compiled target carries a print readiness report that does not describe it: one written for another target, or for this one before the file was changed. Its verdict and width are not this artwork's. Compile it again to see what this artwork needs.</p></div>`
                 : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
   }
+  ${target.distanceLost ? `<p class="quiet small gap-md">Its report does not say how far away it was meant to be read from. Give that distance to compile it again; publishing will not guess it.</p>` : ""}
   ${target.tooSmall ? `<div class="notice bad gap-md"><p>${esc(target.tooSmall)}</p></div>` : ""}
   <form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/compile" class="gap-md">
     <div class="row bottom">
       <div class="field narrow">
         <label for="d-${esc(target.id)}">Read from, mm</label>
-        <input id="d-${esc(target.id)}" name="scanDistanceMm" type="number" min="${SCAN_DISTANCE_MM.nearest}" max="${SCAN_DISTANCE_MM.furthest}" step="any" required value="${esc(target.scanDistanceMm ?? target.report?.scanDistanceMm ?? DEFAULT_SCAN_DISTANCE_MM)}">
+        <input id="d-${esc(target.id)}" name="scanDistanceMm" type="number" min="${SCAN_DISTANCE_MM.nearest}" max="${SCAN_DISTANCE_MM.furthest}" step="any" required value="${target.distanceLost ? "" : esc(target.scanDistanceMm ?? target.report?.scanDistanceMm ?? DEFAULT_SCAN_DISTANCE_MM)}">
       </div>
       <button type="submit">${target.report || target.staleReport ? "Compile again" : "Compile"}</button>
     </div>
