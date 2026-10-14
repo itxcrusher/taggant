@@ -1064,6 +1064,20 @@ describe("what a stored report has to hold before it is trusted", () => {
     expect(distanceBehind(older(10_000, 227))).toBe(10_000);
     expect(distanceBehind({ ...example, minimumWidthMm: 7699, targetDigest: "0".repeat(64) })).toBe(10_000);
     expect(distanceBehind({ minimumWidthMm: 5000, smallestUsableScale: 0.5, analysisWidth: 454 })).toBeNull();
+    // Exactly what the rounding can add, and no more. At 320 px a millimetre of width is five of
+    // distance, so 2001 mm works back to 10005, past ten metres by no more than one millimetre of
+    // width can carry, and 2002 to 10010, past it by more.
+    const across = (width: number) => ({
+      minimumWidthMm: width,
+      smallestUsableScale: 0.5,
+      analysisWidth: 640,
+    });
+    expect(distanceBehind(across(2001))).toBe(10_000);
+    expect(distanceBehind(across(2002))).toBeNull();
+    // And the near end: 50 mm is the nearest anything here takes, and a width that works back nearer
+    // gives no distance at all rather than one nobody could hold.
+    expect(distanceBehind(across(10))).toBe(50);
+    expect(distanceBehind(across(9))).toBeNull();
     // And a report this build wrote at 190: at or just past it, by no more than the millimetre of
     // width the rounding up can add, turned into distance.
     const report = await current();
