@@ -733,10 +733,10 @@ describe("what a stranger can put in a header", () => {
     expect(JSON.stringify(events)).not.toMatch(/erin|secret/);
   });
 
-  it("cuts credentials from a target however a parser would find them, and nothing else", () => {
+  it("cuts credentials from a target however a parser would find them, and keeps what follows", () => {
     // The spellings no request reaches the log with, because Node's own parser refuses them or
-    // reads the target as a path first, and which the line logging an unhandled failure would
-    // still carry as sent.
+    // reads the target as a path first, and which a line for a target the parser cannot read
+    // would still carry as sent.
     const backslash = String.fromCharCode(92);
     expect(loggable("http:alice:secret@id.example.com/01/09520123456788")).toBe(
       "http:id.example.com/01/09520123456788",
@@ -760,6 +760,8 @@ describe("what a stranger can put in a header", () => {
     ]) {
       expect(loggable(left)).toBe(left);
     }
+    // The cut errs towards cutting: after any scheme, what comes before an `@` goes.
+    expect(loggable("mailto:alice@example.com")).toBe("mailto:example.com");
   });
 
   it("says what it counts as a bad request, which is not a request the HTTP parser refused", async () => {

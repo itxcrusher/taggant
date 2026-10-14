@@ -240,7 +240,8 @@ const LANGUAGE_TAG = /^[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*$/;
  * tab or an escaped character; and not `html`, a number, or one broken across lines. The last three
  * of those were refused here, so a type RFC 9110 allows kept a resolver from starting. A quoted
  * value holds ASCII and nothing past it: RFC 9110 lets one hold bytes above ASCII only as obsolete
- * text, so a title with an accented letter in it is refused.
+ * text, so a media type whose quoted parameter holds an accented letter is refused. A link's own
+ * `title` is not a media type, and may hold any letter.
  *
  * Each space has one place it can belong. Were the spaces after a `;` taken whether a parameter
  * followed or not, those between two semicolons could belong to either, and a value of ` ; ` sixteen

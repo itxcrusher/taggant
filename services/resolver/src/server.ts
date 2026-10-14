@@ -111,10 +111,12 @@ export function createResolver(options: ResolverOptions): Server {
  *
  * Each is whatever the caller wrote, and a printed code can carry anything in one, an email
  * address or a password included, so none of it goes in the log, as none of it goes in a scan.
- * A URL parser reads an authority after a scheme followed by any number of slashes or
- * backslashes, none included, and after two or more of them at the start of a reference, so
- * `//`, `///`, `/\/` and `http:///` before `alice%40example.com:secret@` each name a user and a
- * password; what comes before an `@` in that first segment is cut in every one of those places.
+ * A URL parser reads an authority after two or more slashes or backslashes at the start of a
+ * reference, and, for http and https, after the scheme followed by any number of them, none
+ * included, so `//`, `///`, `/\/` and `http:///` before `alice%40example.com:secret@` each name
+ * a user and a password. What comes before an `@` in the first segment is cut in every one of
+ * those places, and after any scheme, so the cut errs towards cutting: `mailto:alice@example.com`
+ * is logged as `mailto:example.com`.
  */
 export function loggable(target: string | undefined): string {
   const raw = target ?? "";
