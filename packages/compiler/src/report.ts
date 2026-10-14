@@ -570,8 +570,8 @@ function printWidthMm(pixelsAcross: number, scanDistanceMm: number): number {
  * Held to the range anything here accepts, `SCAN_DISTANCE_MM`, for both arithmetics: the older
  * build's command line compiled to ten metres and its console to five. Held to five, a report
  * compiled at six metres gave nothing back, and so did one compiled at five metres whose
- * rounding put it a millimetre past, and the console rebuilt both at 150 mm, the nearest
- * distance of all, and published them. A distance past ten metres by no more than the rounding
+ * rounding put it a millimetre past, and the console rebuilt both at 150 mm, its default, and
+ * published them. A distance past ten metres by no more than the rounding
  * can add is ten metres.
  *
  * Null when the fields are not there or do not give a distance anyone could hold, and the
