@@ -1025,6 +1025,33 @@ describe("what a link answers with", () => {
     }
   });
 
+  it("records the type asked for on a linkset and on a code with nothing linked to it", async () => {
+    const seen: Event[] = [];
+    const { at, close } = await serve(
+      {
+        "/01/09520123456788": [
+          { href: "https://a.example/p", linkType: "gs1:pip", title: "P", default: true },
+        ],
+      },
+      seen,
+    );
+    try {
+      await fetch(`${at}/01/09520123456702?linkType=gs1:pip`, { redirect: "manual" });
+      await fetch(`${at}/01/09520123456788?linkType=gs1:pip`, {
+        headers: { accept: "application/linkset+json" },
+      });
+      // `linkset` itself asks for the linkset, and is no link type of either kind.
+      await fetch(`${at}/01/09520123456788?linkType=linkset`);
+      expect(seen.map((event) => (event.type === "scan" ? [event.outcome, event.requested] : []))).toEqual([
+        ["unresolved", "gs1:pip"],
+        ["linkset", "gs1:pip"],
+        ["linkset", undefined],
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
   it("keeps a problem line short whatever the length of the path, and says how much it left out", async () => {
     // Each brace is three characters once the parser escapes it, so a line holding every path
     // whole was three times the length of the request that made it.

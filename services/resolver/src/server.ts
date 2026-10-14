@@ -321,6 +321,18 @@ function handle(
   // choice is made from, so what is recorded cannot disagree with what decided.
   const acceptedTags = parseAcceptLanguage(language).map((tag) => tag.toLowerCase());
 
+  const requested = url.searchParams.get("linkType") ?? undefined;
+  // In the events, the type asked for only when this identifier's links have it or it is a link
+  // type of the GS1 vocabulary. Anything else is a caller's text and can be anything: an email
+  // address went into the log as the type asked for, and fifteen kilobytes of it became one line.
+  // Recorded on every scan that asked for one, a linkset and a code with nothing linked included.
+  const recorded =
+    requested !== undefined &&
+    (isVocabularyTerm(requested) ||
+      candidates.some((candidate) => sameLinkType(candidate.linkType, requested)))
+      ? { requested }
+      : {};
+
   if (wantsLinkset) {
     const body = JSON.stringify(buildLinkset(candidates, origin), null, 2);
     emit({
@@ -331,6 +343,7 @@ function handle(
       // is the same fact as an unresolved redirect and belongs in the same count. Recording
       // it as a linkset contradicted the definition this file's events are written to.
       outcome: candidates.length === 0 ? "unresolved" : "linkset",
+      ...recorded,
       tookMs: took(),
     });
     send(response, 200, { ...headers, "content-type": LINKSET_TYPE }, body, method === "HEAD");
@@ -345,6 +358,7 @@ function handle(
       at: new Date().toISOString(),
       identifier: link.canonicalPath,
       outcome: "unresolved",
+      ...recorded,
       tookMs: took(),
     });
     send(
@@ -356,16 +370,6 @@ function handle(
     return;
   }
 
-  const requested = url.searchParams.get("linkType") ?? undefined;
-  // In the events, the type asked for only when this identifier's links have it or it is a link
-  // type of the GS1 vocabulary. Anything else is a caller's text and can be anything: an email
-  // address went into the log as the type asked for, and fifteen kilobytes of it became one line.
-  const recorded =
-    requested !== undefined &&
-    (isVocabularyTerm(requested) ||
-      candidates.some((candidate) => sameLinkType(candidate.linkType, requested)))
-      ? { requested }
-      : {};
   const chosen = chooseLink(candidates, {
     linkType: requested,
     acceptLanguage: request.headers["accept-language"],
