@@ -273,9 +273,25 @@ describe("a compiled target from an older build", () => {
     await expect(
       bundle({ manifest, targets: { front: { ...blank, report: nothing } }, ...(await scratch()) }),
     ).rejects.toThrow(
-      // The file named, and what helps said without a condition the console may already have met.
-      /found none in its artwork, art\.png as the manifest names it, .*will not change that; artwork with more detail will, once the target is compiled from it\.$/,
+      // The file named, and what helps said for each case: the same artwork compiled again does not,
+      // and a file replaced since the compile does.
+      /found none in its artwork, .* If "art\.png", as the manifest names it, is still the artwork it was compiled from, compiling again will not change that, and artwork with more detail will, once the target is compiled from it; if that file has been replaced since, compiling the target again is all it needs\.$/,
     );
+    // A name the manifest gives is quoted, so an empty one shows as one, and a control or format
+    // character in it is written as an escape rather than sent to the terminal.
+    const control = String.fromCharCode(27);
+    const override = String.fromCharCode(0x202e);
+    for (const [source, shown] of [
+      ["", '""'],
+      [`a${control}[2Jb.png`, '"a\\u001b[2Jb.png"'],
+      [`a${override}gnp.png`, '"a\\u{202e}gnp.png"'],
+    ]) {
+      const named = { ...manifest, targets: manifest.targets.map((each) => ({ ...each, source })) };
+      await expect(
+        bundle({ manifest: named, targets: { front: { ...blank, report: nothing } }, ...(await scratch()) }),
+        JSON.stringify(source),
+      ).rejects.toThrow(`If ${shown}, as the manifest names it,`);
+    }
 
     // Each half of that decides it. Features emptied beside the report of the features they were,
     // one this build would write, are a file a compile restores; and the report of a compile that

@@ -448,14 +448,14 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       // Said for what it is. A target whose own compile found nothing was compiled from artwork with
       // too little detail away from its edges, which compiling that artwork again does not change,
       // and the console's card gives the compile's reason; it was told to compile again, as a file
-      // that lost its features in a copy is. The sentence names the file the manifest gives, and
-      // says what helps without a condition: it was told to compile again if the artwork had been
-      // replaced, and the console, which has just compiled it on the way, printed that beside the
-      // compile it had made.
+      // that lost its features in a copy is. Nothing ties a target to the file it was compiled
+      // from, though, so the file the manifest names may have been replaced since, and then
+      // compiling again is exactly what helps: the sentence says which holds when, rather than
+      // telling an operator who replaced the artwork that compiling again would not help.
       const foundNothing = isCurrentReport(compiled.report) && describesTarget(compiled);
       throw new Error(
         foundNothing
-          ? `${target.id} has no features in it, so nothing in a camera frame could ever match it: its compile found none in its artwork, ${target.source} as the manifest names it, which has too little detail away from its edges to track. Compiling the same artwork again will not change that; artwork with more detail will, once the target is compiled from it.`
+          ? `${target.id} has no features in it, so nothing in a camera frame could ever match it: its compile found none in its artwork, which had too little detail away from its edges to track. If ${quoted(target.source)}, as the manifest names it, is still the artwork it was compiled from, compiling again will not change that, and artwork with more detail will, once the target is compiled from it; if that file has been replaced since, compiling the target again is all it needs.`
           : `${target.id} has no features in it, so nothing in a camera frame could ever match it. Compile it again.`,
       );
     }
@@ -626,4 +626,16 @@ async function vendorRuntime(outDir: string, runtimeDir?: string): Promise<strin
   // shipped: it was run here, on the manifest being written, and its build imports a JSON
   // schema library a browser cannot resolve.
   return emitted.map((name) => `runtime/${name}`);
+}
+
+/**
+ * A name from a manifest as a sentence can carry it: quoted, so an empty one shows as `""`, with
+ * line breaks and every control and format character written as an escape, so none of them can
+ * clear, colour or reorder the terminal the message is printed to.
+ */
+function quoted(name: string): string {
+  return JSON.stringify(name).replace(
+    /[\p{Cc}\p{Cf}]/gu,
+    (character) => `\\u{${(character.codePointAt(0) ?? 0).toString(16)}}`,
+  );
 }

@@ -782,13 +782,14 @@ describe("an internal failure said as a sentence", () => {
     expect(refused).toContain("On the way there, front at 600 mm was compiled again.");
 
     // And a target holding no features, carrying the example's report: rebuilt from its own blank
-    // artwork, at that report's distance, it is refused for having nothing to track, which no
-    // compile of that artwork changes and which the refusal says, in one sentence.
+    // artwork, at that report's distance, it is refused for having nothing to track, and the
+    // refusal says what helps whether the file is still that artwork or was replaced, followed by
+    // the compile the publish made on the way, so the reader knows which applies.
     const plain = (await workspace.readTarget("plain", "front")) as Record<string, unknown>;
     await workspace.writeTarget("plain", "front", { ...plain, report: far.report });
     const nothing = await told(await post("/e/plain/publish", ""));
     expect(nothing).toContain(
-      "artwork with more detail will, once the target is compiled from it. On the way there, front at 600 mm",
+      "if that file has been replaced since, compiling the target again is all it needs. On the way there, front at 600 mm",
     );
     expect(nothing).not.toContain("..");
   }, 240_000);
