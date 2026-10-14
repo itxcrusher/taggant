@@ -310,9 +310,23 @@ export function candidatesFor(table: LinkTable, link: DigitalLink): Candidate[] 
     // the product's anchor also vanished from the linkset, which is the criterion that
     // links at every level up to the primary key are included. The level belongs in the key
     // because a link at two levels is two facts: one about the product, one about the lot.
+    //
+    // And within a level a copy is a link written twice with every field the same. Keyed on
+    // the type and the href alone, one page listed once for each of its languages, with the
+    // default on the second, lost the second and its default with it: every plain scan of the
+    // code answered that no default was set, while readiness said ready. The href is the
+    // table's own spelling here, so two spellings of one address are two links, and neither
+    // takes the other's place as the default.
     const seen = new Set<string>();
     for (const stored of table.entries[level] ?? []) {
-      const key = `${expandLinkType(stored.linkType)} ${stored.href}`;
+      const key = JSON.stringify([
+        expandLinkType(stored.linkType),
+        stored.href,
+        stored.title,
+        stored.hreflang ?? null,
+        stored.type ?? null,
+        stored.default === true,
+      ]);
       if (seen.has(key)) continue;
       seen.add(key);
       // With the address the URL parser reads in the href, which is the one a redirect sends, so

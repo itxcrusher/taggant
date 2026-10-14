@@ -968,6 +968,37 @@ describe("what a link answers with", () => {
     }
   });
 
+  it("keeps one page listed once for each language, with the default on either", async () => {
+    // Taken for copies of each other, the second was dropped and its default with it: every plain
+    // scan of the code answered that no default was set, while readiness said ready.
+    const { at, close } = await serve({
+      "/01/09520123456788": [
+        { href: "https://a.example/p", linkType: "gs1:pip", title: "Product", hreflang: ["en"] },
+        {
+          href: "https://a.example/p",
+          linkType: "gs1:pip",
+          title: "Produit",
+          hreflang: ["fr"],
+          default: true,
+        },
+      ],
+    });
+    try {
+      const scan = await fetch(`${at}/01/09520123456788`, { redirect: "manual" });
+      expect(scan.status).toBe(307);
+      expect(scan.headers.get("location")).toBe("https://a.example/p");
+      const linkset = (await (
+        await fetch(`${at}/01/09520123456788`, { headers: { accept: "application/linkset+json" } })
+      ).json()) as { linkset: Array<Record<string, Array<{ hreflang?: string[] }>>> };
+      expect(linkset.linkset[0]?.["https://gs1.org/voc/pip"]?.map((target) => target.hreflang)).toEqual([
+        ["en"],
+        ["fr"],
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
   it("keeps a problem line short whatever the length of the path, and says how much it left out", async () => {
     // Each brace is three characters once the parser escapes it, so a line holding every path
     // whole was three times the length of the request that made it.
