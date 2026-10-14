@@ -146,6 +146,14 @@ export function parseTable(value: unknown): LinkTable {
           `the link type ${JSON.stringify(link.linkType)} under ${path} is GS1's vocabulary written another way, which a request for the term would not find: write it gs1: or ${GS1_VOCAB} followed by the word, such as gs1:pip`,
         );
       }
+      // The resolver publishes the link marked as the default under this type itself, so one
+      // written in the table as well was a second default in the linkset that no plain scan
+      // follows.
+      if (relation === `${GS1_VOCAB}defaultLink`) {
+        throw new TypeError(
+          `the link type ${JSON.stringify(link.linkType)} under ${path} is the one the resolver publishes for the link marked "default": true, so mark that link instead`,
+        );
+      }
       if (term === null && !ABSOLUTE_URI.test(relation)) {
         throw new TypeError(
           `the link type ${JSON.stringify(link.linkType)} under ${path} is not a GS1 vocabulary term or an absolute URI`,

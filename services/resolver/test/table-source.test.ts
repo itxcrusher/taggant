@@ -365,6 +365,9 @@ describe("what a table may not say", () => {
       [{ linkType: "http://gs1.org/voc/pip" }, /GS1's vocabulary written another way/],
       [{ linkType: "GS1:pip/x" }, /GS1's vocabulary written another way/],
       [{ linkType: "GS1:pip" }, /GS1's vocabulary written another way/],
+      // The type the resolver publishes for the default link, written in the table as well.
+      [{ linkType: "gs1:defaultLink" }, /publishes for the link marked/],
+      [{ linkType: "https://gs1.org/voc/defaultLink" }, /publishes for the link marked/],
       // A field this format does not have, which was ignored: a misspelled default set none, and
       // every plain scan of the code answered that no default was set.
       [{ Default: true }, /does not have/],
