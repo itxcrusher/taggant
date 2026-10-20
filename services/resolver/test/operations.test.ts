@@ -1001,6 +1001,28 @@ describe("what a link answers with", () => {
     }
   });
 
+  it("lists a link written twice once, though its address is spelled two ways", async () => {
+    // Every href is published as its address, so two spellings of one address with every other
+    // field the same were the same link twice in the linkset.
+    const { at, close } = await serve({
+      "/01/09520123456788": [
+        { href: "https://a.example/p", linkType: "gs1:pip", title: "Product", default: true },
+        { href: "https://b.example", linkType: "gs1:recipeInfo", title: "Recipes" },
+        { href: "https://b.example/", linkType: "gs1:recipeInfo", title: "Recipes" },
+      ],
+    });
+    try {
+      const linkset = (await (
+        await fetch(`${at}/01/09520123456788`, { headers: { accept: "application/linkset+json" } })
+      ).json()) as { linkset: Array<Record<string, Array<{ href: string }>>> };
+      expect(linkset.linkset[0]?.["https://gs1.org/voc/recipeInfo"]?.map((target) => target.href)).toEqual([
+        "https://b.example/",
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
   it("answers from a table nobody checked as before, an href it cannot read published as written", async () => {
     // Reading every href as an address made one that is not an address a failure of every answer
     // about the code, the plain scan and the linkset included, where only a redirect to it fails.

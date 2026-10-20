@@ -360,14 +360,15 @@ export function candidatesFor(table: LinkTable, link: DigitalLink): Candidate[] 
     // And within a level a copy is a link written twice with every field the same. Keyed on
     // the type and the href alone, one page listed once for each of its languages, with the
     // default on the second, lost the second and its default with it: every plain scan of the
-    // code answered that no default was set, while readiness said ready. The href is the
-    // table's own spelling here, so two spellings of one address are two links, and neither
-    // takes the other's place as the default.
+    // code answered that no default was set, while readiness said ready. The href is compared
+    // as the address it is published as, below, so two spellings of one address with every
+    // other field the same are one link and not the same link twice in the linkset; one of
+    // them marked as the default is a field apart, and keeps its default.
     const seen = new Set<string>();
     for (const stored of table.entries[level] ?? []) {
       const key = JSON.stringify([
         expandLinkType(stored.linkType),
-        stored.href,
+        addressOf(stored.href),
         stored.title,
         stored.hreflang ?? null,
         stored.type ?? null,
