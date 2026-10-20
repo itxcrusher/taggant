@@ -76,7 +76,7 @@ describe("the command line, starting", () => {
       hooks.afterRead = null;
       await rm(dir, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
     }
-  });
+  }, 30_000);
 });
 
 describe("the command line, ending", () => {
@@ -141,7 +141,7 @@ describe("the command line, ending", () => {
       hooks.beforeRead = null;
       await rm(dir, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
     }
-  });
+  }, 30_000);
 
   it("does not return on a taken port while a reload is still reading the table", async () => {
     // The table is saved as the command line starts to listen, and the listen goes ahead only
@@ -193,7 +193,7 @@ describe("the command line, ending", () => {
       await new Promise<void>((resolve) => blocker.close(() => resolve()));
       await rm(dir, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
     }
-  });
+  }, 30_000);
 });
 
 /** A port nothing is listening on, found by listening on one and letting it go. */
@@ -224,7 +224,11 @@ function silence(err: string[] = []): () => void {
   };
 }
 
-/** Wait for a condition rather than for a duration, so this is not a race. */
+/**
+ * Wait for a condition rather than for a duration, so this is not a race. Its eight seconds are
+ * longer than the runner's five-second default, which on a busy machine ended a test here before
+ * its wait could say what never happened, so each test that waits with it has thirty.
+ */
 async function until(condition: () => Promise<boolean>, ms = 8000): Promise<boolean> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {

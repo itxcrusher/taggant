@@ -153,7 +153,9 @@ describe("the command line, running", () => {
       .filter((line) => line !== "");
     expect(lines.length, `standard output held ${JSON.stringify(out)}`).toBe(2);
     for (const line of lines) expect(JSON.parse(line)).toMatchObject({ type: "scan", outcome: "redirect" });
-  });
+    // Its own waits, three seconds after the stop and up to six for each reload, outlast the
+    // runner's five-second default on a busy machine, where it failed on that limit alone.
+  }, 30_000);
 
   it("says in a sentence that its port is taken, with an exit code of its own", async () => {
     // A listen that failed was an unhandled error event: a stack trace with absolute internal
@@ -219,7 +221,9 @@ describe("the command line, running", () => {
     }
     expect(err.join("")).toContain(`port ${port} is already in use`);
     expect(out).toEqual([]);
-  });
+    // Its own waits, up to ten seconds for the answer and three after it, outlast the runner's
+    // five-second default, which would end it before its own deadline could say what was missing.
+  }, 30_000);
 });
 
 /** A port nothing is listening on, found by listening on one and letting it go. */
