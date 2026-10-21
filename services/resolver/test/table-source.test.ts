@@ -387,7 +387,7 @@ describe("what a table may not say", () => {
       ],
       [
         `{"version":1,"entries":{"/01/09520123456788":[{"href":"https://a.example/p","href":"https://b.example/","linkType":"gs1:pip","title":"P"}]}}`,
-        /"href" twice in one object/,
+        /"href" twice in one object, a link under "\/01\/09520123456788",/,
       ],
       // The same key spelled with an escape is the same key to a reader. Two backslashes, so the
       // escape reaches the JSON text rather than being read by JavaScript first.
@@ -397,9 +397,14 @@ describe("what a table may not say", () => {
       ],
       [
         `{"version":1,"entries":{"/01/09520123456788":[{"href":"https://a.example/p","\\u0068ref":"https://b.example/","linkType":"gs1:pip","title":"P"}]}}`,
-        /"href" twice in one object/,
+        /"href" twice in one object, a link under "\/01\/09520123456788",/,
       ],
-      [`{"version":1,"version":1,"entries":{}}`, /"version" twice in one object/],
+      // A second link under the code, holding its title twice, is named by the code it is under.
+      [
+        `{"version":1,"entries":{"/01/09520123456788":[${cert},{"href":"https://a.example/q","linkType":"gs1:pip","title":"Q","title":"R"}]}}`,
+        /"title" twice in one object, a link under "\/01\/09520123456788",/,
+      ],
+      [`{"version":1,"version":1,"entries":{}}`, /"version" twice in one object, and/],
     ] as const) {
       expect(() => parseTableText(text), text.slice(0, 60)).toThrow(said);
     }

@@ -68,7 +68,7 @@ export function readTableText(text: string): unknown {
   const twice = keyWrittenTwice(body);
   if (twice !== undefined) {
     throw new TypeError(
-      `the table writes the key ${JSON.stringify(twice.key)} twice in one object${twice.within === undefined ? "" : `, ${JSON.stringify(twice.within)}`}, and a reader keeps only the last: write it once`,
+      `the table writes the key ${JSON.stringify(twice.key)} twice in one object${twice.within === undefined ? "" : twice.inList ? `, a link under ${JSON.stringify(twice.within)}` : `, ${JSON.stringify(twice.within)}`}, and a reader keeps only the last: write it once`,
     );
   }
   return value;
@@ -76,11 +76,14 @@ export function readTableText(text: string): unknown {
 
 /**
  * The first key a JSON text writes twice in one object, with the key that object is the value of,
- * if any. The text has been parsed already, so it is valid JSON and is walked only for its keys.
+ * or, for an object in a list, the key the list is the value of. The text has been parsed already,
+ * so it is valid JSON and is walked only for its keys.
  */
-function keyWrittenTwice(text: string): { key: string; within?: string } | undefined {
-  // One frame for each object or array open, an object's keys and the key it is the value of.
-  const frames: Array<{ keys: Set<string>; within?: string } | null> = [];
+function keyWrittenTwice(text: string): { key: string; within?: string; inList?: boolean } | undefined {
+  // One frame for each object or list open: an object's keys, none for a list, and the key it is
+  // the value of. An object in a list takes the list's key, so a link holding a field twice names
+  // the entry it is under, where it named nothing.
+  const frames: Array<{ keys?: Set<string>; within?: string; inList?: boolean }> = [];
   let expectingKey = false;
   let lastKey: string | undefined;
   for (let at = 0; at < text.length; at++) {
@@ -89,26 +92,33 @@ function keyWrittenTwice(text: string): { key: string; within?: string } | undef
       let end = at + 1;
       while (text[end] !== '"') end += text[end] === "\\" ? 2 : 1;
       const frame = frames[frames.length - 1];
-      if (frame && expectingKey) {
+      if (frame?.keys && expectingKey) {
         const key = JSON.parse(text.slice(at, end + 1)) as string;
-        if (frame.keys.has(key)) return frame.within === undefined ? { key } : { key, within: frame.within };
+        if (frame.keys.has(key)) {
+          return {
+            key,
+            ...(frame.within === undefined ? {} : { within: frame.within }),
+            ...(frame.inList ? { inList: true } : {}),
+          };
+        }
         frame.keys.add(key);
         lastKey = key;
         expectingKey = false;
       }
       at = end;
-    } else if (character === "{") {
+    } else if (character === "{" || character === "[") {
       const parent = frames[frames.length - 1];
-      frames.push(
-        parent && lastKey !== undefined ? { keys: new Set(), within: lastKey } : { keys: new Set() },
-      );
-      expectingKey = true;
-    } else if (character === "[") {
-      frames.push(null);
+      const within = parent === undefined ? undefined : parent.keys ? lastKey : parent.within;
+      frames.push({
+        ...(character === "{" ? { keys: new Set<string>() } : {}),
+        ...(within === undefined ? {} : { within }),
+        ...(parent !== undefined && parent.keys === undefined ? { inList: true } : {}),
+      });
+      expectingKey = character === "{";
     } else if (character === "}" || character === "]") {
       frames.pop();
     } else if (character === ",") {
-      expectingKey = frames[frames.length - 1] !== null && frames.length > 0;
+      expectingKey = frames[frames.length - 1]?.keys !== undefined;
     }
   }
   return undefined;
