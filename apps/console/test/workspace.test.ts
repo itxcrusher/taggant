@@ -160,6 +160,17 @@ describe("a draft is not yet a manifest, and that is allowed", () => {
     expect(onDisk.targets[0].content[0]).toEqual({ type: "video", src: "media/a.mp4" });
   });
 
+  it("reads a manifest saved with a byte-order mark as though it had none", async () => {
+    const store = await workspace();
+    await store.create("pack", "Pack");
+    const path = join(store.root, "pack", "manifest.json");
+    const draft = JSON.parse(await readFile(path, "utf8"));
+    await writeFile(path, `${String.fromCharCode(0xfeff)}${JSON.stringify({ ...draft, title: "Marked" })}`);
+    expect((await store.read("pack")).manifest.title).toBe("Marked");
+    const listed = await store.list();
+    expect(listed.find((entry) => entry.id === "pack")?.ok).toBe(true);
+  });
+
   it("refuses to save a manifest under an id that is not its own", async () => {
     const store = await workspace();
     await store.create("pack", "Pack");

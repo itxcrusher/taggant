@@ -416,7 +416,9 @@ export function createWorkspace(root: string, options: WorkspaceOptions = {}): W
   const readManifestFile = async (id: string): Promise<unknown> => {
     const path = join(directoryFor(id), "manifest.json");
     try {
-      return JSON.parse(await readFile(path, "utf8"));
+      // Read as though a byte-order mark in front were not there, as a target file is.
+      const text = await readFile(path, "utf8");
+      return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
     } catch (error) {
       throw new WorkspaceError(
         `${id} could not be read: ${error instanceof Error ? error.message : String(error)}`,
