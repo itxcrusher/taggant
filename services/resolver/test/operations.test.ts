@@ -1200,6 +1200,36 @@ describe("what a link answers with", () => {
     }
   });
 
+  it("cuts a long path on a problem line between characters, never inside one", async () => {
+    // At 512 characters the cut fell inside an escape, `%7`, or inside the bytes of one
+    // character, `%F0%9F`, so the line held a path that named no character there.
+    const seen: Event[] = [];
+    const { at, close } = await serve({}, seen);
+    try {
+      const cases: [string, string][] = [
+        // what is sent, what the line keeps
+        [`/nothing/${"a".repeat(501)}{{`, `/nothing/${"a".repeat(501)}`],
+        [`/nothing/${"a".repeat(499)}%F0%9F%98%80`, `/nothing/${"a".repeat(499)}`],
+        [`/nothing/${"a".repeat(491)}%F0%9F%98%80`, `/nothing/${"a".repeat(491)}%F0%9F%98%80`],
+      ];
+      for (const [target, kept] of cases) {
+        seen.length = 0;
+        expect((await rawGet(at, target)).status).toContain(" 400 ");
+        const problem = seen.find((event) => event.type === "problem");
+        const path = problem?.type === "problem" ? problem.path : "";
+        expect(path, target.slice(-14)).toBe(kept);
+        expect(() => decodeURIComponent(path)).not.toThrow();
+        const whole = target.replaceAll("{", "%7B");
+        // A path that fits carries no count of what was left out.
+        expect(problem?.type === "problem" ? problem.omitted : undefined).toBe(
+          whole.length > kept.length ? whole.length - kept.length : undefined,
+        );
+      }
+    } finally {
+      await close();
+    }
+  });
+
   it("keeps a problem line short whatever the length of the path, and says how much it left out", async () => {
     // Each brace is three characters once the parser escapes it, so a line holding every path
     // whole was three times the length of the request that made it.
@@ -1210,9 +1240,10 @@ describe("what a link answers with", () => {
       expect((await rawGet(at, target)).status).toContain(" 400 ");
       const problem = seen.find((event) => event.type === "problem");
       expect(problem?.type === "problem" ? problem.path : "").toBe(
-        `/nothing/${"%7B".repeat(2000)}`.slice(0, 512),
+        // 512 falls inside an escape here, so the line stops before it, at 510.
+        `/nothing/${"%7B".repeat(2000)}`.slice(0, 510),
       );
-      expect(problem?.type === "problem" ? problem.omitted : undefined).toBe(9 + 3 * 2000 - 512);
+      expect(problem?.type === "problem" ? problem.omitted : undefined).toBe(9 + 3 * 2000 - 510);
       expect(JSON.stringify(problem).length).toBeLessThan(1000);
       // A path that fits is whole, and says nothing was left out.
       seen.length = 0;

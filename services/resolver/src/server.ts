@@ -146,9 +146,31 @@ function problemPath(target: string | undefined): { path: string; omitted?: numb
   } catch {
     path = loggable(target);
   }
-  return path.length > LOGGED_PATH_LIMIT
-    ? { path: path.slice(0, LOGGED_PATH_LIMIT), omitted: path.length - LOGGED_PATH_LIMIT }
-    : { path };
+  if (path.length <= LOGGED_PATH_LIMIT) return { path };
+  const end = betweenCharacters(path, LOGGED_PATH_LIMIT);
+  return { path: path.slice(0, end), omitted: path.length - end };
+}
+
+/**
+ * Where to cut a path at or before `limit` so that the part kept names whole characters: never
+ * inside an escape, where `%7B` cut to `%7` names none, and never inside a character the parser
+ * escapes as several bytes, where `%F0%9F%98%80` cut to `%F0%9F` is half of one.
+ */
+function betweenCharacters(path: string, limit: number): number {
+  let end = limit;
+  const percent = path.lastIndexOf("%", end - 1);
+  if (percent !== -1 && percent > end - 3) end = percent;
+  // Back over whole escapes of continuation bytes, 0x80 to 0xBF, to the byte that starts them.
+  let start = end;
+  while (start >= 3 && path[start - 3] === "%" && /^[89ab][0-9a-f]$/i.test(path.slice(start - 2, start))) {
+    start -= 3;
+  }
+  if (start >= 3 && path[start - 3] === "%") {
+    const first = Number.parseInt(path.slice(start - 2, start), 16);
+    const length = first >= 0xf0 ? 4 : first >= 0xe0 ? 3 : first >= 0xc0 ? 2 : 1;
+    if (length > 1 && (end - start) / 3 < length - 1) end = start - 3;
+  }
+  return end;
 }
 
 /**
