@@ -434,7 +434,7 @@ function handle(
  *
  * The request's pairs go after the href's own query as the request wrote them, and the href's
  * own query is left as it is, so the Location is the published address with the request's
- * query added. Appended as a form would encode them, they rewrote the href's query as well:
+ * query added: after an `&` where the href's query ends with one, rather than a second. Appended as a form would encode them, they rewrote the href's query as well:
  * `a=1;b=2` became `a=1%3Bb%3D2`, a different address, and `%20` became `+`.
  */
 export function withPassedThroughQuery(href: string, url: URL): string {
@@ -442,11 +442,26 @@ export function withPassedThroughQuery(href: string, url: URL): string {
   const passed = url.search
     .slice(1)
     .split("&")
-    .filter((pair) => pair !== "" && [...new URLSearchParams(pair).keys()][0] !== "linkType");
+    .filter((pair) => pair !== "" && nameOf(pair) !== "linkType");
+  // Nothing of the request's own to carry, so the published address as it is: a query left
+  // empty, `?` and nothing after it, is part of that address.
   if (passed.length === 0) return target.href;
   const own = target.search.slice(1);
-  target.search = (own === "" ? passed : [own, ...passed]).join("&");
+  const query = own === "" || own.endsWith("&") ? `${own}${passed.join("&")}` : [own, ...passed].join("&");
+  // The setter drops one `?` in front of what it is given, which took the `?` off a pair such as
+  // `?linkType` written first; given one of its own to drop, it keeps the pairs as written.
+  target.search = `?${query}`;
   return target.href;
+}
+
+/**
+ * The name of one pair of a query, read as the URL parser reads the query it is part of. A pair
+ * read alone loses a `?` in front of it, which the parser keeps in a name after the first: the
+ * pair of `??linkType=gs1:pip` was taken for `linkType`, and left out, where the resolver itself
+ * reads `?linkType` and chose nothing by it.
+ */
+function nameOf(pair: string): string | undefined {
+  return [...new URLSearchParams(`&${pair}`).keys()][0];
 }
 
 function describe(origin: string): Record<string, unknown> {

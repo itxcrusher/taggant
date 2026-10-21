@@ -970,6 +970,37 @@ describe("what a link answers with", () => {
     }
   });
 
+  it("carries a query on after an href's query however it ends, and reads its pairs as the resolver does", async () => {
+    const seen: Event[] = [];
+    const { at, close } = await serve(
+      {
+        "/01/09520123456788": [
+          { href: "https://a.example/p?", linkType: "gs1:pip", title: "P", default: true },
+          { href: "https://a.example/r?a=1&", linkType: "gs1:recipeInfo", title: "R" },
+        ],
+      },
+      seen,
+    );
+    try {
+      // An empty query is part of the published address, so a scan with nothing to add is sent it.
+      expect((await rawGet(at, "/01/09520123456788")).location).toBe("https://a.example/p?");
+      expect((await rawGet(at, "/01/09520123456788?utm=1")).location).toBe("https://a.example/p?utm=1");
+      // One `&` between the href's query and the request's, not two.
+      expect((await rawGet(at, "/01/09520123456788?linkType=gs1:recipeInfo&utm=1")).location).toBe(
+        "https://a.example/r?a=1&utm=1",
+      );
+      // `?linkType` after a second `?` is not the resolver's `linkType`: it chooses nothing, so it
+      // is carried on as the scan wrote it rather than left out.
+      expect((await rawGet(at, "/01/09520123456788??linkType=gs1:recipeInfo&utm=1")).location).toBe(
+        "https://a.example/p??linkType=gs1:recipeInfo&utm=1",
+      );
+      const last = seen.at(-1);
+      expect(last?.type === "scan" ? last.requested : "a scan").toBeUndefined();
+    } finally {
+      await close();
+    }
+  });
+
   it("keeps one page listed once for each language, with the default on either", async () => {
     // Taken for copies of each other, the second was dropped and its default with it: every plain
     // scan of the code answered that no default was set, while readiness said ready.
