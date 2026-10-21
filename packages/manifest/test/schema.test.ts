@@ -30,14 +30,12 @@ describe("manifest schema", () => {
       expect(found, `the format document has no row for ${field}`).toBeDefined();
       return found ?? "";
     };
-    // The number and not a longer one starting with it: "at most 640" contains "at most 64", a
-    // word boundary after it still let "at most 64,000" and "at most 32.5" through, and so did
-    // "at most 64 000" with a space between the thousands, a no-break space, a narrow one, or an
-    // apostrophe, which is how much of the world writes the number, an Arabic comma, a comma and
-    // a space, or digits of another script. So a letter straight after the number fails, as in
-    // "64k", and so does a digit of any script, a fraction or a power, after anything that is not
-    // a letter. A number written in words after it, "64 thousand", is not caught.
-    const exactly = (count: number) => new RegExp(`at most ${count}(?!\\p{L}|\\P{L}*\\p{N})`, "u");
+    // The number and not a longer one starting with it: "at most 640" contains "at most 64", and
+    // every rule for what may follow the figure let some other way of writing a larger number
+    // through, "64,000", "64 000" with any space or an apostrophe between the thousands, digits of
+    // another script, "64 k" or "64 thousand". Each row says it one way, the figure and then the
+    // colon that ends the clause, so that is what is looked for.
+    const exactly = (count: number) => new RegExp(`at most ${count}:`);
     expect(row("targets"), "the targets row does not say how many are allowed").toMatch(
       exactly(schema.properties.targets.maxItems),
     );
