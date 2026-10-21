@@ -670,7 +670,10 @@ export function createWorkspace(root: string, options: WorkspaceOptions = {}): W
       const filename = targetFilename(targetId);
       const path = join(directoryFor(id), "targets", filename);
       try {
-        return JSON.parse(await readFile(path, "utf8"));
+        // Read as though a byte-order mark in front were not there, as the link table is: a
+        // target file an editor saved with one could not be read, and its report with it.
+        const text = await readFile(path, "utf8");
+        return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
       } catch (error) {
         throw new WorkspaceError(
           `the compiled target for ${targetId} could not be read: ${error instanceof Error ? error.message : String(error)}`,

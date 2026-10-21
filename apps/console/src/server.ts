@@ -481,7 +481,11 @@ export function createConsole(options: ConsoleOptions): Server {
       if (await workspace.hasTarget(experience.id, target.id)) {
         // A target file that cannot be read is said so on its own card, rather than taking the
         // whole page with it.
-        const compiled = await workspace.readTarget(experience.id, target.id).catch(() => null);
+        let unread = false;
+        const compiled = await workspace.readTarget(experience.id, target.id).catch(() => {
+          unread = true;
+          return null;
+        });
         const isObject = (value: unknown): value is Record<string, unknown> =>
           typeof value === "object" && value !== null && !Array.isArray(value);
         const report = isObject(compiled) ? compiled.report : undefined;
@@ -519,9 +523,11 @@ export function createConsole(options: ConsoleOptions): Server {
           // A file the runtime cannot read is no exception when its report survived: the publish
           // rebuilds it at that report's distance, and the card offered 150 beside it.
           view.scanDistanceMm = distanceBehind(report) ?? undefined;
-          // None to give back, from a report that is there: the field is left for the operator to
-          // fill, as the publish asks them to, rather than holding a default nobody chose.
-          view.distanceLost = view.scanDistanceMm === undefined && report !== undefined;
+          // None to give back, from a report that is there or from a file that does not parse and
+          // so says nothing: the field is left for the operator to fill, as the publish asks them
+          // to, rather than holding a default nobody chose.
+          view.distanceLost = view.scanDistanceMm === undefined && (report !== undefined || unread);
+          if (unread) view.unread = true;
         }
       }
       views.push(view);

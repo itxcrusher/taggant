@@ -232,10 +232,13 @@ export interface TargetView {
    */
   staleReport?: "unreadable" | "broken" | "width" | "verdict" | "another" | undefined;
   /**
-   * Set when that report gives back no distance it could have been compiled for, so the card offers
-   * none and says why, and the publish refuses to compile it again at a guess.
+   * Set when that report gives back no distance it could have been compiled for, or the file holding
+   * it does not parse, so the card offers none and says why, and the publish refuses to compile it
+   * again at a guess.
    */
   distanceLost?: boolean | undefined;
+  /** Set when the compiled target file does not parse at all, so nothing in it can be read. */
+  unread?: boolean | undefined;
   /** Set when the compiled target asks for more width than the manifest says it is printed at. */
   tooSmall?: string | undefined;
 }
@@ -274,7 +277,7 @@ export function experiencePage(view: ExperienceView): string {
                 ? `<div class="notice gap-md"><p>The compiled target carries a print readiness report that does not describe it: one written for another target, or for this one before the file was changed. Its verdict and width are not this artwork's. Compile it again to see what this artwork needs.</p></div>`
                 : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
   }
-  ${target.distanceLost ? `<p class="quiet small gap-md">Its report does not say how far away it was meant to be read from. Give that distance to compile it again; publishing will not guess it.</p>` : ""}
+  ${target.distanceLost ? `<p class="quiet small gap-md">${target.unread ? "Its compiled file cannot be read at all, so nothing in it says" : "Its report does not say"} how far away it was meant to be read from. Give that distance to compile it again; publishing will not guess it.</p>` : ""}
   ${target.tooSmall ? `<div class="notice bad gap-md"><p>${esc(target.tooSmall)}</p></div>` : ""}
   <form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/compile" class="gap-md">
     <div class="row bottom">

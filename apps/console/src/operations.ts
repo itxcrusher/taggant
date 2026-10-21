@@ -248,6 +248,10 @@ async function publishOnce(
     // anything a person could hold. Rebuilt at the default, a piece compiled for 2000 mm and
     // refused there was compiled again at 150, passed, and was published.
     let distanceLost = false;
+    // Set when the file does not parse at all, which says nothing, not even whether it carried a
+    // report: a trailing comma or a file cut short left the report whole and unread, and the
+    // target was compiled again at 150, passed there and was published.
+    let unread = false;
     if (await workspace.hasTarget(experience.id, target.id)) {
       try {
         stored = await workspace.readTarget(experience.id, target.id);
@@ -286,22 +290,31 @@ async function publishOnce(
           rebuildAt = report.scanDistanceMm;
         }
       } catch {
-        // One the runtime cannot read can still carry its report, and the report the distance
-        // it was compiled for: a file damaged in its features, or written in a format this build
-        // does not read, kept the report and was rebuilt at the default, so the 600 mm chosen
-        // was gone from disk and a piece refused there was published at 150.
-        const report =
-          typeof stored === "object" && stored !== null ? (stored as { report?: unknown }).report : undefined;
-        const behind = distanceBehind(report);
-        if (behind !== null) rebuildAt = behind;
-        else distanceLost = report !== undefined;
+        if (stored === undefined) {
+          unread = true;
+          distanceLost = true;
+        } else {
+          // One the runtime cannot read can still carry its report, and the report the distance
+          // it was compiled for: a file damaged in its features, or written in a format this
+          // build does not read, kept the report and was rebuilt at the default, so the 600 mm
+          // chosen was gone from disk and a piece refused there was published at 150.
+          const report =
+            typeof stored === "object" && stored !== null
+              ? (stored as { report?: unknown }).report
+              : undefined;
+          const behind = distanceBehind(report);
+          if (behind !== null) rebuildAt = behind;
+          else distanceLost = report !== undefined;
+        }
         stored = undefined;
       }
     }
     if (stored === undefined) {
       if (distanceLost && rebuildAt === undefined) {
         throw new WorkspaceError(
-          `${target.id} was compiled for a reading distance its print readiness report no longer gives, so it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish.`,
+          unread
+            ? `${target.id}'s compiled file could not be read, so nothing says the reading distance it was compiled for, and it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish.`
+            : `${target.id} was compiled for a reading distance its print readiness report no longer gives, so it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish.`,
         );
       }
       try {

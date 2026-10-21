@@ -314,6 +314,22 @@ describe("a target on disk with no report at all", () => {
     const shipped = JSON.parse(await read(join(out, "targets", "front.json"), "utf8"));
     expect(shipped.report?.pass).toBe(true);
 
+    // So is a file the runtime cannot read that parses and holds no report: nothing in it was
+    // compiled at a distance, so there is none to lose, and the card offers the default. All three
+    // take the publish down the same path, so one publish holds it, a publish being a compile.
+    for (const text of ["[]", "null", JSON.stringify({ ...unreported, formatVersion: 3 })]) {
+      await write(path, text);
+      const card = await (await fetch(`${origin}/e/no-report`)).text();
+      expect(card, text.slice(0, 20)).not.toContain("how far away it was meant to be read from");
+      expect(card, text.slice(0, 20)).toMatch(/name="scanDistanceMm"[^>]*required value="150"/);
+    }
+    const at: number[] = [];
+    await publish(workspace, await workspace.read(created.id), out, {
+      runtimeDir,
+      onRebuild: (_id: string, distance: number) => at.push(distance),
+    });
+    expect(at, "an unreadable file with no report").toEqual([150]);
+
     // And a report written for another target, which the gate refuses in terms of that target: it
     // went to the gate as it stood, and the operator was told the other artwork's width. Rebuilt
     // from this target's own artwork, it publishes on its own report, and at the distance the
@@ -423,6 +439,45 @@ describe("a target whose report gives back no distance", () => {
       }),
     ).rejects.toThrow(/declared 120 mm wide.* at 600 mm/);
     expect(rebuiltAt).toEqual([600]);
+
+    // A file that does not parse says nothing, its report whole inside it or not, so it is asked
+    // for a distance as one whose report gives none: compiled again at 150 instead, a piece
+    // compiled for 600 and refused there was published.
+    const whole = JSON.stringify(compiled);
+    const unreadable: Array<[string, string]> = [
+      ["a trailing comma", `${whole.slice(0, -1)},}`],
+      ["a file cut short", whole.slice(0, Math.floor(whole.length / 2))],
+    ];
+    for (const [label, text] of unreadable) {
+      await write(path, text);
+      const card = await (await fetch(`${origin}/e/lost-distance`)).text();
+      expect(card, label).toContain(
+        "Its compiled file cannot be read at all, so nothing in it says how far away",
+      );
+      expect(card, label).toMatch(/name="scanDistanceMm"[^>]*required value=""/);
+      const rebuiltAt: number[] = [];
+      await expect(
+        publish(workspace, await workspace.read(created.id), join(root, "lost-distance-out"), {
+          runtimeDir,
+          onRebuild: (_id: string, at: number) => rebuiltAt.push(at),
+        }),
+        label,
+      ).rejects.toThrow(/front's compiled file could not be read, so nothing says the reading distance/);
+      expect(rebuiltAt, label).toEqual([]);
+    }
+    // One saved with a byte-order mark in front is read as though it had none, so its report at
+    // 600 is the one on record and the publish refuses the piece there, as compiled.
+    await write(path, `${String.fromCharCode(0xfeff)}${whole}`);
+    const marked = await (await fetch(`${origin}/e/lost-distance`)).text();
+    expect(marked).not.toContain("cannot be read");
+    const markedRebuilt: number[] = [];
+    await expect(
+      publish(workspace, await workspace.read(created.id), join(root, "lost-distance-out"), {
+        runtimeDir,
+        onRebuild: (_id: string, at: number) => markedRebuilt.push(at),
+      }),
+    ).rejects.toThrow(/declared 120 mm wide.* at 600 mm/);
+    expect(markedRebuilt).toEqual([]);
 
     // And the card's form, sent with its field empty, is asked for a distance rather than compiled
     // at the default: a page loaded before the field asked for one sends exactly that.
