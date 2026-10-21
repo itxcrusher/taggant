@@ -275,16 +275,26 @@ describe("a compiled target from an older build", () => {
     ).rejects.toThrow(
       // The file named, and what helps said for each case: the same artwork compiled again does not,
       // and a file replaced since the compile does.
-      /found none in its artwork, .* If "art\.png", as the manifest names it, is still the artwork it was compiled from, compiling again will not change that, and artwork with more detail will, once the target is compiled from it; if that file has been replaced since, compiling the target again is all it needs\.$/,
+      /found none in its artwork, .* If "art\.png", as the manifest names it, is still the artwork it was compiled from, compiling again will not change that, and artwork with more detail will, once the target is compiled from it; if that file has been replaced since, compiling the target again checks the artwork that is there now\.$/,
     );
-    // A name the manifest gives is quoted, so an empty one shows as one, and a control or format
-    // character in it is written as an escape rather than sent to the terminal.
-    const control = String.fromCharCode(27);
-    const override = String.fromCharCode(0x202e);
+    // A name the manifest gives is quoted, so an empty one shows as one, and every control and
+    // format character, line or paragraph separator and lone surrogate in it is written as an
+    // escape, in one notation, rather than sent to the terminal: the C0 controls came out as JSON
+    // writes them and the rest as code points, and DEL, the C1 controls and the two separators,
+    // which JSON leaves alone, are each held here on their own.
+    const code = (point: number) => String.fromCharCode(point);
     for (const [source, shown] of [
       ["", '""'],
-      [`a${control}[2Jb.png`, '"a\\u001b[2Jb.png"'],
-      [`a${override}gnp.png`, '"a\\u{202e}gnp.png"'],
+      [`a${code(27)}[2Jb.png`, '"a\\u{1b}[2Jb.png"'],
+      [`a${code(0x202e)}gnp.png`, '"a\\u{202e}gnp.png"'],
+      [`a${code(0x7f)}b`, '"a\\u{7f}b"'],
+      [`a${code(0x9b)}b`, '"a\\u{9b}b"'],
+      [`a${code(0x85)}b`, '"a\\u{85}b"'],
+      [`a${code(0x2028)}b`, '"a\\u{2028}b"'],
+      [`a${code(0x2029)}b`, '"a\\u{2029}b"'],
+      [`a${code(0xd800)}b`, '"a\\u{d800}b"'],
+      [`front${code(10)}back`, '"front\\u{a}back"'],
+      ['a"b\\c', '"a\\"b\\\\c"'],
     ]) {
       const named = { ...manifest, targets: manifest.targets.map((each) => ({ ...each, source })) };
       await expect(
@@ -317,9 +327,13 @@ describe("a compiled target from an older build", () => {
     // A target with no report was let through as never claimed to have been checked, so removing
     // one key from a target file published a sheet the compiler had refused, while the console's
     // own page said the target was not compiled yet.
-    const refused = { ...features, report: { ...(await currentReport()), pass: false } };
+    // A refusal the compiler writes for this target: a current report with its verdict flipped by
+    // hand is one this build does not stand behind, refused before the verdict is looked at.
+    const refused = { ...features, report: await refusalFor(features) };
+    // Pointed at what the report says, and not sent to compile again: after the console's compile
+    // on the way, that was the step it had just taken.
     await expect(bundle({ manifest, targets: { front: refused }, ...(await scratch()) })).rejects.toThrow(
-      /Compile it again|did not pass/,
+      /^front did not pass its print readiness check, so it cannot be published; its print readiness report says what the check found in the artwork\.$/,
     );
     await expect(bundle({ manifest, targets: { front: features }, ...(await scratch()) })).rejects.toThrow(
       /carries no print readiness report/,

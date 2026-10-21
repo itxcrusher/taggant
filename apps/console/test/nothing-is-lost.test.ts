@@ -789,7 +789,7 @@ describe("an internal failure said as a sentence", () => {
     await workspace.writeTarget("plain", "front", { ...plain, report: far.report });
     const nothing = await told(await post("/e/plain/publish", ""));
     expect(nothing).toContain(
-      "if that file has been replaced since, compiling the target again is all it needs. On the way there, front at 600 mm",
+      "if that file has been replaced since, compiling the target again checks the artwork that is there now. On the way there, front at 600 mm",
     );
     expect(nothing).not.toContain("..");
   }, 240_000);

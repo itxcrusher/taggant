@@ -383,7 +383,7 @@ function checkReadiness(
   // null, and comparing against null compares nothing.
   if (!fields.pass) {
     throw new Error(
-      `${target.id} did not pass its print readiness check, so it cannot be published. Compile it again and read what it says about the artwork.`,
+      `${target.id} did not pass its print readiness check, so it cannot be published; its print readiness report says what the check found in the artwork.`,
     );
   }
   const needs = fields.minimumWidthMm as number;
@@ -450,12 +450,13 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
       // and the console's card gives the compile's reason; it was told to compile again, as a file
       // that lost its features in a copy is. Nothing ties a target to the file it was compiled
       // from, though, so the file the manifest names may have been replaced since, and then
-      // compiling again is exactly what helps: the sentence says which holds when, rather than
+      // compiling again is what finds out whether the file there now has the detail: the sentence
+      // says which holds when, and promises nothing of a file it has not seen, rather than
       // telling an operator who replaced the artwork that compiling again would not help.
       const foundNothing = isCurrentReport(compiled.report) && describesTarget(compiled);
       throw new Error(
         foundNothing
-          ? `${target.id} has no features in it, so nothing in a camera frame could ever match it: its compile found none in its artwork, which had too little detail away from its edges to track. If ${quoted(target.source)}, as the manifest names it, is still the artwork it was compiled from, compiling again will not change that, and artwork with more detail will, once the target is compiled from it; if that file has been replaced since, compiling the target again is all it needs.`
+          ? `${target.id} has no features in it, so nothing in a camera frame could ever match it: its compile found none in its artwork, which had too little detail away from its edges to track. If ${quoted(target.source)}, as the manifest names it, is still the artwork it was compiled from, compiling again will not change that, and artwork with more detail will, once the target is compiled from it; if that file has been replaced since, compiling the target again checks the artwork that is there now.`
           : `${target.id} has no features in it, so nothing in a camera frame could ever match it. Compile it again.`,
       );
     }
@@ -629,13 +630,18 @@ async function vendorRuntime(outDir: string, runtimeDir?: string): Promise<strin
 }
 
 /**
- * A name from a manifest as a sentence can carry it: quoted, so an empty one shows as `""`, with
- * line breaks and every control and format character written as an escape, so none of them can
- * clear, colour or reorder the terminal the message is printed to.
+ * A name from a manifest as a sentence can carry it: in double quotes, so an empty one shows as
+ * `""`, a quote or a backslash in it escaped, and every control and format character, line and
+ * paragraph separator and lone surrogate written as `\u{...}` with its code point, one notation for
+ * all of them, so none can clear, colour, break or reorder the terminal the message is printed to.
  */
 function quoted(name: string): string {
-  return JSON.stringify(name).replace(
-    /[\p{Cc}\p{Cf}]/gu,
-    (character) => `\\u{${(character.codePointAt(0) ?? 0).toString(16)}}`,
-  );
+  let shown = "";
+  for (const character of name) {
+    if (character === '"' || character === "\\") shown += `\\${character}`;
+    else if (/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/u.test(character)) {
+      shown += `\\u{${(character.codePointAt(0) ?? 0).toString(16)}}`;
+    } else shown += character;
+  }
+  return `"${shown}"`;
 }
