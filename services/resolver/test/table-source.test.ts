@@ -389,10 +389,15 @@ describe("what a table may not say", () => {
         `{"version":1,"entries":{"/01/09520123456788":[{"href":"https://a.example/p","href":"https://b.example/","linkType":"gs1:pip","title":"P"}]}}`,
         /"href" twice in one object/,
       ],
-      // The same key spelled with an escape is the same key to a reader.
+      // The same key spelled with an escape is the same key to a reader. Two backslashes, so the
+      // escape reaches the JSON text rather than being read by JavaScript first.
       [
-        `{"version":1,"entries":{"/01/09520123456788":[${link}],"\u002F01/09520123456788":[${cert}]}}`,
-        /twice in one object/,
+        `{"version":1,"entries":{"/01/09520123456788":[${link}],"\\u002F01/09520123456788":[${cert}]}}`,
+        /"\/01\/09520123456788" twice in one object, "entries"/,
+      ],
+      [
+        `{"version":1,"entries":{"/01/09520123456788":[{"href":"https://a.example/p","\\u0068ref":"https://b.example/","linkType":"gs1:pip","title":"P"}]}}`,
+        /"href" twice in one object/,
       ],
       [`{"version":1,"version":1,"entries":{}}`, /"version" twice in one object/],
     ] as const) {
