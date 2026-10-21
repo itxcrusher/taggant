@@ -1210,10 +1210,11 @@ describe("what a link answers with", () => {
     }
   });
 
-  it("chooses a plain scan's language among the links at the level of the default it follows", async () => {
+  it("chooses a plain scan's language at the default's level and the levels more specific than it", async () => {
     // Taken from every level, the default's siblings sent a French phone scanning a lot with a
     // default of its own to the product's French page, while the lot's own link was the one its
-    // code had been pointed at.
+    // code had been pointed at. Taken from the default's level alone, a lot with a page of its own
+    // in the scanner's language, and no default, sent that phone to its product's page.
     const { at, close } = await serve({
       "/01/09520123456788": [
         { href: "https://a.example/en", linkType: "gs1:pip", title: "EN", hreflang: ["en"], default: true },
@@ -1222,15 +1223,31 @@ describe("what a link answers with", () => {
       "/01/09520123456788/10/LOT": [
         { href: "https://a.example/lot", linkType: "gs1:pip", title: "LOT", default: true },
       ],
+      "/01/09520123456788/10/LOT2": [
+        { href: "https://a.example/lot2-de", linkType: "gs1:pip", title: "LOT2", hreflang: ["de"] },
+      ],
     });
     try {
       const french = { redirect: "manual" as const, headers: { "accept-language": "fr" } };
+      const german = { redirect: "manual" as const, headers: { "accept-language": "de" } };
+      const none = { redirect: "manual" as const };
       expect((await fetch(`${at}/01/09520123456788/10/LOT`, french)).headers.get("location")).toBe(
         "https://a.example/lot",
       );
       // The product's own scan still chooses among the product's languages.
       expect((await fetch(`${at}/01/09520123456788`, french)).headers.get("location")).toBe(
         "https://a.example/fr",
+      );
+      // A lot with no default of its own follows its product's, and its own page in the scanner's
+      // language answers before the product's; one in no language asked for leaves the default.
+      expect((await fetch(`${at}/01/09520123456788/10/LOT2`, german)).headers.get("location")).toBe(
+        "https://a.example/lot2-de",
+      );
+      expect((await fetch(`${at}/01/09520123456788/10/LOT2`, french)).headers.get("location")).toBe(
+        "https://a.example/fr",
+      );
+      expect((await fetch(`${at}/01/09520123456788/10/LOT2`, none)).headers.get("location")).toBe(
+        "https://a.example/en",
       );
     } finally {
       await close();

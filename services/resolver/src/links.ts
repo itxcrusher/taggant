@@ -512,14 +512,21 @@ export function chooseLink(candidates: Candidate[], request: ChoiceRequest): Can
   }
   if (!fallback) return undefined;
 
-  // The default decides which link type is on offer, and at which level; the request then gets
-  // to improve on which of that type, at that level, it lands on. Filtering to the default alone
-  // would make the rest of this sentence in the standard mean nothing, since one link cannot be
-  // bettered. Taken from every level, the type's links sent a French phone scanning a lot that
-  // has a default of its own to the product's French page.
+  // The default decides which link type is on offer, and the levels it is chosen from: its own,
+  // and those more specific than it, which come first and mark no default. The request then gets
+  // to improve on which of that type it lands on. Filtering to the default alone would make the
+  // rest of this sentence in the standard mean nothing, since one link cannot be bettered. Taken
+  // from every level, the type's links sent a French phone scanning a lot that has a default of
+  // its own to the product's French page; taken from the default's level alone, they sent a
+  // French phone scanning a lot with a French page of its own, and no default, to the product's
+  // English one.
+  const levels = new Set<string>();
+  for (const candidate of candidates) {
+    levels.add(candidate.anchor);
+    if (candidate.anchor === fallback.anchor) break;
+  }
   const siblings = candidates.filter(
-    (candidate) =>
-      sameLinkType(candidate.linkType, fallback.linkType) && candidate.anchor === fallback.anchor,
+    (candidate) => sameLinkType(candidate.linkType, fallback.linkType) && levels.has(candidate.anchor),
   );
   return best(siblings, request.acceptLanguage) ?? fallback;
 }
