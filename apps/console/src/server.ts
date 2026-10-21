@@ -33,7 +33,14 @@ import {
   indexPage,
   page,
 } from "./views.js";
-import { type Experience, type Workspace, WorkspaceError, assertId, assertTargetId } from "./workspace.js";
+import {
+  type Experience,
+  TargetNotReadError,
+  type Workspace,
+  WorkspaceError,
+  assertId,
+  assertTargetId,
+} from "./workspace.js";
 
 /**
  * Largest request this will read.
@@ -482,8 +489,12 @@ export function createConsole(options: ConsoleOptions): Server {
         // A target file that cannot be read is said so on its own card, rather than taking the
         // whole page with it.
         let unread = false;
-        const compiled = await workspace.readTarget(experience.id, target.id).catch(() => {
+        // The system's reason, when the file could not be read at all: a folder in its place, or
+        // reading denied, which compiling cannot replace until it is moved aside or made readable.
+        let notRead: string | undefined;
+        const compiled = await workspace.readTarget(experience.id, target.id).catch((error) => {
           unread = true;
+          if (error instanceof TargetNotReadError) notRead = error.reason;
           return null;
         });
         const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -528,6 +539,7 @@ export function createConsole(options: ConsoleOptions): Server {
           // to, rather than holding a default nobody chose.
           view.distanceLost = view.scanDistanceMm === undefined && (report !== undefined || unread);
           if (unread) view.unread = true;
+          if (notRead !== undefined) view.notRead = notRead;
         }
       }
       views.push(view);

@@ -246,6 +246,8 @@ button[disabled] { opacity: 0.45; cursor: default; border-color: var(--rule); co
   padding: 12px 16px;
   margin: 0 0 20px;
   font-size: 13px;
+  /* A notice can quote a file's path, which has no space to break at. */
+  overflow-wrap: anywhere;
 }
 .notice.bad { border-left-color: var(--fail); }
 .notice.good { border-left-color: var(--mark); }

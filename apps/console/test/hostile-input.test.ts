@@ -480,6 +480,12 @@ describe("a target whose report gives back no distance", () => {
     ).rejects.toThrow(
       /front's compiled file could not be read \(.+\), so nothing says the reading distance .* Make the file readable, or move aside what is in its place/,
     );
+    // And its card says the same, where it said to compile it again to replace it.
+    const folderCard = await (await fetch(`${origin}/e/lost-distance`)).text();
+    expect(folderCard).toMatch(
+      /The compiled target file could not be read \(.+\)\. Make it readable, or move aside what is in its place, then compile it again\./,
+    );
+    expect(folderCard).not.toContain("Compile it again to replace it");
     await remove(path, { recursive: true });
 
     // One saved with a byte-order mark in front is read as though it had none, so its report at

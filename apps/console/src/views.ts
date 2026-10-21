@@ -239,6 +239,11 @@ export interface TargetView {
   distanceLost?: boolean | undefined;
   /** Set when the compiled target file does not parse at all, so nothing in it can be read. */
   unread?: boolean | undefined;
+  /**
+   * The system's reason when the compiled target file could not be read at all, a folder in its
+   * place or reading denied: compiling cannot replace it until it is moved aside or made readable.
+   */
+  notRead?: string | undefined;
   /** Set when the compiled target asks for more width than the manifest says it is printed at. */
   tooSmall?: string | undefined;
 }
@@ -266,7 +271,9 @@ export function experiencePage(view: ExperienceView): string {
     target.report
       ? verdict(target.report)
       : target.staleReport === "unreadable"
-        ? `<div class="notice gap-md"><p>The compiled target file cannot be read as a target. Compile it again to replace it.</p></div>`
+        ? target.notRead !== undefined
+          ? `<div class="notice gap-md"><p>The compiled target file could not be read (${esc(target.notRead)}). Make it readable, or move aside what is in its place, then compile it again.</p></div>`
+          : `<div class="notice gap-md"><p>The compiled target file cannot be read as a target. Compile it again to replace it.</p></div>`
         : target.staleReport === "broken"
           ? `<div class="notice gap-md"><p>The compiled target carries a print readiness report that is not one at all. Compile it again to see what this artwork needs.</p></div>`
           : target.staleReport === "width"
