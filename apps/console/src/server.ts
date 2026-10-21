@@ -488,13 +488,17 @@ export function createConsole(options: ConsoleOptions): Server {
       if (await workspace.hasTarget(experience.id, target.id)) {
         // A target file that cannot be read is said so on its own card, rather than taking the
         // whole page with it.
+        // Set when the file does not parse.
         let unread = false;
-        // The system's reason, when the file could not be read at all: a folder in its place, or
-        // reading denied, which compiling cannot replace until it is moved aside or made readable.
+        // The system's reason, when the file could not be read at all: a folder or a link in its
+        // place, reading denied, or another program holding it.
         let notRead: string | undefined;
+        // Gone since it was looked for, as when another program is replacing it.
+        let gone = false;
         const compiled = await workspace.readTarget(experience.id, target.id).catch((error) => {
-          unread = true;
-          if (error instanceof TargetNotReadError) notRead = error.reason;
+          if (!(error instanceof TargetNotReadError)) unread = true;
+          else if (error.gone) gone = true;
+          else notRead = error.reason;
           return null;
         });
         const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -509,7 +513,9 @@ export function createConsole(options: ConsoleOptions): Server {
         // whether its value is truthy: `null`, `0`, `false` and `""` read as not compiled yet,
         // and a string read as a width too small to trust. No report at all is not compiled by
         // anything this build stands behind, and publishing compiles it first, as the page says.
-        if (!isObject(compiled) || !readableTarget(compiled)) {
+        if (gone) {
+          // Nothing in its place: the card says what a card with no compiled file says.
+        } else if (!isObject(compiled) || !readableTarget(compiled)) {
           view.staleReport = "unreadable";
         } else if (report !== undefined && !isCurrentReport(report)) {
           // The older build's only when nothing in it says this model wrote it: one of this model's
@@ -537,7 +543,8 @@ export function createConsole(options: ConsoleOptions): Server {
           // None to give back, from a report that is there or from a file that does not parse and
           // so says nothing: the field is left for the operator to fill, as the publish asks them
           // to, rather than holding a default nobody chose.
-          view.distanceLost = view.scanDistanceMm === undefined && (report !== undefined || unread);
+          view.distanceLost =
+            view.scanDistanceMm === undefined && (report !== undefined || unread || notRead !== undefined);
           if (unread) view.unread = true;
           if (notRead !== undefined) view.notRead = notRead;
         }

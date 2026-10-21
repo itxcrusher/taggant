@@ -250,11 +250,12 @@ export interface TargetView {
    * again at a guess.
    */
   distanceLost?: boolean | undefined;
-  /** Set when the compiled target file does not parse at all, so nothing in it can be read. */
+  /** Set when the compiled target file does not parse, so nothing in it can be read. */
   unread?: boolean | undefined;
   /**
-   * The system's reason when the compiled target file could not be read at all, a folder in its
-   * place or reading denied: compiling cannot replace it until it is moved aside or made readable.
+   * The system's reason when the compiled target file could not be read at all: a folder or a link
+   * in its place, reading denied, or another program holding it. Compiling replaces it where what
+   * is in its place can be replaced, and says so where it cannot.
    */
   notRead?: string | undefined;
   /** Set when the compiled target asks for more width than the manifest says it is printed at. */
@@ -285,7 +286,7 @@ export function experiencePage(view: ExperienceView): string {
       ? verdict(target.report)
       : target.staleReport === "unreadable"
         ? target.notRead !== undefined
-          ? `<div class="notice gap-md"><p>The compiled target file could not be read (${shown(target.notRead)}). Make it readable, or move aside what is in its place, then compile it again.</p></div>`
+          ? `<div class="notice gap-md"><p>The compiled target file could not be read (${shown(target.notRead)}). Compile it again to replace it; if what is in its place cannot be replaced, the compile says so.</p></div>`
           : `<div class="notice gap-md"><p>The compiled target file cannot be read as a target. Compile it again to replace it.</p></div>`
         : target.staleReport === "broken"
           ? `<div class="notice gap-md"><p>The compiled target carries a print readiness report that is not one at all. Compile it again to see what this artwork needs.</p></div>`
@@ -297,7 +298,7 @@ export function experiencePage(view: ExperienceView): string {
                 ? `<div class="notice gap-md"><p>The compiled target carries a print readiness report that does not describe it: one written for another target, or for this one before the file was changed. Its verdict and width are not this artwork's. Compile it again to see what this artwork needs.</p></div>`
                 : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
   }
-  ${target.distanceLost ? `<p class="quiet small gap-md">${target.unread ? "Its compiled file cannot be read at all, so nothing in it says" : "Its report does not say"} how far away it was meant to be read from. Give that distance to compile it again; publishing will not guess it.</p>` : ""}
+  ${target.distanceLost ? `<p class="quiet small gap-md">${target.notRead !== undefined ? "Its compiled file could not be read, so nothing in it says" : target.unread ? "Its compiled file does not parse, so nothing in it says" : "Its report does not say"} how far away it was meant to be read from. Give that distance to compile it again; publishing will not guess it.</p>` : ""}
   ${target.tooSmall ? `<div class="notice bad gap-md"><p>${esc(target.tooSmall)}</p></div>` : ""}
   <form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/compile" class="gap-md">
     <div class="row bottom">

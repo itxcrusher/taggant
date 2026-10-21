@@ -17,7 +17,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join, posix, resolve, sep } from "node:path";
 import process from "node:process";
 import { type ManifestError, type TaggantExperienceManifest, validateManifest } from "@taggant/manifest";
@@ -51,11 +51,16 @@ export class WorkspaceError extends Error {
   }
 }
 
-/** A compiled target file that could not be read at all, with the reason the system gave. */
+/**
+ * A compiled target file that could not be read at all, with the reason the system gave, and
+ * whether nothing is in its place any more: gone since it was looked for, as when another program
+ * is replacing it.
+ */
 export class TargetNotReadError extends WorkspaceError {
   constructor(
     message: string,
     readonly reason: string,
+    readonly gone = false,
   ) {
     super(message);
     this.name = "TargetNotReadError";
@@ -309,14 +314,18 @@ export async function replaceFile(from: string, to: string): Promise<void> {
       return;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      // A folder where the file goes is refused with the same code, and no wait changes that.
+      // A folder or a link where the file goes is refused with the same codes, and no wait changes
+      // that, so it is said: taken for a file held, a link to nothing was "held open for over a
+      // second", and a folder, or a link to one, failed as nothing the operator could act on.
+      const there = await lstat(to).catch(() => undefined);
+      const what = there?.isDirectory() ? "a folder" : there?.isSymbolicLink() ? "a link" : undefined;
+      if (what !== undefined && there !== undefined) {
+        throw new WorkspaceError(
+          `${to} is ${what}, which a file cannot replace: move it aside, then try again.`,
+        );
+      }
       const held =
-        process.platform === "win32" &&
-        (code === "EPERM" || code === "EACCES" || code === "EBUSY") &&
-        !(await stat(to).then(
-          (info) => info.isDirectory(),
-          () => false,
-        ));
+        process.platform === "win32" && (code === "EPERM" || code === "EACCES" || code === "EBUSY");
       if (!held) throw error;
       if (attempt >= RENAME_ATTEMPTS - 1) {
         throw new WorkspaceError(
@@ -682,17 +691,24 @@ export function createWorkspace(root: string, options: WorkspaceOptions = {}): W
     async readTarget(id: string, targetId: string): Promise<unknown> {
       const filename = targetFilename(targetId);
       const path = join(directoryFor(id), "targets", filename);
-      // Read and parsed apart, because the two are told apart by what is done about them: a file
-      // that does not parse is compiled again from its card, and one that cannot be read, a folder
-      // in its place or reading denied, is made readable first, or compiling it fails as well.
+      // Read and parsed apart, because the two are said apart: a file that does not parse, and one
+      // that cannot be read, a folder or a link in its place, reading denied or another program
+      // holding it, whose reason the system gives. One gone since it was looked for is neither.
       let text: string;
       try {
         text = await readFile(path, "utf8");
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
+        const gone =
+          (error as NodeJS.ErrnoException).code === "ENOENT" &&
+          (await lstat(path).then(
+            () => false,
+            () => true,
+          ));
         throw new TargetNotReadError(
           `the compiled target for ${targetId} could not be read: ${reason}`,
           reason,
+          gone,
         );
       }
       try {

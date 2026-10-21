@@ -258,7 +258,7 @@ async function publishOnce(
     // Set when the file does not parse at all, or cannot be read, which says nothing, not even
     // whether it carried a report: a trailing comma or a file cut short left the report whole and
     // unread, and the target was compiled again at 150, passed there and was published. `cause` is
-    // the system's reason when the file could not be read, which compiling cannot cure.
+    // the system's reason when the file could not be read.
     let unread: { cause?: string } | undefined;
     if (await workspace.hasTarget(experience.id, target.id)) {
       try {
@@ -298,7 +298,10 @@ async function publishOnce(
           rebuildAt = report.scanDistanceMm;
         }
       } catch (error) {
-        if (stored === undefined) {
+        if (error instanceof TargetNotReadError && error.gone) {
+          // Gone since it was looked for, as when another program is replacing it: nothing is in
+          // its place to say a distance, and it is compiled as anything not compiled yet is.
+        } else if (stored === undefined) {
           unread = error instanceof TargetNotReadError ? { cause: error.reason } : {};
           distanceLost = true;
         } else {
@@ -321,9 +324,9 @@ async function publishOnce(
       if (distanceLost && rebuildAt === undefined) {
         throw new WorkspaceError(
           unread?.cause !== undefined
-            ? `${target.id}'s compiled file could not be read (${unread.cause}), so nothing says the reading distance it was compiled for, and it is not compiled again at a guess. Make the file readable, or move aside what is in its place, then compile it from its card at the distance it will be read from, and publish.`
+            ? `${target.id}'s compiled file could not be read (${unread.cause}), so nothing says the reading distance it was compiled for, and it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish; if what is in its place cannot be replaced, the compile says so.`
             : unread !== undefined
-              ? `${target.id}'s compiled file could not be read, so nothing says the reading distance it was compiled for, and it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish.`
+              ? `${target.id}'s compiled file does not parse, so nothing says the reading distance it was compiled for, and it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish.`
               : `${target.id} was compiled for a reading distance its print readiness report no longer gives, so it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish.`,
         );
       }

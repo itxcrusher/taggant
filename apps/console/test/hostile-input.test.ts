@@ -456,9 +456,7 @@ describe("a target whose report gives back no distance", () => {
     for (const [label, text] of unreadable) {
       await write(path, text);
       const card = await (await fetch(`${origin}/e/lost-distance`)).text();
-      expect(card, label).toContain(
-        "Its compiled file cannot be read at all, so nothing in it says how far away",
-      );
+      expect(card, label).toContain("Its compiled file does not parse, so nothing in it says how far away");
       expect(card, label).toMatch(/name="scanDistanceMm"[^>]*required value=""/);
       const rebuiltAt: number[] = [];
       await expect(
@@ -467,27 +465,57 @@ describe("a target whose report gives back no distance", () => {
           onRebuild: (_id: string, at: number) => rebuiltAt.push(at),
         }),
         label,
-      ).rejects.toThrow(/front's compiled file could not be read, so nothing says the reading distance/);
+      ).rejects.toThrow(/front's compiled file does not parse, so nothing says the reading distance/);
       expect(rebuiltAt, label).toEqual([]);
     }
-    // A folder where the file should be cannot be read at all, and compiling cannot replace it, so
-    // the publish says why and to move it aside first: told only to compile it from its card, the
-    // operator met a compile that failed on the folder and the same advice again.
-    const { mkdir: makeFolder, rm: remove } = await import("node:fs/promises");
+    // A folder where the file should be cannot be read at all: the publish and the card give the
+    // system's reason and send the operator to the card's compile, and the compile says that a
+    // folder is in the file's place and to move it aside, where it failed as a 500.
+    const { mkdir: makeFolder, rm: remove, symlink } = await import("node:fs/promises");
     await remove(path);
     await makeFolder(path);
     await expect(
       publish(workspace, await workspace.read(created.id), join(root, "lost-distance-out"), { runtimeDir }),
     ).rejects.toThrow(
-      /front's compiled file could not be read \(.+\), so nothing says the reading distance .* Make the file readable, or move aside what is in its place/,
+      /front's compiled file could not be read \(.+\), so nothing says the reading distance .* if what is in its place cannot be replaced, the compile says so\./,
     );
-    // And its card says the same, where it said to compile it again to replace it.
     const folderCard = await (await fetch(`${origin}/e/lost-distance`)).text();
     expect(folderCard).toMatch(
-      /The compiled target file could not be read \(.+\)\. Make it readable, or move aside what is in its place, then compile it again\./,
+      /The compiled target file could not be read \(.+\)\. Compile it again to replace it; if what is in its place cannot be replaced, the compile says so\./,
     );
-    expect(folderCard).not.toContain("Compile it again to replace it");
+    expect(folderCard).toContain("Its compiled file could not be read, so nothing in it says how far away");
+    const intoFolder = await post(
+      "/e/lost-distance/targets/front/compile",
+      new URLSearchParams({ scanDistanceMm: "600" }),
+    );
+    expect(intoFolder.status).toBe(303);
+    expect(await (await fetch(`${origin}${intoFolder.headers.get("location")}`)).text()).toMatch(
+      /is a folder, which a file cannot replace: move it aside, then try again\./,
+    );
     await remove(path, { recursive: true });
+    // A link to nothing, which the card takes for no file: the compile says a link is in the way,
+    // where it said another program held the file open.
+    await symlink(join(root, "nowhere"), path, "junction");
+    const intoLink = await post(
+      "/e/lost-distance/targets/front/compile",
+      new URLSearchParams({ scanDistanceMm: "600" }),
+    );
+    expect(intoLink.status).toBe(303);
+    const linkPage = await (await fetch(`${origin}${intoLink.headers.get("location")}`)).text();
+    expect(linkPage).toMatch(/is a link, which a file cannot replace: move it aside, then try again\./);
+    expect(linkPage).not.toContain("held it open");
+    await remove(path);
+    // A file gone between being looked for and being read, as when another program is replacing it,
+    // is not compiled at a guess or sent to be moved aside: there is nothing in its place, and it is
+    // compiled as anything not compiled yet is.
+    const goneRebuilt: number[] = [];
+    await publish(
+      { ...workspace, hasTarget: async () => true },
+      await workspace.read(created.id),
+      join(root, "lost-distance-out"),
+      { runtimeDir, onRebuild: (_id: string, at: number) => goneRebuilt.push(at) },
+    ).catch(() => undefined);
+    expect(goneRebuilt).toEqual([150]);
 
     // One saved with a byte-order mark in front is read as though it had none, so its report at
     // 600 is the one on record and the publish refuses the piece there, as compiled.
