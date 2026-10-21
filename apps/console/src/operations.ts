@@ -402,7 +402,7 @@ export async function registerCode(
   tablePath: string,
   entry: { path: string; href: string; title: string; linkType?: string; language?: string },
   options: { holds?: () => string | null } = {},
-): Promise<{ path: string; replaced: number; kept: number }> {
+): Promise<{ path: string; replaced: number; kept: number; unmarked: number }> {
   // Written under the name the filesystem uses, not the one given, and that name is asked for
   // inside the turn, when the table the turn before wrote exists to be asked about. Given a
   // short name, the rename that puts a new table in place renamed the table itself, so the
@@ -416,7 +416,7 @@ async function writeCode(
   tablePath: string,
   entry: { path: string; href: string; title: string; linkType?: string; language?: string },
   options: { holds?: () => string | null },
-): Promise<{ path: string; replaced: number; kept: number }> {
+): Promise<{ path: string; replaced: number; kept: number; unmarked: number }> {
   // Asked first, inside the turn, so a console whose lock on the table was taken over writes
   // nothing: two consoles that both believed they held one table kept twenty codes of forty.
   const refusal = options.holds?.() ?? null;
@@ -481,8 +481,18 @@ async function writeCode(
    * address while the console reported that the code now points somewhere else.
    */
   const existing = current.entries[canonical] ?? [];
-  const adjusted = existing.filter((other) => !sameLinkType(other.linkType, linkType));
-  const replaced = existing.length - adjusted.length;
+  const others = existing.filter((other) => !sameLinkType(other.linkType, linkType));
+  const replaced = existing.length - others.length;
+  // One default per code, as the resolver requires: the link registered here is the one a plain
+  // scan follows, so another link of the code marked as the default keeps its place and loses the
+  // mark. Left marked, the table would hold two defaults, which the resolver refuses.
+  let unmarked = 0;
+  const adjusted = others.map((other) => {
+    if (other.default !== true) return other;
+    unmarked += 1;
+    const { default: _wasDefault, ...rest } = other;
+    return rest;
+  });
   // Exactly the two fields the format has, rather than a spread of whatever was on disk.
   // Spreading carried unknown top-level keys forward, `__proto__` among them, so a table
   // this console rewrote kept junk that neither it nor the resolver understands.
@@ -519,7 +529,7 @@ async function writeCode(
       }`,
     );
   }
-  return { path: canonical, replaced, kept: adjusted.length };
+  return { path: canonical, replaced, kept: adjusted.length - unmarked, unmarked };
 }
 
 /** Where an experience publishes to, under the folder the static host serves. */

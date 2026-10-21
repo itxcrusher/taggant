@@ -1076,6 +1076,36 @@ describe("what a link answers with", () => {
     }
   });
 
+  it("answers a request for gs1:defaultLink with the link a plain scan follows", async () => {
+    // The linkset publishes the default under that relation, and no link in a table is of it, so a
+    // request for it answered 404 while the linkset advertised it.
+    const seen: Event[] = [];
+    const { at, close } = await serve(
+      {
+        "/01/09520123456788": [
+          { href: "https://a.example/r", linkType: "gs1:recipeInfo", title: "R" },
+          { href: "https://a.example/p", linkType: "gs1:pip", title: "P", default: true },
+        ],
+      },
+      seen,
+    );
+    try {
+      for (const asked of ["gs1:defaultLink", "https://gs1.org/voc/defaultLink"]) {
+        const scan = await fetch(`${at}/01/09520123456788?linkType=${encodeURIComponent(asked)}&utm=1`, {
+          redirect: "manual",
+        });
+        expect(scan.status, asked).toBe(307);
+        expect(scan.headers.get("location"), asked).toBe("https://a.example/p?utm=1");
+      }
+      expect(seen.map((event) => (event.type === "scan" ? event.requested : null))).toEqual([
+        "gs1:defaultLink",
+        "https://gs1.org/voc/defaultLink",
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
   it("keeps a problem line short whatever the length of the path, and says how much it left out", async () => {
     // Each brace is three characters once the parser escapes it, so a line holding every path
     // whole was three times the length of the request that made it.

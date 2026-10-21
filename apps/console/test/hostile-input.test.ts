@@ -550,6 +550,43 @@ describe("registering a code", () => {
     expect(defaults[0]?.href).toBe("https://new.example/here");
   });
 
+  it("moves the default to the link it registers, keeping the link that was the default", async () => {
+    // A code holds one default, whatever its type, and the link registered is the one a plain
+    // scan follows: left marked, the code's other default made a table the resolver refuses, so
+    // the code could not be registered at all.
+    const table = join(root, "other-default.json");
+    await writeFile(
+      table,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "/01/09520123456788": [
+            {
+              href: "https://a.example/cert",
+              linkType: "gs1:certificationInfo",
+              title: "Cert",
+              default: true,
+            },
+          ],
+        },
+      }),
+    );
+    const written = await registerCode(table, {
+      path: "/01/09520123456788",
+      href: "https://new.example/here",
+      title: "New",
+    });
+    expect(written).toMatchObject({ replaced: 0, kept: 0, unmarked: 1 });
+    const links = JSON.parse(await readFile(table, "utf8")).entries["/01/09520123456788"] as {
+      href: string;
+      default?: boolean;
+    }[];
+    expect(links).toEqual([
+      { href: "https://a.example/cert", linkType: "gs1:certificationInfo", title: "Cert" },
+      { href: "https://new.example/here", linkType: "gs1:pip", title: "New", default: true },
+    ]);
+  });
+
   it("reads a table saved with a byte-order mark, and keeps the codes already in it", async () => {
     // Saved by an editor that puts a mark in front of UTF-8, the table could not be read, and the
     // code was refused rather than written beside the ones already there.

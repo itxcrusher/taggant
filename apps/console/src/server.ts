@@ -805,6 +805,9 @@ export function createConsole(options: ConsoleOptions): Server {
           written.replaced > 0
             ? `${written.replaced} product ${written.replaced === 1 ? "link" : "links"} of that kind ${written.replaced === 1 ? "was" : "were"} replaced.`
             : "",
+          written.unmarked > 0
+            ? "The link a plain scan of it followed before keeps its place and is no longer the default."
+            : "",
           written.kept > 0
             ? `${written.kept} other ${written.kept === 1 ? "link" : "links"} on that code ${written.kept === 1 ? "was" : "were"} left alone.`
             : "",

@@ -100,11 +100,13 @@ export function parseTable(value: unknown): LinkTable {
     }
 
     if (!Array.isArray(links)) throw new TypeError(`the entry for ${path} is not a list of links`);
-    // One default per link type per anchor. Two were accepted, and then the resolver
-    // followed the first while the linkset published both as `gs1:defaultLink`, so a client
-    // reading the linkset and a client following a plain scan disagreed about the same
-    // code and the table said nothing was wrong.
-    const defaults = new Set<string>();
+    // One default per anchor, whatever its link type. A plain scan follows one link, and the
+    // linkset publishes every link marked as the default as `gs1:defaultLink`: two of one type,
+    // and then two of different types, were accepted, the resolver followed the first while the
+    // linkset published both, so a client reading the linkset and a client following a plain
+    // scan disagreed about the same code and the table said nothing was wrong. GS1 asks for
+    // exactly one default link for each identifier.
+    let markedDefault: string | undefined;
     for (const link of links) {
       for (const field of ["href", "linkType", "title"] as const) {
         if (typeof link?.[field] !== "string" || link[field].length === 0) {
@@ -148,10 +150,17 @@ export function parseTable(value: unknown): LinkTable {
       }
       // The resolver publishes the link marked as the default under this type itself, so one
       // written in the table as well was a second default in the linkset that no plain scan
-      // follows.
+      // follows. GS1's relation for one of several defaults is written here as the one link
+      // marked as the default and the others of its type, which a request's languages choose
+      // between.
       if (relation === `${GS1_VOCAB}defaultLink`) {
         throw new TypeError(
           `the link type ${JSON.stringify(link.linkType)} under ${path} is the one the resolver publishes for the link marked "default": true, so mark that link instead`,
+        );
+      }
+      if (relation === `${GS1_VOCAB}defaultLinkMulti`) {
+        throw new TypeError(
+          `the link type ${JSON.stringify(link.linkType)} under ${path} names one of several defaults, which a table here writes as one link marked "default": true and the others of its type with their languages, chosen between by a request's own`,
         );
       }
       if (term === null && !ABSOLUTE_URI.test(relation)) {
@@ -183,12 +192,12 @@ export function parseTable(value: unknown): LinkTable {
       }
 
       if (link.default === true) {
-        if (defaults.has(relation)) {
+        if (markedDefault !== undefined) {
           throw new TypeError(
-            `${path} has two default links of type ${JSON.stringify(link.linkType)}, and only one can be the default`,
+            `${path} has two default links, of types ${JSON.stringify(markedDefault)} and ${JSON.stringify(link.linkType)}, and a plain scan follows only one: mark only the link it should follow`,
           );
         }
-        defaults.add(relation);
+        markedDefault = link.linkType;
       }
 
       // A title is for a person, shown by whatever reads the linkset to choose a link, and a
@@ -404,7 +413,10 @@ export interface ChoiceRequest {
  * otherwise.
  */
 export function chooseLink(candidates: Candidate[], request: ChoiceRequest): Candidate | undefined {
-  if (request.linkType) {
+  // A request for `gs1:defaultLink` asks for the link the linkset publishes under it, which is
+  // the one a plain scan follows; no link in a table is of that type, so it answered 404 while
+  // the linkset advertised the relation.
+  if (request.linkType && !sameLinkType(request.linkType, "gs1:defaultLink")) {
     const asked = candidates.filter((candidate) => sameLinkType(candidate.linkType, request.linkType ?? ""));
     return best(asked, request.acceptLanguage);
   }

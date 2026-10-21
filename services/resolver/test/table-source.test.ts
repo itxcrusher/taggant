@@ -289,6 +289,36 @@ describe("what a table may not say", () => {
     ).toThrow(/two default links/);
   });
 
+  it("refuses two default links of different types under one identifier", () => {
+    // The linkset publishes every link marked as the default as `gs1:defaultLink` and a plain scan
+    // follows one, so two of different types disagreed exactly as two of one type did.
+    expect(() =>
+      parseTable({
+        version: 1,
+        entries: {
+          "/01/09520123456788": [
+            { href: "https://a.example/r", linkType: "gs1:recipeInfo", title: "R", default: true },
+            { href: "https://a.example/p", linkType: "gs1:pip", title: "P", default: true },
+          ],
+        },
+      }),
+    ).toThrow(/two default links, of types "gs1:recipeInfo" and "gs1:pip"/);
+    // One at each level is one for each identifier, and stays.
+    expect(() =>
+      parseTable({
+        version: 1,
+        entries: {
+          "/01/09520123456788": [
+            { href: "https://a.example/p", linkType: "gs1:pip", title: "P", default: true },
+          ],
+          "/01/09520123456788/10/ABC": [
+            { href: "https://a.example/r", linkType: "gs1:recipeInfo", title: "R", default: true },
+          ],
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("refuses a title holding a control character or a line break", () => {
     // A title is for a person, shown by whatever reads the linkset to choose a link: a line break
     // splits it wherever it is printed, and a line separator is invisible in the editor of
@@ -368,6 +398,10 @@ describe("what a table may not say", () => {
       // The type the resolver publishes for the default link, written in the table as well.
       [{ linkType: "gs1:defaultLink" }, /publishes for the link marked/],
       [{ linkType: "https://gs1.org/voc/defaultLink" }, /publishes for the link marked/],
+      // GS1's relation for one of several defaults, which a table writes as one default and the
+      // others of its type with their languages.
+      [{ linkType: "gs1:defaultLinkMulti" }, /names one of several defaults/],
+      [{ linkType: "https://gs1.org/voc/defaultLinkMulti" }, /names one of several defaults/],
       // A field this format does not have, which was ignored: a misspelled default set none, and
       // every plain scan of the code answered that no default was set.
       [{ Default: true }, /does not have/],
