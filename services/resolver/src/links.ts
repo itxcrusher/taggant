@@ -366,14 +366,16 @@ export function candidatesFor(table: LinkTable, link: DigitalLink): Candidate[] 
     // links at every level up to the primary key are included. The level belongs in the key
     // because a link at two levels is two facts: one about the product, one about the lot.
     //
-    // And within a level a copy is a link written twice with every field the same. Keyed on
-    // the type and the href alone, one page listed once for each of its languages, with the
-    // default on the second, lost the second and its default with it: every plain scan of the
-    // code answered that no default was set, while readiness said ready. The href is compared
-    // as the address it is published as, below, so two spellings of one address with every
-    // other field the same are one link and not the same link twice in the linkset; one of
-    // them marked as the default is a field apart, and keeps its default.
-    const seen = new Set<string>();
+    // And within a level a copy is a link written twice with every published field the same:
+    // its type, the address of its href, its title, languages and media type. Keyed on the type
+    // and the href alone, one page listed once for each of its languages, with the default on
+    // the second, lost the second and its default with it: every plain scan of the code
+    // answered that no default was set, while readiness said ready. The href is compared as the
+    // address it is published as, below, so two spellings of one address are one link. Whether
+    // a link is the default is not in its published entry, so it is not in the key either: a
+    // copy marked as the default makes the link kept the default, where the two were listed
+    // under their type as the same link twice.
+    const seen = new Map<string, Candidate>();
     for (const stored of table.entries[level] ?? []) {
       const key = JSON.stringify([
         expandLinkType(stored.linkType),
@@ -381,17 +383,21 @@ export function candidatesFor(table: LinkTable, link: DigitalLink): Candidate[] 
         stored.title,
         stored.hreflang ?? null,
         stored.type ?? null,
-        stored.default === true,
       ]);
-      if (seen.has(key)) continue;
-      seen.add(key);
+      const kept = seen.get(key);
+      if (kept !== undefined) {
+        if (stored.default === true) kept.default = true;
+        continue;
+      }
       // Each with the address the URL parser reads in its href, which is the one a redirect
       // sends, so the linkset, a scan's line and the Location name one place whatever spelling
       // the table holds: `https://evil.example\@good.example/` is answered as
       // `https://evil.example/@good.example/`, which no reader takes for a user name before
       // another host. An href the parser cannot read, in a table nobody checked, is answered
       // with as it is written, as every other link in that table is answered with its address.
-      found.push({ ...stored, href: addressOf(stored.href), anchor: level });
+      const candidate: Candidate = { ...stored, href: addressOf(stored.href), anchor: level };
+      seen.set(key, candidate);
+      found.push(candidate);
     }
   }
   return found;

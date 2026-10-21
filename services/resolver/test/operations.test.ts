@@ -197,9 +197,9 @@ describe("what a scan event may not carry", () => {
     }
   });
 
-  it("keeps two spellings of one address as two links, so either can be the default", async () => {
-    // Told apart by the table's own spelling: taken for copies, the second would be dropped, and
-    // the default it carries with it, and a plain scan of the code would find no default.
+  it("keeps two spellings of one address under two titles as two links, the default with its own", async () => {
+    // Told apart by their titles: taken for copies, the second would be dropped, and the default
+    // it carries with it, and a plain scan of the code would find no default.
     const resolver = createResolver({
       table: parseTable({
         version: 1,
@@ -1020,6 +1020,69 @@ describe("what a link answers with", () => {
       ]);
     } finally {
       await close();
+    }
+  });
+
+  it("keeps two links apart by any one field published for them", async () => {
+    // A copy is every published field the same, so each field alone tells two links apart: a
+    // second href, title, language, media type or link type is a second link, listed as one.
+    const first = {
+      href: "https://a.example/r",
+      linkType: "gs1:recipeInfo",
+      title: "R",
+      hreflang: ["en"],
+      type: "text/html",
+    };
+    const recipes = "https://gs1.org/voc/recipeInfo";
+    const cases: [string, Record<string, unknown>, Record<string, number>][] = [
+      // what differs, the second link, how many each relation lists
+      ["href", { ...first, href: "https://a.example/s" }, { [recipes]: 2 }],
+      ["title", { ...first, title: "R again" }, { [recipes]: 2 }],
+      ["languages", { ...first, hreflang: ["fr"] }, { [recipes]: 2 }],
+      ["media type", { ...first, type: "application/pdf" }, { [recipes]: 2 }],
+      ["link type", { ...first, linkType: "gs1:pip" }, { [recipes]: 1, "https://gs1.org/voc/pip": 1 }],
+    ];
+    for (const [differs, second, listed] of cases) {
+      const { at, close } = await serve({ "/01/09520123456788": [first, second] });
+      try {
+        const linkset = (await (
+          await fetch(`${at}/01/09520123456788`, { headers: { accept: "application/linkset+json" } })
+        ).json()) as { linkset: Array<Record<string, unknown[]>> };
+        for (const [relation, count] of Object.entries(listed)) {
+          expect(linkset.linkset[0]?.[relation]?.length, `${differs}: ${relation}`).toBe(count);
+        }
+      } finally {
+        await close();
+      }
+    }
+  });
+
+  it("takes a link written twice as one, and as the default when either copy is marked", async () => {
+    // Whether a link is the default is not in its own published entry, so two copies that differ
+    // only there were listed twice under their type; kept as one, the mark goes with it.
+    const plain = { href: "https://b.example", linkType: "gs1:pip", title: "P" };
+    const marked = { href: "https://b.example/", linkType: "gs1:pip", title: "P", default: true };
+    for (const order of [
+      [plain, marked],
+      [marked, plain],
+    ]) {
+      const { at, close } = await serve({ "/01/09520123456788": order });
+      try {
+        const scan = await fetch(`${at}/01/09520123456788`, { redirect: "manual" });
+        expect(scan.status).toBe(307);
+        expect(scan.headers.get("location")).toBe("https://b.example/");
+        const linkset = (await (
+          await fetch(`${at}/01/09520123456788`, { headers: { accept: "application/linkset+json" } })
+        ).json()) as { linkset: Array<Record<string, unknown[]>> };
+        expect(linkset.linkset[0]?.["https://gs1.org/voc/pip"]).toEqual([
+          { href: "https://b.example/", title: "P" },
+        ]);
+        expect(linkset.linkset[0]?.["https://gs1.org/voc/defaultLink"]).toEqual([
+          { href: "https://b.example/", title: "P" },
+        ]);
+      } finally {
+        await close();
+      }
     }
   });
 
