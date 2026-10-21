@@ -586,4 +586,25 @@ describe("what it says", () => {
     const page = await pageAt("/e/too-small");
     expect(page).toContain("Printed as it stands it will not be recognised");
   });
+
+  it("says when the link a plain scan followed gives up the default to the one registered", async () => {
+    // The code's default was another kind of link, which keeps its place and loses the mark: told
+    // only that the other links were left alone, the operator would not know a scan now goes here.
+    await post("/experiences", new URLSearchParams({ id: "moved-default", title: "Moved default" }));
+    const before = JSON.parse(await readFile(linkTable, "utf8").catch(() => '{"version":1,"entries":{}}'));
+    before.entries["/01/09520123456702"] = [
+      { href: "https://a.example/cert", linkType: "gs1:certificationInfo", title: "Cert", default: true },
+    ];
+    await writeFile(linkTable, JSON.stringify(before));
+    const response = await post(
+      "/e/moved-default/code",
+      new URLSearchParams({ path: "/01/09520123456702", href: "https://example.com/m/" }),
+    );
+    expect(response.status).toBe(303);
+    const page = await pageAt(response.headers.get("location") ?? "/");
+    expect(page).toContain(
+      "points here. The link a plain scan of it followed before keeps its place and is no longer the default.",
+    );
+    expect(page).not.toContain("left alone");
+  });
 });
