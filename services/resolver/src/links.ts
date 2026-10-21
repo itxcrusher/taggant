@@ -402,9 +402,11 @@ function addressOf(href: string): string {
  * Whether a relation names GS1's vocabulary in a spelling other than the two read as GS1's, `gs1:`
  * and `https://gs1.org/voc/`: the prefix in another case, or the vocabulary's address with its
  * scheme or host in capitals, its default port, an escaped letter, a user name, a fragment, without
- * its last slash, or over plain http. Most are the same URI under RFC 3986 and plain http is
- * another, but each names GS1's vocabulary to whoever reads it, and each is a relation of its own
- * to everything here that compares link types, so a request for the term would not find it.
+ * its last slash, or over plain http. Capitals in the scheme or host, the default port and an
+ * escaped letter leave it the same URI under RFC 3986's normalization; a user name, a fragment, the
+ * missing last slash and plain http make it another. Either way each names GS1's vocabulary to
+ * whoever reads it, and each is a relation of its own to everything here that compares link types,
+ * so a request for the term would not find it.
  */
 function writesGs1Namespace(relation: string): boolean {
   if (/^gs1:/i.test(relation)) return true;

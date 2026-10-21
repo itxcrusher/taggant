@@ -62,8 +62,9 @@ export interface ProblemEvent {
   /**
    * The path asked for, which is the thing that needs fixing: the path the URL parser reads in the
    * request's target, without its query and escaped as that parser escapes it, or, for a target it
-   * cannot read, the target as sent, credentials cut from either. At most its first 512
-   * characters, the longest path the resolver reads as a Digital Link, cut between characters.
+   * cannot read, the target as sent up to its query or fragment, credentials cut from either. At
+   * most its first 512 characters, the longest path the resolver reads as a Digital Link, cut
+   * between characters.
    */
   path: string;
   /** How many characters of the path were left out of `path`, when it was longer than that. */
