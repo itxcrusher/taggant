@@ -607,4 +607,38 @@ describe("what it says", () => {
     );
     expect(page).not.toContain("left alone");
   });
+
+  it("says the table is still refused when another code in it holds two defaults", async () => {
+    // Registering one code of two that each hold two defaults repairs that one; the resolver still
+    // refuses the table for the other, and the notice says which, rather than that the code points
+    // here as though scans now reached it.
+    await post("/experiences", new URLSearchParams({ id: "still-refused", title: "Still refused" }));
+    const cert = {
+      href: "https://a.example/cert",
+      linkType: "gs1:certificationInfo",
+      title: "Cert",
+      default: true,
+    };
+    const pip = { href: "https://a.example/pip", linkType: "gs1:pip", title: "Pip", default: true };
+    await writeFile(
+      linkTable,
+      JSON.stringify({
+        version: 1,
+        entries: { "/01/09520123456788": [cert, pip], "/01/09520123456702": [cert, pip] },
+      }),
+    );
+    const response = await post(
+      "/e/still-refused/code",
+      new URLSearchParams({ path: "/01/09520123456788", href: "https://example.com/s/" }),
+    );
+    expect(response.status).toBe(303);
+    const page = await pageAt(response.headers.get("location") ?? "/");
+    expect(page).toContain(
+      "/01/09520123456788 points here in the link table, which the resolver still refuses for another code: /01/09520123456702 has two default links",
+    );
+    expect(page).toContain("Register that code here if it holds two defaults, or correct it by hand.");
+    expect(page).not.toContain("/01/09520123456788 points here.");
+    // Put back to an empty table, so nothing after this starts from a table the resolver refuses.
+    await writeFile(linkTable, JSON.stringify({ version: 1, entries: {} }));
+  });
 });

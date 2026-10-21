@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseTableText } from "@taggant/resolver";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { registerCode } from "../src/operations.js";
 import { createConsole } from "../src/server.js";
@@ -666,10 +667,8 @@ describe("registering a code", () => {
   });
 
   it("repairs a code whose links it marked twice as the default, and leaves a table refused elsewhere alone", async () => {
-    // Before it took the mark off another link, this form left a code with two defaults, a table the
-    // resolver now refuses to start on; refused here as well, no code could be registered and the
-    // only repair was the JSON by hand. Registering that code repairs it; a refusal elsewhere is
-    // said as the resolver says it, and nothing is written.
+    // A code holding two defaults is a table the resolver refuses to start on. Registering that code
+    // repairs it; registering another writes that one and says what the resolver still refuses.
     const table = join(root, "marked-twice.json");
     const cert = {
       href: "https://a.example/cert",
@@ -699,18 +698,75 @@ describe("registering a code", () => {
     ]);
     expect(after.entries["/01/09520123456702"]).toEqual([other]);
 
-    // Two defaults under another code: registering this one does not change them.
-    const elsewhere = JSON.stringify({
-      version: 1,
-      entries: { "/01/09520123456788": [old], "/01/09520123456702": [cert, other] },
+    // Two defaults under each of two codes: registering either writes it and says the other is still
+    // refused, so registering both repairs the table. Refused for the other, each registration
+    // named the other code and neither could be repaired.
+    await writeFile(
+      table,
+      JSON.stringify({
+        version: 1,
+        entries: { "/01/09520123456788": [cert, old], "/01/09520123456702": [{ ...cert }, other] },
+      }),
+    );
+    const first = await registerCode(table, {
+      path: "/01/09520123456788",
+      href: "https://new.example/",
+      title: "New",
     });
-    await writeFile(table, elsewhere);
+    expect(first.stillRefused).toMatch(/^\/01\/09520123456702 has two default links/);
+    const second = await registerCode(table, {
+      path: "/01/09520123456702",
+      href: "https://new.example/b/",
+      title: "B",
+    });
+    expect(second.stillRefused).toBeUndefined();
+    const repaired = await readFile(table, "utf8");
+    expect(() => parseTableText(repaired)).not.toThrow();
+
+    // An entry under this code that is not a list of links, each with a link type, is not one a
+    // registration can sort into links kept and links replaced: said in words, and nothing written.
+    // Taken for links, each answered 500.
+    for (const malformed of [
+      {},
+      "x",
+      [{ href: "https://a.example/", title: "T" }],
+      [null],
+      [{ ...old, linkType: 3 }],
+    ]) {
+      const shapeless = JSON.stringify({
+        version: 1,
+        entries: { "/01/09520123456788": malformed, "/01/09520123456702": [other] },
+      });
+      await writeFile(table, shapeless);
+      await expect(
+        registerCode(table, { path: "/01/09520123456788", href: "https://new.example/", title: "New" }),
+        JSON.stringify(malformed),
+      ).rejects.toThrow(
+        /holds an entry under \/01\/09520123456788 that registering this code cannot change, so nothing was written: .+; correct it by hand/,
+      );
+      expect(await readFile(table, "utf8")).toBe(shapeless);
+    }
+
+    // A table refused for its version, which no registration changes, says so and is not written.
+    const versioned = JSON.stringify({ version: 2, entries: { "/01/09520123456702": [other] } });
+    await writeFile(table, versioned);
     await expect(
       registerCode(table, { path: "/01/09520123456788", href: "https://new.example/", title: "New" }),
     ).rejects.toThrow(
-      /holds an entry the resolver refuses, which registering this code does not change, so nothing was written: \/01\/09520123456702 has two default links/,
+      /is refused by the resolver for something registering this code does not change, so nothing was written/,
     );
-    expect(await readFile(table, "utf8")).toBe(elsewhere);
+    expect(await readFile(table, "utf8")).toBe(versioned);
+
+    // The registration's own link refused is said to be that, not a fault of the table, which held
+    // two defaults under the same code.
+    const doubled = JSON.stringify({ version: 1, entries: { "/01/09520123456788": [cert, old] } });
+    await writeFile(table, doubled);
+    await expect(
+      registerCode(table, { path: "/01/09520123456788", href: "https://new.example/my page", title: "New" }),
+    ).rejects.toThrow(
+      /^that would have written a table the resolver refuses, so nothing was written: .*space/,
+    );
+    expect(await readFile(table, "utf8")).toBe(doubled);
 
     // A key written twice cannot be read as a table at all, and is not written over.
     const twice = `{"version":1,"entries":{"/01/09520123456702":[${JSON.stringify(other)}],"/01/09520123456702":[${JSON.stringify(old)}]}}`;

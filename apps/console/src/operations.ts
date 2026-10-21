@@ -425,7 +425,7 @@ export async function registerCode(
   tablePath: string,
   entry: { path: string; href: string; title: string; linkType?: string; language?: string },
   options: { holds?: () => string | null } = {},
-): Promise<{ path: string; replaced: number; kept: number; unmarked: number }> {
+): Promise<{ path: string; replaced: number; kept: number; unmarked: number; stillRefused?: string }> {
   // Written under the name the filesystem uses, not the one given, and that name is asked for
   // inside the turn, when the table the turn before wrote exists to be asked about. Given a
   // short name, the rename that puts a new table in place renamed the table itself, so the
@@ -439,7 +439,7 @@ async function writeCode(
   tablePath: string,
   entry: { path: string; href: string; title: string; linkType?: string; language?: string },
   options: { holds?: () => string | null },
-): Promise<{ path: string; replaced: number; kept: number; unmarked: number }> {
+): Promise<{ path: string; replaced: number; kept: number; unmarked: number; stillRefused?: string }> {
   // Asked first, inside the turn, so a console whose lock on the table was taken over writes
   // nothing: two consoles that both believed they held one table kept twenty codes of forty.
   const refusal = options.holds?.() ?? null;
@@ -462,12 +462,11 @@ async function writeCode(
   }
 
   let current: LinkTable;
-  // Set when the table on disk is one the resolver refuses. Registering a code may repair it: this
-  // form marked each link it registered as the default and left another type's default marked, so
-  // a table it wrote can hold two defaults under one code, which the resolver now refuses to start
-  // on, and registering that code again takes the mark off the other. So the table is read as the
-  // resolver reads its text, changed, and the result checked; refused here instead, every code was
-  // refused and the only repair was the JSON by hand.
+  // Set when the table on disk is one the resolver refuses. Registering a code may repair it: a
+  // table holding two defaults under one code is one the resolver refuses to start on, and
+  // registering that code takes the mark off the other. So the table is read as the resolver reads
+  // its text, changed, and the result checked; refused here instead, no code could be registered
+  // and the only repair would be the JSON by hand.
   let refusedAsItStands: string | undefined;
   try {
     const value = readTableText(await readFile(tablePath, "utf8"));
@@ -489,6 +488,46 @@ async function writeCode(
       );
     }
     current = { version: 1, entries: {} };
+  }
+
+  // In a table refused as it stands, the codes refused each on its own, and whether this code's own
+  // entry is one a registration can change at all: one that is not a list of links, each with a
+  // link type, cannot be sorted into links kept and links replaced, and was a 500.
+  const refusedCodes = new Set<string>();
+  if (refusedAsItStands !== undefined) {
+    const refusalOf = (entries: Record<string, unknown>): string | undefined => {
+      try {
+        parseTable({ version: current.version, entries });
+        return undefined;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    };
+    const whole = refusalOf({});
+    if (whole !== undefined) {
+      throw new WorkspaceError(
+        `${tablePath} is refused by the resolver for something registering this code does not change, so nothing was written: ${whole}`,
+      );
+    }
+    for (const [key, links] of Object.entries(current.entries)) {
+      if (key !== canonical && refusalOf({ [key]: links }) !== undefined) refusedCodes.add(key);
+    }
+    const own: unknown = current.entries[canonical];
+    const sortable =
+      own === undefined ||
+      (Array.isArray(own) &&
+        own.every(
+          (link) =>
+            typeof link === "object" &&
+            link !== null &&
+            !Array.isArray(link) &&
+            typeof (link as { linkType?: unknown }).linkType === "string",
+        ));
+    if (!sortable) {
+      throw new WorkspaceError(
+        `${tablePath} holds an entry under ${canonical} that registering this code cannot change, so nothing was written: ${refusalOf({ [canonical]: own }) ?? "it is not a list of links"}; correct it by hand, then register the code`,
+      );
+    }
   }
 
   // A title is required rather than optional, because the resolver's own parser refuses a
@@ -538,18 +577,42 @@ async function writeCode(
     version: current.version,
     entries: { ...current.entries, [canonical]: [...adjusted, link] },
   };
-  // Validated before it is written, so a table this console produced is one the resolver
-  // will accept. Writing a table the resolver then refuses would take every other code
-  // down with it.
+  // Validated before it is written, so a table this console produced from one the resolver
+  // accepts is one the resolver will accept. Writing a table the resolver then refuses would take
+  // every other code down with it.
+  let stillRefused: string | undefined;
   try {
     parseTable(next);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new WorkspaceError(
-      refusedAsItStands === undefined
-        ? `that would have written a table the resolver refuses, so nothing was written: ${reason}`
-        : `${tablePath} holds an entry the resolver refuses, which registering this code does not change, so nothing was written: ${reason}`,
-    );
+    if (refusedAsItStands === undefined) {
+      throw new WorkspaceError(
+        `that would have written a table the resolver refuses, so nothing was written: ${reason}`,
+      );
+    }
+    // From a table refused as it stands, written when everything still refused is under other
+    // codes that were refused on their own before: of two codes that each held two defaults,
+    // refusing to repair one because of the other left each refusal naming the other and no
+    // registration that could repair either.
+    const rest = Object.fromEntries(Object.entries(next.entries).filter(([key]) => !refusedCodes.has(key)));
+    try {
+      parseTable({ version: next.version, entries: rest });
+    } catch (left) {
+      const why = left instanceof Error ? left.message : String(left);
+      // Whose fault: the link being registered, or what was there already.
+      let ownLinkRefused = false;
+      try {
+        parseTable({ version: next.version, entries: { [canonical]: [link] } });
+      } catch {
+        ownLinkRefused = true;
+      }
+      throw new WorkspaceError(
+        ownLinkRefused
+          ? `that would have written a table the resolver refuses, so nothing was written: ${why}`
+          : `${tablePath} holds an entry the resolver refuses, which registering this code does not change, so nothing was written: ${why}`,
+      );
+    }
+    stillRefused = reason;
   }
 
   const staging = `${tablePath}.writing-${randomBytes(4).toString("hex")}`;
@@ -570,7 +633,13 @@ async function writeCode(
       }`,
     );
   }
-  return { path: canonical, replaced, kept: adjusted.length - unmarked, unmarked };
+  return {
+    path: canonical,
+    replaced,
+    kept: adjusted.length - unmarked,
+    unmarked,
+    ...(stillRefused === undefined ? {} : { stillRefused }),
+  };
 }
 
 /** Where an experience publishes to, under the folder the static host serves. */

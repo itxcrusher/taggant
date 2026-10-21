@@ -825,9 +825,11 @@ export function createConsole(options: ConsoleOptions): Server {
         options.holdsTable === undefined ? {} : { holds: options.holdsTable },
       );
       redirect(response, `/e/${encodeURIComponent(id)}`, {
-        tone: "good",
+        tone: written.stillRefused === undefined ? "good" : "warn",
         message: [
-          `${written.path} points here.`,
+          written.stillRefused === undefined
+            ? `${written.path} points here.`
+            : `${written.path} points here in the link table, which the resolver still refuses for another code: ${written.stillRefused}. Register that code here if it holds two defaults, or correct it by hand.`,
           written.replaced > 0
             ? `${written.replaced} product ${written.replaced === 1 ? "link" : "links"} of that kind ${written.replaced === 1 ? "was" : "were"} replaced.`
             : "",
