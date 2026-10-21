@@ -4,9 +4,12 @@
  * Everything that reaches a page goes through `esc`. An experience title, a target id, a
  * filename and a compiler message are all written by someone, and this is a tool whose
  * whole job is to accept files and names from people. There is no template engine doing
- * this quietly in the background, so it is done here and it is done everywhere.
+ * this quietly in the background, so it is done here and it is done everywhere. A name, and
+ * a message that quotes one, goes through `shown` as well, which writes the characters that
+ * steer how text is laid out as their code points.
  */
 
+import { printable } from "@taggant/bundler";
 import { type Report, SCAN_DISTANCE_MM, describeRepetition } from "@taggant/compiler";
 import { manifestSchema } from "@taggant/manifest";
 import { DEFAULT_SCAN_DISTANCE_MM } from "./operations.js";
@@ -33,6 +36,16 @@ export function esc(value: unknown): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/**
+ * Text from outside the console, a name a manifest gives or a message quoting one, as a page shows
+ * it: each control and format character written as its code point, as the bundler's messages write
+ * them, then escaped. A right-to-left override in a name laid a whole notice out backwards, and the
+ * character that ends an isolate in front of one let it run past the element meant to hold it.
+ */
+export function shown(value: unknown): string {
+  return esc(printable(String(value)));
 }
 
 export interface Notice {
@@ -75,8 +88,8 @@ export function page({ title, workspaceRoot, notice, body }: Chrome): string {
 function renderNotice(notice: Notice): string {
   const tone = notice.tone === "good" ? "good" : notice.tone === "bad" ? "bad" : "";
   return `<div class="notice ${tone}" role="status">
-  <p>${esc(notice.message)}</p>
-  ${notice.detail ? `<p class="quiet mono detail">${esc(notice.detail)}</p>` : ""}
+  <p>${shown(notice.message)}</p>
+  ${notice.detail ? `<p class="quiet mono detail">${shown(notice.detail)}</p>` : ""}
 </div>`;
 }
 
@@ -87,7 +100,7 @@ export function indexPage(experiences: Listed[]): string {
       if (!entry.ok) {
         return `<div class="entry">
   <span class="name">${esc(entry.id)}</span>
-  <span class="meta broken">${esc(entry.reason)}</span>
+  <span class="meta broken">${shown(entry.reason)}</span>
 </div>`;
       }
       const targets = entry.manifest.targets.length;
@@ -263,16 +276,16 @@ export function experiencePage(view: ExperienceView): string {
     .map(
       (target) => `<section class="card">
   <div class="row spread">
-    <h3 class="flush">${esc(target.id)}</h3>
+    <h3 class="flush">${shown(target.id)}</h3>
     <span class="label">${esc(target.physicalWidthMm)} mm wide in print</span>
   </div>
-  <p class="quiet mono source-line"><bdi>${esc(target.source)}</bdi> &middot; ${target.contentCount} content item${target.contentCount === 1 ? "" : "s"}</p>
+  <p class="quiet mono source-line"><bdi>${shown(target.source)}</bdi> &middot; ${target.contentCount} content item${target.contentCount === 1 ? "" : "s"}</p>
   ${
     target.report
       ? verdict(target.report)
       : target.staleReport === "unreadable"
         ? target.notRead !== undefined
-          ? `<div class="notice gap-md"><p>The compiled target file could not be read (${esc(target.notRead)}). Make it readable, or move aside what is in its place, then compile it again.</p></div>`
+          ? `<div class="notice gap-md"><p>The compiled target file could not be read (${shown(target.notRead)}). Make it readable, or move aside what is in its place, then compile it again.</p></div>`
           : `<div class="notice gap-md"><p>The compiled target file cannot be read as a target. Compile it again to replace it.</p></div>`
         : target.staleReport === "broken"
           ? `<div class="notice gap-md"><p>The compiled target carries a print readiness report that is not one at all. Compile it again to see what this artwork needs.</p></div>`
@@ -289,8 +302,8 @@ export function experiencePage(view: ExperienceView): string {
   <form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/compile" class="gap-md">
     <div class="row bottom">
       <div class="field narrow">
-        <label for="d-${esc(target.id)}">Read from, mm</label>
-        <input id="d-${esc(target.id)}" name="scanDistanceMm" type="number" min="${SCAN_DISTANCE_MM.nearest}" max="${SCAN_DISTANCE_MM.furthest}" step="any" required value="${target.distanceLost ? "" : esc(target.scanDistanceMm ?? target.report?.scanDistanceMm ?? DEFAULT_SCAN_DISTANCE_MM)}">
+        <label for="d-${shown(target.id)}">Read from, mm</label>
+        <input id="d-${shown(target.id)}" name="scanDistanceMm" type="number" min="${SCAN_DISTANCE_MM.nearest}" max="${SCAN_DISTANCE_MM.furthest}" step="any" required value="${target.distanceLost ? "" : esc(target.scanDistanceMm ?? target.report?.scanDistanceMm ?? DEFAULT_SCAN_DISTANCE_MM)}">
       </div>
       <button type="submit">${target.report || target.staleReport ? "Compile again" : "Compile"}</button>
     </div>
@@ -304,8 +317,8 @@ export function experiencePage(view: ExperienceView): string {
         : `<form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/content" enctype="multipart/form-data" class="gap-md">
       <div class="row bottom">
         <div class="field narrow">
-          <label for="ct-${esc(target.id)}">Type</label>
-          <select id="ct-${esc(target.id)}" name="type">
+          <label for="ct-${shown(target.id)}">Type</label>
+          <select id="ct-${shown(target.id)}" name="type">
             <option value="video">video</option>
             <option value="image">image</option>
             <option value="model">model</option>
@@ -313,8 +326,8 @@ export function experiencePage(view: ExperienceView): string {
           </select>
         </div>
         <div class="field">
-          <label for="cf-${esc(target.id)}">File</label>
-          <input id="cf-${esc(target.id)}" name="file" type="file" required>
+          <label for="cf-${shown(target.id)}">File</label>
+          <input id="cf-${shown(target.id)}" name="file" type="file" required>
         </div>
         <button type="submit">Add</button>
       </div>
@@ -367,7 +380,7 @@ ${
   view.problems.length > 0
     ? `<div class="notice gap-md">
   <p>Not ready to publish yet. A published bundle is the one thing that has to be valid, so the manifest is held to the format until it is:</p>
-  <ul class="reasons">${view.problems.map((problem) => `<li>${esc(describeProblem(problem, view.manifest))}</li>`).join("")}</ul>
+  <ul class="reasons">${view.problems.map((problem) => `<li>${shown(describeProblem(problem, view.manifest))}</li>`).join("")}</ul>
 </div>`
     : ""
 }
@@ -405,7 +418,7 @@ ${
 }
 
 export function errorPage(status: number, message: string): string {
-  return `<h2>${status}</h2><p>${esc(message)}</p><p><a href="/">Back to every experience</a></p>`;
+  return `<h2>${status}</h2><p>${shown(message)}</p><p><a href="/">Back to every experience</a></p>`;
 }
 
 /**

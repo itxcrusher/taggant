@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeProblem, esc, experiencePage, verdict } from "../src/views.js";
+import { describeProblem, errorPage, esc, experiencePage, page, verdict } from "../src/views.js";
 
 /**
  * The wording a person is shown when they cannot publish, and the escaping everything
@@ -48,17 +48,36 @@ describe("escaping", () => {
     expect(esc(`<a href="x" onclick='y'>&`)).toBe("&lt;a href=&quot;x&quot; onclick=&#39;y&#39;&gt;&amp;");
   });
 
-  it("keeps a direction mark in an artwork's name from reordering the rest of its line", () => {
+  it("shows a direction or isolation control in a name as its code point, wherever the name is written", () => {
     // A right-to-left override holds to the end of its paragraph unless something closes it, so one
-    // in a file name ran on over the count written after the name.
-    const source = `artwork/${String.fromCharCode(0x202e)}gnp.front`;
-    const html = experiencePage({
+    // in a file name ran on over the count written after the name; isolated, the character that
+    // ends an isolate in front of it closed the isolation early and let it run on all the same; and
+    // in a notice or the list of problems, it laid the whole sentence out backwards.
+    const pdi = String.fromCharCode(0x2069);
+    const rlo = String.fromCharCode(0x202e);
+    const raw = new RegExp(`[${pdi}${rlo}]`);
+    const card = experiencePage({
       id: "botanica-500",
-      manifest: MANIFEST as never,
-      problems: [],
-      targets: [{ id: "front-panel", source, physicalWidthMm: 62, contentCount: 0 }],
+      manifest: { ...MANIFEST, targets: [{ ...MANIFEST.targets[0], id: `front${rlo}` }] } as never,
+      problems: [{ path: "/targets/0/content", message: "must NOT have fewer than 1 items" }],
+      targets: [
+        { id: `front${rlo}`, source: `artwork/${pdi}${rlo}gnp.front`, physicalWidthMm: 62, contentCount: 0 },
+      ],
     });
-    expect(html).toContain(`<bdi>${source}</bdi> &middot; 0 content items`);
+    expect(card).toContain("<bdi>artwork/\\u{2069}\\u{202e}gnp.front</bdi> &middot; 0 content items");
+    expect(card).toContain('<h3 class="flush">front\\u{202e}</h3>');
+    expect(card).toContain("<li>front\\u{202e} has nothing to show. Add content to it.</li>");
+    expect(card).not.toMatch(raw);
+    const notice = page({
+      title: "t",
+      workspaceRoot: "w",
+      notice: { tone: "bad", message: `the artwork ${rlo}gnp.front`, detail: `x${pdi}` },
+      body: "",
+    });
+    expect(notice).toContain("the artwork \\u{202e}gnp.front");
+    expect(notice).toContain("x\\u{2069}");
+    expect(notice).not.toMatch(raw);
+    expect(errorPage(404, `${rlo}missing`)).toContain("\\u{202e}missing");
   });
 });
 

@@ -87,6 +87,21 @@ describe("main", () => {
       // Read, and then refused for what they say, an empty manifest being no experience.
       expect(code, said.join("")).not.toBe(EXIT.cannotRead);
       expect(said.join("")).not.toMatch(/Unexpected token|not valid JSON/);
+      // A second mark is not JSON, and the message says which character it is rather than
+      // printing one nobody can see.
+      said.length = 0;
+      await writeFile(join(dir, "manifest.json"), `${mark}${mark}{}`);
+      expect(
+        await main([
+          join(dir, "manifest.json"),
+          "--target",
+          `front=${join(dir, "front.json")}`,
+          "--out",
+          join(dir, "out"),
+        ]),
+      ).toBe(EXIT.cannotRead);
+      expect(said.join("")).toContain("\\u{feff}");
+      expect(said.join("")).not.toContain(mark);
     } finally {
       process.stderr.write = write;
       await rm(dir, { recursive: true, force: true });

@@ -630,6 +630,23 @@ async function vendorRuntime(outDir: string, runtimeDir?: string): Promise<strin
 }
 
 /**
+ * Text as a terminal or a page can show it without being steered by it: every control and format
+ * character, line and paragraph separator and lone surrogate written as `\u{...}` with its code
+ * point, the notation `quoted` uses for a name. A right-to-left override in a name laid a whole
+ * sentence out backwards, and the character that ends an isolate let one run past the element
+ * meant to hold it.
+ */
+export function printable(text: string): string {
+  let shown = "";
+  for (const character of text) {
+    shown += /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Cs}]/u.test(character)
+      ? `\\u{${(character.codePointAt(0) ?? 0).toString(16)}}`
+      : character;
+  }
+  return shown;
+}
+
+/**
  * A name from a manifest as a sentence can carry it: in double quotes, so an empty one shows as
  * `""`, a quote or a backslash in it escaped, and every control and format character, line and
  * paragraph separator and lone surrogate written as `\u{...}` with its code point, one notation for

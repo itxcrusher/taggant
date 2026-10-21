@@ -1,4 +1,4 @@
-export { bundle } from "./bundle.js";
+export { bundle, printable } from "./bundle.js";
 export type { BundleOptions, BundleResult } from "./bundle.js";
 export { entryPage } from "./page.js";
 export { within, realWithin } from "./assets.js";

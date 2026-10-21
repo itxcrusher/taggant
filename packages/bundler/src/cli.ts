@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import process, { argv, stderr, stdout } from "node:process";
 import { fileURLToPath } from "node:url";
-import { bundle } from "./bundle.js";
+import { bundle, printable } from "./bundle.js";
 
 /** Exit codes, so a publish script can read the outcome instead of parsing stderr. */
 export const EXIT = { ok: 0, usage: 1, cannotRead: 3, cannotWrite: 4 } as const;
@@ -68,7 +68,7 @@ export async function main(args: string[]): Promise<number> {
 
   const parsed = parseArguments(args);
   if ("error" in parsed) {
-    stderr.write(`${parsed.error}\n${USAGE}`);
+    stderr.write(`${said(parsed.error)}\n${USAGE}`);
     return EXIT.usage;
   }
 
@@ -79,7 +79,7 @@ export async function main(args: string[]): Promise<number> {
     manifest = readJson(await readFile(manifestPath, "utf8"));
     for (const [id, file] of targets) compiled[id] = readJson(await readFile(file, "utf8"));
   } catch (error) {
-    stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    stderr.write(`${said(error instanceof Error ? error.message : String(error))}\n`);
     return EXIT.cannotRead;
   }
 
@@ -99,7 +99,7 @@ export async function main(args: string[]): Promise<number> {
     stdout.write("\n  Serve that folder over HTTPS or from localhost. It needs nothing else.\n\n");
     return EXIT.ok;
   } catch (error) {
-    stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    stderr.write(`${said(error instanceof Error ? error.message : String(error))}\n`);
     return EXIT.cannotWrite;
   }
 }
@@ -127,6 +127,15 @@ if (invokedDirectly()) {
     // Set rather than called, so anything still buffered on stdout is written first.
     process.exitCode = code;
   });
+}
+
+/**
+ * A message as the terminal shows it, each line by `printable`: a file that does not parse is
+ * quoted in the parser's own message, a byte-order mark it holds among it, and one shown as it is
+ * names a character nobody can see.
+ */
+function said(message: string): string {
+  return message.split("\n").map(printable).join("\n");
 }
 
 /**
