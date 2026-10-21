@@ -84,7 +84,9 @@ describe("noticing that the table changed", () => {
     await rename(`${path}.writing`, path);
     expect(await until(() => changes > afterEdit)).toBe(true);
     source.stop();
-  });
+    // Three waits of up to four seconds, one after another, which together outlast the runner's
+    // five-second default before the last could say what it waited for.
+  }, 30_000);
 
   it("notices without any file events at all, which is what a bind mount gives", async () => {
     // Measured against this project's compose stack on Docker Desktop: an edit on the host
@@ -250,11 +252,16 @@ describe("what a table may not say", () => {
     // starts. The first value takes the measured second where the spaces are ambiguous.
     const link = { href: "https://a.example/", linkType: "gs1:pip", title: "A", default: true };
     for (const type of [`text/html${" ; ".repeat(16)}x`, `text/html${" ; ".repeat(100_000)}x`]) {
-      const started = performance.now();
-      expect(() =>
-        parseTable({ version: 1, entries: { "/01/09520123456788": [{ ...link, type }] } }),
-      ).toThrow(/not a media type/);
-      expect(performance.now() - started, `${type.length} characters`).toBeLessThan(250);
+      // The fastest of three runs: a busy machine makes a run slower and never faster than the
+      // pattern allows, so one run alone failed the bound on a loaded machine with nothing wrong.
+      const runs = [0, 1, 2].map(() => {
+        const started = performance.now();
+        expect(() =>
+          parseTable({ version: 1, entries: { "/01/09520123456788": [{ ...link, type }] } }),
+        ).toThrow(/not a media type/);
+        return performance.now() - started;
+      });
+      expect(Math.min(...runs), `${type.length} characters`).toBeLessThan(250);
     }
   });
 
