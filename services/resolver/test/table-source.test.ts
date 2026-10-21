@@ -30,6 +30,22 @@ async function scratch(): Promise<string> {
   return join(folder, "links.json");
 }
 
+/**
+ * A rename over the table, retried as an editor's save is when Windows finds the file open: the
+ * watch reading the table holds it for a moment, and on a busy machine the rename met it there.
+ */
+async function renameOver(from: string, to: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EPERM" || attempt === 40) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+}
+
 /** Wait for a condition rather than for a duration, so this is not a race. */
 async function until(condition: () => boolean, ms = 4000): Promise<boolean> {
   const deadline = Date.now() + ms;
@@ -71,7 +87,7 @@ describe("noticing that the table changed", () => {
     });
 
     await writeFile(`${path}.writing`, "2");
-    await rename(`${path}.writing`, path);
+    await renameOver(`${path}.writing`, path);
     expect(await until(() => changes >= 1)).toBe(true);
 
     const afterSwap = changes;
@@ -81,7 +97,7 @@ describe("noticing that the table changed", () => {
     // And again, because one recovery could be luck.
     const afterEdit = changes;
     await writeFile(`${path}.writing`, "4");
-    await rename(`${path}.writing`, path);
+    await renameOver(`${path}.writing`, path);
     expect(await until(() => changes > afterEdit)).toBe(true);
     source.stop();
     // Three waits of up to four seconds, one after another, which together outlast the runner's
@@ -252,14 +268,17 @@ describe("what a table may not say", () => {
     // starts. The first value takes the measured second where the spaces are ambiguous.
     const link = { href: "https://a.example/", linkType: "gs1:pip", title: "A", default: true };
     for (const type of [`text/html${" ; ".repeat(16)}x`, `text/html${" ; ".repeat(100_000)}x`]) {
-      // The fastest of three runs: a busy machine makes a run slower and never faster than the
-      // pattern allows, so one run alone failed the bound on a loaded machine with nothing wrong.
+      // The processor's time this process spends, not the clock's: on a busy machine the clock ran
+      // on while the parse waited its turn, and even the fastest of three runs failed the bound with
+      // nothing wrong, where the processor's time is the pattern's own. The fastest of three still,
+      // for what else the process does meanwhile, such as collecting garbage.
       const runs = [0, 1, 2].map(() => {
-        const started = performance.now();
+        const started = process.cpuUsage();
         expect(() =>
           parseTable({ version: 1, entries: { "/01/09520123456788": [{ ...link, type }] } }),
         ).toThrow(/not a media type/);
-        return performance.now() - started;
+        const used = process.cpuUsage(started);
+        return (used.user + used.system) / 1000;
       });
       expect(Math.min(...runs), `${type.length} characters`).toBeLessThan(250);
     }
