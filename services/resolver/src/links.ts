@@ -421,21 +421,30 @@ export interface ChoiceRequest {
  * otherwise.
  */
 export function chooseLink(candidates: Candidate[], request: ChoiceRequest): Candidate | undefined {
-  // A request for `gs1:defaultLink` asks for the link the linkset publishes under it, which is
-  // the one a plain scan follows; no link in a table is of that type, so it answered 404 while
-  // the linkset advertised the relation.
-  if (request.linkType && !sameLinkType(request.linkType, "gs1:defaultLink")) {
+  // The link marked as the default at the most specific level that has one: the levels run from
+  // the code as scanned up to its primary key.
+  const fallback = candidates.find((candidate) => candidate.default === true);
+
+  // A request for `gs1:defaultLink` asks for the link the linkset publishes under that relation,
+  // which is that default and no other, whatever languages the request names: no link in a table
+  // is of that type, so it answered 404 while the linkset advertised the relation, and answered as
+  // a plain scan is, a French phone was sent to a French page published under its own type only.
+  if (request.linkType && sameLinkType(request.linkType, "gs1:defaultLink")) return fallback;
+  if (request.linkType) {
     const asked = candidates.filter((candidate) => sameLinkType(candidate.linkType, request.linkType ?? ""));
     return best(asked, request.acceptLanguage);
   }
-
-  const fallback = candidates.find((candidate) => candidate.default === true);
   if (!fallback) return undefined;
 
-  // The default decides which link type is on offer; the request then gets to improve on
-  // which of that type it lands on. Filtering to the default alone would make the rest of
-  // this sentence in the standard mean nothing, since one link cannot be bettered.
-  const siblings = candidates.filter((candidate) => sameLinkType(candidate.linkType, fallback.linkType));
+  // The default decides which link type is on offer, and at which level; the request then gets
+  // to improve on which of that type, at that level, it lands on. Filtering to the default alone
+  // would make the rest of this sentence in the standard mean nothing, since one link cannot be
+  // bettered. Taken from every level, the type's links sent a French phone scanning a lot that
+  // has a default of its own to the product's French page.
+  const siblings = candidates.filter(
+    (candidate) =>
+      sameLinkType(candidate.linkType, fallback.linkType) && candidate.anchor === fallback.anchor,
+  );
   return best(siblings, request.acceptLanguage) ?? fallback;
 }
 

@@ -1170,31 +1170,68 @@ describe("what a link answers with", () => {
     }
   });
 
-  it("answers a request for gs1:defaultLink with the link a plain scan follows", async () => {
+  it("answers a request for gs1:defaultLink with the link marked as the default, whatever languages it names", async () => {
     // The linkset publishes the default under that relation, and no link in a table is of it, so a
-    // request for it answered 404 while the linkset advertised it.
+    // request for it answered 404 while the linkset advertised it; and answered as a plain scan is,
+    // a French phone was sent to the French page, which the linkset publishes under its own type.
     const seen: Event[] = [];
     const { at, close } = await serve(
       {
         "/01/09520123456788": [
           { href: "https://a.example/r", linkType: "gs1:recipeInfo", title: "R" },
-          { href: "https://a.example/p", linkType: "gs1:pip", title: "P", default: true },
+          { href: "https://a.example/en", linkType: "gs1:pip", title: "EN", hreflang: ["en"], default: true },
+          { href: "https://a.example/fr", linkType: "gs1:pip", title: "FR", hreflang: ["fr"] },
+        ],
+        "/01/09520123456788/10/LOT": [
+          { href: "https://a.example/lot-fr", linkType: "gs1:pip", title: "LOT", hreflang: ["fr"] },
         ],
       },
       seen,
     );
     try {
       for (const asked of ["gs1:defaultLink", "https://gs1.org/voc/defaultLink"]) {
-        const scan = await fetch(`${at}/01/09520123456788?linkType=${encodeURIComponent(asked)}&utm=1`, {
-          redirect: "manual",
-        });
-        expect(scan.status, asked).toBe(307);
-        expect(scan.headers.get("location"), asked).toBe("https://a.example/p?utm=1");
+        for (const path of ["/01/09520123456788", "/01/09520123456788/10/LOT"]) {
+          const scan = await fetch(`${at}${path}?linkType=${encodeURIComponent(asked)}&utm=1`, {
+            redirect: "manual",
+            headers: { "accept-language": "fr" },
+          });
+          expect(scan.status, `${asked} ${path}`).toBe(307);
+          expect(scan.headers.get("location"), `${asked} ${path}`).toBe("https://a.example/en?utm=1");
+        }
       }
       expect(seen.map((event) => (event.type === "scan" ? event.requested : null))).toEqual([
         "gs1:defaultLink",
+        "gs1:defaultLink",
+        "https://gs1.org/voc/defaultLink",
         "https://gs1.org/voc/defaultLink",
       ]);
+    } finally {
+      await close();
+    }
+  });
+
+  it("chooses a plain scan's language among the links at the level of the default it follows", async () => {
+    // Taken from every level, the default's siblings sent a French phone scanning a lot with a
+    // default of its own to the product's French page, while the lot's own link was the one its
+    // code had been pointed at.
+    const { at, close } = await serve({
+      "/01/09520123456788": [
+        { href: "https://a.example/en", linkType: "gs1:pip", title: "EN", hreflang: ["en"], default: true },
+        { href: "https://a.example/fr", linkType: "gs1:pip", title: "FR", hreflang: ["fr"] },
+      ],
+      "/01/09520123456788/10/LOT": [
+        { href: "https://a.example/lot", linkType: "gs1:pip", title: "LOT", default: true },
+      ],
+    });
+    try {
+      const french = { redirect: "manual" as const, headers: { "accept-language": "fr" } };
+      expect((await fetch(`${at}/01/09520123456788/10/LOT`, french)).headers.get("location")).toBe(
+        "https://a.example/lot",
+      );
+      // The product's own scan still chooses among the product's languages.
+      expect((await fetch(`${at}/01/09520123456788`, french)).headers.get("location")).toBe(
+        "https://a.example/fr",
+      );
     } finally {
       await close();
     }
