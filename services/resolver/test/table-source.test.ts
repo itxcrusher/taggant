@@ -402,6 +402,8 @@ describe("what a table may not say", () => {
       [{ linkType: "http://gs1.org/voc/pip" }, /GS1's vocabulary written another way/],
       [{ linkType: "GS1:pip/x" }, /GS1's vocabulary written another way/],
       [{ linkType: "GS1:pip" }, /GS1's vocabulary written another way/],
+      // The vocabulary's own address without its last slash.
+      [{ linkType: "https://gs1.org/voc" }, /GS1's vocabulary written another way/],
       // The type the resolver publishes for the default link, written in the table as well.
       [{ linkType: "gs1:defaultLink" }, /publishes for the link marked/],
       [{ linkType: "https://gs1.org/voc/defaultLink" }, /publishes for the link marked/],
@@ -453,6 +455,10 @@ describe("what a table may not say", () => {
       { linkType: "gs1:recipeInfo" },
       { linkType: "https://gs1.org/voc/recipeInfo" },
       { linkType: "https://example.com/voc/pip" },
+      // GS1's host and path under a scheme that is not the web's, another URI and no spelling of
+      // the vocabulary, and a path that only starts with its word.
+      { linkType: "ftp://gs1.org/voc/pip" },
+      { linkType: "https://gs1.org/vocabulary/pip" },
       { linkType: "https://example.com/rels/manual?v=2#top" },
       { linkType: "urn:example:a%20b" },
       { default: false },
