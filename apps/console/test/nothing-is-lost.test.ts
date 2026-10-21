@@ -846,6 +846,15 @@ describe("an internal failure said as a sentence", () => {
       await post("/e/far/targets/front/compile", new URLSearchParams({ scanDistanceMm: "10001" })),
     );
     expect(past).toContain("50 to 10000");
+    // A distance no number field writes is asked for again as a number: `0x96` was compiled at 150,
+    // and letters were answered with a scan distance of "NaN mm".
+    for (const sent of ["0x96", "far", "Infinity", "600mm"]) {
+      const said = await told(
+        await post("/e/far/targets/front/compile", new URLSearchParams({ scanDistanceMm: sent })),
+      );
+      expect(said, sent).toContain("say how far away front will be read from as a number of millimetres");
+      expect(said, sent).not.toContain("NaN");
+    }
   }, 240_000);
 });
 

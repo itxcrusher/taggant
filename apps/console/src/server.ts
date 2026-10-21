@@ -666,6 +666,14 @@ export function createConsole(options: ConsoleOptions): Server {
           `say how far away ${targetId} will be read from, in millimetres, to compile it`,
         );
       }
+      // A number as a form's number field writes one, which HTML calls a valid floating-point
+      // number: `Number` also read `0x96` as 150 and compiled there, and answered letters with a
+      // scan distance of "NaN mm".
+      if (!/^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(given)) {
+        throw new WorkspaceError(
+          `say how far away ${targetId} will be read from as a number of millimetres, such as 600, to compile it`,
+        );
+      }
       const distance = Number(given);
       const experience = await workspace.read(id);
       const outcome = await compile(workspace, experience, targetId, distance);
