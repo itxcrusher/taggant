@@ -26,7 +26,7 @@ import {
   type StoredLink,
   parseDigitalLink,
   parseTable,
-  parseTableText,
+  readTableText,
   sameLinkType,
 } from "@taggant/resolver";
 import { fromTargetFile } from "@taggant/vision";
@@ -452,15 +452,30 @@ async function writeCode(
   }
 
   let current: LinkTable;
+  // Set when the table on disk is one the resolver refuses. Registering a code may repair it: this
+  // form marked each link it registered as the default and left another type's default marked, so
+  // a table it wrote can hold two defaults under one code, which the resolver now refuses to start
+  // on, and registering that code again takes the mark off the other. So the table is read as the
+  // resolver reads its text, changed, and the result checked; refused here instead, every code was
+  // refused and the only repair was the JSON by hand.
+  let refusedAsItStands: string | undefined;
   try {
-    current = parseTableText(await readFile(tablePath, "utf8"));
+    const value = readTableText(await readFile(tablePath, "utf8"));
+    try {
+      current = parseTable(value);
+    } catch (refused) {
+      refusedAsItStands = refused instanceof Error ? refused.message : String(refused);
+      const { version, entries } = (value ?? {}) as { version?: unknown; entries?: unknown };
+      if (typeof entries !== "object" || entries === null || Array.isArray(entries)) throw refused;
+      current = { version, entries } as LinkTable;
+    }
   } catch (error) {
-    // A table that is not there yet is the ordinary case for a first code. A table that
-    // is there and unreadable is not, and overwriting it would lose every other code.
+    // A table that is not there yet is the ordinary case for a first code. A table that is there
+    // and cannot be read as one is not, and writing over it would lose every other code.
     const missing = (error as NodeJS.ErrnoException)?.code === "ENOENT";
     if (!missing) {
       throw new WorkspaceError(
-        `${tablePath} could not be read, and writing over it would lose the codes already in it: ${error instanceof Error ? error.message : String(error)}`,
+        `${tablePath} could not be read as a link table, and writing over it would lose the codes already in it: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
     current = { version: 1, entries: {} };
@@ -519,8 +534,11 @@ async function writeCode(
   try {
     parseTable(next);
   } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
     throw new WorkspaceError(
-      `that would have written a table the resolver refuses, so nothing was written: ${error instanceof Error ? error.message : String(error)}`,
+      refusedAsItStands === undefined
+        ? `that would have written a table the resolver refuses, so nothing was written: ${reason}`
+        : `${tablePath} holds an entry the resolver refuses, which registering this code does not change, so nothing was written: ${reason}`,
     );
   }
 

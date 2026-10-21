@@ -20,6 +20,7 @@ export {
   parseAcceptLanguage,
   parseTable,
   parseTableText,
+  readTableText,
   sameLinkType,
 } from "./links.js";
 export type { Candidate, ChoiceRequest, LinkTable, StoredLink } from "./links.js";

@@ -50,6 +50,16 @@ export function emptyTable(): LinkTable {
  * nobody can see.
  */
 export function parseTableText(text: string): LinkTable {
+  return parseTable(readTableText(text));
+}
+
+/**
+ * A table's text read as JSON, as `parseTableText` reads it, without the checks of what it says:
+ * for a writer that changes a table and checks the result, which may repair what the table held.
+ * Refused, as there, when it is not JSON or writes a key twice, because then what it holds cannot
+ * be known, and a table written back from it would lose what the reader dropped.
+ */
+export function readTableText(text: string): unknown {
   const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   const value: unknown = JSON.parse(body);
   // A reader of JSON keeps the last of two keys of one object and drops the first without a word:
@@ -61,7 +71,7 @@ export function parseTableText(text: string): LinkTable {
       `the table writes the key ${JSON.stringify(twice.key)} twice in one object${twice.within === undefined ? "" : `, ${JSON.stringify(twice.within)}`}, and a reader keeps only the last: write it once`,
     );
   }
-  return parseTable(value);
+  return value;
 }
 
 /**

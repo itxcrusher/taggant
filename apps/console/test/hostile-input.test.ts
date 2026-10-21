@@ -642,6 +642,64 @@ describe("registering a code", () => {
     ]);
   });
 
+  it("repairs a code whose links it marked twice as the default, and leaves a table refused elsewhere alone", async () => {
+    // Before it took the mark off another link, this form left a code with two defaults, a table the
+    // resolver now refuses to start on; refused here as well, no code could be registered and the
+    // only repair was the JSON by hand. Registering that code repairs it; a refusal elsewhere is
+    // said as the resolver says it, and nothing is written.
+    const table = join(root, "marked-twice.json");
+    const cert = {
+      href: "https://a.example/cert",
+      linkType: "gs1:certificationInfo",
+      title: "Cert",
+      default: true,
+    };
+    const old = { href: "https://a.example/old", linkType: "gs1:pip", title: "Old", default: true };
+    const other = { href: "https://a.example/other", linkType: "gs1:pip", title: "Other", default: true };
+    await writeFile(
+      table,
+      JSON.stringify({
+        version: 1,
+        entries: { "/01/09520123456788": [cert, old], "/01/09520123456702": [other] },
+      }),
+    );
+    const written = await registerCode(table, {
+      path: "/01/09520123456788",
+      href: "https://new.example/",
+      title: "New",
+    });
+    expect(written).toMatchObject({ replaced: 1, unmarked: 1 });
+    const after = JSON.parse(await readFile(table, "utf8"));
+    expect(after.entries["/01/09520123456788"]).toEqual([
+      { href: "https://a.example/cert", linkType: "gs1:certificationInfo", title: "Cert" },
+      { href: "https://new.example/", linkType: "gs1:pip", title: "New", default: true },
+    ]);
+    expect(after.entries["/01/09520123456702"]).toEqual([other]);
+
+    // Two defaults under another code: registering this one does not change them.
+    const elsewhere = JSON.stringify({
+      version: 1,
+      entries: { "/01/09520123456788": [old], "/01/09520123456702": [cert, other] },
+    });
+    await writeFile(table, elsewhere);
+    await expect(
+      registerCode(table, { path: "/01/09520123456788", href: "https://new.example/", title: "New" }),
+    ).rejects.toThrow(
+      /holds an entry the resolver refuses, which registering this code does not change, so nothing was written: \/01\/09520123456702 has two default links/,
+    );
+    expect(await readFile(table, "utf8")).toBe(elsewhere);
+
+    // A key written twice cannot be read as a table at all, and is not written over.
+    const twice = `{"version":1,"entries":{"/01/09520123456702":[${JSON.stringify(other)}],"/01/09520123456702":[${JSON.stringify(old)}]}}`;
+    await writeFile(table, twice);
+    await expect(
+      registerCode(table, { path: "/01/09520123456788", href: "https://new.example/", title: "New" }),
+    ).rejects.toThrow(
+      /could not be read as a link table, and writing over it would lose the codes already in it: the table writes the key/,
+    );
+    expect(await readFile(table, "utf8")).toBe(twice);
+  });
+
   it("reads a table saved with a byte-order mark, and keeps the codes already in it", async () => {
     // Saved by an editor that puts a mark in front of UTF-8, the table could not be read, and the
     // code was refused rather than written beside the ones already there.
