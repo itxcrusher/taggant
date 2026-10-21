@@ -1249,6 +1249,17 @@ describe("what a link answers with", () => {
         [`/nothing/${"a".repeat(499)}%F0%9F%98%80`, `/nothing/${"a".repeat(499)}`],
         [`/nothing/${"a".repeat(491)}%F0%9F%98%80`, `/nothing/${"a".repeat(491)}%F0%9F%98%80`],
       ];
+      // Characters of two, three and four bytes, one written in small letters as a client may,
+      // each cut after every byte but its last, where it goes, and just after its last, where it
+      // stays. "/nothing/" is nine characters, so after 503 - 3k letters the 512th character
+      // ends the kth byte.
+      for (const character of ["%C3%A9", "%E2%82%AC", "%e4%b8%ad", "%F0%9F%98%80"]) {
+        const bytes = character.length / 3;
+        for (let k = 1; k <= bytes; k++) {
+          const before = `/nothing/${"a".repeat(503 - 3 * k)}`;
+          cases.push([`${before}${character}b`, k < bytes ? before : `${before}${character}`]);
+        }
+      }
       for (const [target, kept] of cases) {
         seen.length = 0;
         expect((await rawGet(at, target)).status).toContain(" 400 ");
