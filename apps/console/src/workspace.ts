@@ -51,6 +51,17 @@ export class WorkspaceError extends Error {
   }
 }
 
+/** A compiled target file that could not be read at all, with the reason the system gave. */
+export class TargetNotReadError extends WorkspaceError {
+  constructor(
+    message: string,
+    readonly reason: string,
+  ) {
+    super(message);
+    this.name = "TargetNotReadError";
+  }
+}
+
 /**
  * A manifest as the console holds it, which is not always one that could be published.
  *
@@ -669,14 +680,26 @@ export function createWorkspace(root: string, options: WorkspaceOptions = {}): W
     async readTarget(id: string, targetId: string): Promise<unknown> {
       const filename = targetFilename(targetId);
       const path = join(directoryFor(id), "targets", filename);
+      // Read and parsed apart, because the two are told apart by what is done about them: a file
+      // that does not parse is compiled again from its card, and one that cannot be read, a folder
+      // in its place or reading denied, is made readable first, or compiling it fails as well.
+      let text: string;
+      try {
+        text = await readFile(path, "utf8");
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new TargetNotReadError(
+          `the compiled target for ${targetId} could not be read: ${reason}`,
+          reason,
+        );
+      }
       try {
         // Read as though a byte-order mark in front were not there, as the link table is: a
         // target file an editor saved with one could not be read, and its report with it.
-        const text = await readFile(path, "utf8");
         return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
       } catch (error) {
         throw new WorkspaceError(
-          `the compiled target for ${targetId} could not be read: ${error instanceof Error ? error.message : String(error)}`,
+          `the compiled target for ${targetId} does not parse: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     },

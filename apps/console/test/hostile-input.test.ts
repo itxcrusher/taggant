@@ -315,20 +315,24 @@ describe("a target on disk with no report at all", () => {
     expect(shipped.report?.pass).toBe(true);
 
     // So is a file the runtime cannot read that parses and holds no report: nothing in it was
-    // compiled at a distance, so there is none to lose, and the card offers the default. All three
-    // take the publish down the same path, so one publish holds it, a publish being a compile.
+    // compiled at a distance, so there is none to lose, and the card offers the default.
     for (const text of ["[]", "null", JSON.stringify({ ...unreported, formatVersion: 3 })]) {
       await write(path, text);
       const card = await (await fetch(`${origin}/e/no-report`)).text();
       expect(card, text.slice(0, 20)).not.toContain("how far away it was meant to be read from");
       expect(card, text.slice(0, 20)).toMatch(/name="scanDistanceMm"[^>]*required value="150"/);
     }
-    const at: number[] = [];
-    await publish(workspace, await workspace.read(created.id), out, {
-      runtimeDir,
-      onRebuild: (_id: string, distance: number) => at.push(distance),
-    });
-    expect(at, "an unreadable file with no report").toEqual([150]);
+    // And the publish takes them down that path: one that parses and is not an object, and one that
+    // is an object the runtime cannot read, each compiled at 150 and not refused as unreadable.
+    for (const text of ["null", JSON.stringify({ ...unreported, formatVersion: 3 })]) {
+      await write(path, text);
+      const at: number[] = [];
+      await publish(workspace, await workspace.read(created.id), out, {
+        runtimeDir,
+        onRebuild: (_id: string, distance: number) => at.push(distance),
+      });
+      expect(at, text.slice(0, 20)).toEqual([150]);
+    }
 
     // And a report written for another target, which the gate refuses in terms of that target: it
     // went to the gate as it stood, and the operator was told the other artwork's width. Rebuilt
@@ -465,6 +469,19 @@ describe("a target whose report gives back no distance", () => {
       ).rejects.toThrow(/front's compiled file could not be read, so nothing says the reading distance/);
       expect(rebuiltAt, label).toEqual([]);
     }
+    // A folder where the file should be cannot be read at all, and compiling cannot replace it, so
+    // the publish says why and to move it aside first: told only to compile it from its card, the
+    // operator met a compile that failed on the folder and the same advice again.
+    const { mkdir: makeFolder, rm: remove } = await import("node:fs/promises");
+    await remove(path);
+    await makeFolder(path);
+    await expect(
+      publish(workspace, await workspace.read(created.id), join(root, "lost-distance-out"), { runtimeDir }),
+    ).rejects.toThrow(
+      /front's compiled file could not be read \(.+\), so nothing says the reading distance .* Make the file readable, or move aside what is in its place/,
+    );
+    await remove(path, { recursive: true });
+
     // One saved with a byte-order mark in front is read as though it had none, so its report at
     // 600 is the one on record and the publish refuses the piece there, as compiled.
     await write(path, `${String.fromCharCode(0xfeff)}${whole}`);

@@ -31,7 +31,14 @@ import {
 } from "@taggant/resolver";
 import { fromTargetFile } from "@taggant/vision";
 import { canonical, inTurn, queueKey } from "./in-turn.js";
-import { type Experience, type Workspace, WorkspaceError, publishable, replaceFile } from "./workspace.js";
+import {
+  type Experience,
+  TargetNotReadError,
+  type Workspace,
+  WorkspaceError,
+  publishable,
+  replaceFile,
+} from "./workspace.js";
 
 /**
  * Distance a person is expected to hold the camera from the print, in millimetres.
@@ -248,10 +255,11 @@ async function publishOnce(
     // anything a person could hold. Rebuilt at the default, a piece compiled for 2000 mm and
     // refused there was compiled again at 150, passed, and was published.
     let distanceLost = false;
-    // Set when the file does not parse at all, which says nothing, not even whether it carried a
-    // report: a trailing comma or a file cut short left the report whole and unread, and the
-    // target was compiled again at 150, passed there and was published.
-    let unread = false;
+    // Set when the file does not parse at all, or cannot be read, which says nothing, not even
+    // whether it carried a report: a trailing comma or a file cut short left the report whole and
+    // unread, and the target was compiled again at 150, passed there and was published. `cause` is
+    // the system's reason when the file could not be read, which compiling cannot cure.
+    let unread: { cause?: string } | undefined;
     if (await workspace.hasTarget(experience.id, target.id)) {
       try {
         stored = await workspace.readTarget(experience.id, target.id);
@@ -289,9 +297,9 @@ async function publishOnce(
           stored = undefined;
           rebuildAt = report.scanDistanceMm;
         }
-      } catch {
+      } catch (error) {
         if (stored === undefined) {
-          unread = true;
+          unread = error instanceof TargetNotReadError ? { cause: error.reason } : {};
           distanceLost = true;
         } else {
           // One the runtime cannot read can still carry its report, and the report the distance
@@ -312,9 +320,11 @@ async function publishOnce(
     if (stored === undefined) {
       if (distanceLost && rebuildAt === undefined) {
         throw new WorkspaceError(
-          unread
-            ? `${target.id}'s compiled file could not be read, so nothing says the reading distance it was compiled for, and it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish.`
-            : `${target.id} was compiled for a reading distance its print readiness report no longer gives, so it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish.`,
+          unread?.cause !== undefined
+            ? `${target.id}'s compiled file could not be read (${unread.cause}), so nothing says the reading distance it was compiled for, and it is not compiled again at a guess. Make the file readable, or move aside what is in its place, then compile it from its card at the distance it will be read from, and publish.`
+            : unread !== undefined
+              ? `${target.id}'s compiled file could not be read, so nothing says the reading distance it was compiled for, and it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish.`
+              : `${target.id} was compiled for a reading distance its print readiness report no longer gives, so it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish.`,
         );
       }
       try {
