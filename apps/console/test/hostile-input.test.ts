@@ -471,7 +471,7 @@ describe("a target whose report gives back no distance", () => {
     // A folder where the file should be cannot be read at all: the publish and the card give the
     // system's reason and send the operator to the card's compile, and the compile says that a
     // folder is in the file's place and to move it aside, where it failed as a 500.
-    const { mkdir: makeFolder, rm: remove, symlink } = await import("node:fs/promises");
+    const { lstat, mkdir: makeFolder, rm: remove, symlink } = await import("node:fs/promises");
     await remove(path);
     await makeFolder(path);
     await expect(
@@ -493,8 +493,9 @@ describe("a target whose report gives back no distance", () => {
       /is a folder, which a file cannot replace: move it aside, then try again\./,
     );
     await remove(path, { recursive: true });
-    // A link to nothing, which the card takes for no file: the compile says a link is in the way,
-    // where it said another program held the file open.
+    // A link to nothing, which the card takes for no file. On Windows a rename cannot replace a
+    // junction, and the compile says a link is in the way, where it said another program held the
+    // file open; elsewhere a rename replaces the link itself, and the compile writes the file.
     await symlink(join(root, "nowhere"), path, "junction");
     const intoLink = await post(
       "/e/lost-distance/targets/front/compile",
@@ -502,7 +503,11 @@ describe("a target whose report gives back no distance", () => {
     );
     expect(intoLink.status).toBe(303);
     const linkPage = await (await fetch(`${origin}${intoLink.headers.get("location")}`)).text();
-    expect(linkPage).toMatch(/is a link, which a file cannot replace: move it aside, then try again\./);
+    if (process.platform === "win32") {
+      expect(linkPage).toMatch(/is a link, which a file cannot replace: move it aside, then try again\./);
+    } else {
+      expect((await lstat(path)).isFile()).toBe(true);
+    }
     expect(linkPage).not.toContain("held it open");
     await remove(path);
     // A file gone between being looked for and being read, as when another program is replacing it,
