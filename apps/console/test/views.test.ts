@@ -47,6 +47,19 @@ describe("escaping", () => {
   it("escapes every character that could end an attribute or open a tag", () => {
     expect(esc(`<a href="x" onclick='y'>&`)).toBe("&lt;a href=&quot;x&quot; onclick=&#39;y&#39;&gt;&amp;");
   });
+
+  it("keeps a direction mark in an artwork's name from reordering the rest of its line", () => {
+    // A right-to-left override holds to the end of its paragraph unless something closes it, so one
+    // in a file name ran on over the count written after the name.
+    const source = `artwork/${String.fromCharCode(0x202e)}gnp.front`;
+    const html = experiencePage({
+      id: "botanica-500",
+      manifest: MANIFEST as never,
+      problems: [],
+      targets: [{ id: "front-panel", source, physicalWidthMm: 62, contentCount: 0 }],
+    });
+    expect(html).toContain(`<bdi>${source}</bdi> &middot; 0 content items`);
+  });
 });
 
 describe("what a stored report is said to be", () => {

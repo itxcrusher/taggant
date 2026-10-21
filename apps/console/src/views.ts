@@ -261,7 +261,7 @@ export function experiencePage(view: ExperienceView): string {
     <h3 class="flush">${esc(target.id)}</h3>
     <span class="label">${esc(target.physicalWidthMm)} mm wide in print</span>
   </div>
-  <p class="quiet mono source-line">${esc(target.source)} &middot; ${target.contentCount} content item${target.contentCount === 1 ? "" : "s"}</p>
+  <p class="quiet mono source-line"><bdi>${esc(target.source)}</bdi> &middot; ${target.contentCount} content item${target.contentCount === 1 ? "" : "s"}</p>
   ${
     target.report
       ? verdict(target.report)
