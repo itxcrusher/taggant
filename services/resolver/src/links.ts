@@ -50,7 +50,58 @@ export function emptyTable(): LinkTable {
  * nobody can see.
  */
 export function parseTableText(text: string): LinkTable {
-  return parseTable(JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text));
+  const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const value: unknown = JSON.parse(body);
+  // A reader of JSON keeps the last of two keys of one object and drops the first without a word:
+  // an identifier written twice lost the links under its first, and a field written twice in a
+  // link lost its first value, while the table was called ready.
+  const twice = keyWrittenTwice(body);
+  if (twice !== undefined) {
+    throw new TypeError(
+      `the table writes the key ${JSON.stringify(twice.key)} twice in one object${twice.within === undefined ? "" : `, ${JSON.stringify(twice.within)}`}, and a reader keeps only the last: write it once`,
+    );
+  }
+  return parseTable(value);
+}
+
+/**
+ * The first key a JSON text writes twice in one object, with the key that object is the value of,
+ * if any. The text has been parsed already, so it is valid JSON and is walked only for its keys.
+ */
+function keyWrittenTwice(text: string): { key: string; within?: string } | undefined {
+  // One frame for each object or array open, an object's keys and the key it is the value of.
+  const frames: Array<{ keys: Set<string>; within?: string } | null> = [];
+  let expectingKey = false;
+  let lastKey: string | undefined;
+  for (let at = 0; at < text.length; at++) {
+    const character = text[at];
+    if (character === '"') {
+      let end = at + 1;
+      while (text[end] !== '"') end += text[end] === "\\" ? 2 : 1;
+      const frame = frames[frames.length - 1];
+      if (frame && expectingKey) {
+        const key = JSON.parse(text.slice(at, end + 1)) as string;
+        if (frame.keys.has(key)) return frame.within === undefined ? { key } : { key, within: frame.within };
+        frame.keys.add(key);
+        lastKey = key;
+        expectingKey = false;
+      }
+      at = end;
+    } else if (character === "{") {
+      const parent = frames[frames.length - 1];
+      frames.push(
+        parent && lastKey !== undefined ? { keys: new Set(), within: lastKey } : { keys: new Set() },
+      );
+      expectingKey = true;
+    } else if (character === "[") {
+      frames.push(null);
+    } else if (character === "}" || character === "]") {
+      frames.pop();
+    } else if (character === ",") {
+      expectingKey = frames[frames.length - 1] !== null && frames.length > 0;
+    }
+  }
+  return undefined;
 }
 
 /** The fields a link holds. A misspelled one was accepted and ignored. */
@@ -106,7 +157,7 @@ export function parseTable(value: unknown): LinkTable {
     // linkset published both, so a client reading the linkset and a client following a plain
     // scan disagreed about the same code and the table said nothing was wrong. GS1 asks for
     // exactly one default link for each identifier.
-    let markedDefault: string | undefined;
+    let markedDefault: { linkType: string; copy: string } | undefined;
     for (const link of links) {
       for (const field of ["href", "linkType", "title"] as const) {
         if (typeof link?.[field] !== "string" || link[field].length === 0) {
@@ -191,13 +242,17 @@ export function parseTable(value: unknown): LinkTable {
         );
       }
 
+      // A copy of the default marked as well is the one link it is a copy of, as the resolver
+      // takes it (`copyOf`): refused, a link written twice with both copies marked was called two
+      // defaults of one type.
       if (link.default === true) {
-        if (markedDefault !== undefined) {
+        const copy = copyOf(link);
+        if (markedDefault !== undefined && markedDefault.copy !== copy) {
           throw new TypeError(
-            `${path} has two default links, of types ${JSON.stringify(markedDefault)} and ${JSON.stringify(link.linkType)}, and a plain scan follows only one: mark only the link it should follow`,
+            `${path} has two default links, of types ${JSON.stringify(markedDefault.linkType)} and ${JSON.stringify(link.linkType)}, and a plain scan follows only one: mark only the link it should follow`,
           );
         }
-        markedDefault = link.linkType;
+        markedDefault ??= { linkType: link.linkType, copy };
       }
 
       // A title is for a person, shown by whatever reads the linkset to choose a link, and a
@@ -309,6 +364,21 @@ export function sameLinkType(a: string, b: string): boolean {
   return expandLinkType(a) === expandLinkType(b);
 }
 
+/**
+ * What makes two links of one level the same link: every field the linkset publishes for it, its
+ * type, the address of its href, its title, languages and media type. Whether it is the default
+ * is not among them, being published apart from the link's own entry.
+ */
+function copyOf(link: StoredLink): string {
+  return JSON.stringify([
+    expandLinkType(link.linkType),
+    addressOf(link.href),
+    link.title,
+    link.hreflang ?? null,
+    link.type ?? null,
+  ]);
+}
+
 /** The address the URL parser reads in an href, or the href as written where it reads none. */
 function addressOf(href: string): string {
   try {
@@ -379,13 +449,7 @@ export function candidatesFor(table: LinkTable, link: DigitalLink): Candidate[] 
     // under their type as the same link twice.
     const seen = new Map<string, Candidate>();
     for (const stored of table.entries[level] ?? []) {
-      const key = JSON.stringify([
-        expandLinkType(stored.linkType),
-        addressOf(stored.href),
-        stored.title,
-        stored.hreflang ?? null,
-        stored.type ?? null,
-      ]);
+      const key = copyOf(stored);
       const kept = seen.get(key);
       if (kept !== undefined) {
         if (stored.default === true) kept.default = true;

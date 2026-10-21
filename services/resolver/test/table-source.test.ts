@@ -326,6 +326,67 @@ describe("what a table may not say", () => {
     ).not.toThrow();
   });
 
+  it("takes a link written twice with both copies marked as one default", () => {
+    // The resolver takes the two for one link, so the table check does too: refused, both copies
+    // marked was called two defaults of one type.
+    for (const second of ["https://a.example/p", "https://a.example:443/p"]) {
+      expect(() =>
+        parseTable({
+          version: 1,
+          entries: {
+            "/01/09520123456788": [
+              { href: "https://a.example/p", linkType: "gs1:pip", title: "P", default: true },
+              { href: second, linkType: "gs1:pip", title: "P", default: true },
+            ],
+          },
+        }),
+      ).not.toThrow();
+    }
+    // A copy differing in a field it publishes is another link, and two defaults.
+    expect(() =>
+      parseTable({
+        version: 1,
+        entries: {
+          "/01/09520123456788": [
+            { href: "https://a.example/p", linkType: "gs1:pip", title: "P", default: true },
+            { href: "https://a.example/p", linkType: "gs1:pip", title: "Q", default: true },
+          ],
+        },
+      }),
+    ).toThrow(/two default links/);
+  });
+
+  it("refuses a table that writes one key twice in an object, which a reader keeps only the last of", () => {
+    // An identifier written twice lost every link under its first, its certification link
+    // answering 404 while the table was called ready; a field written twice lost its first value.
+    const link = '{"href":"https://a.example/p","linkType":"gs1:pip","title":"P","default":true}';
+    const cert = '{"href":"https://a.example/c","linkType":"gs1:certificationInfo","title":"C"}';
+    for (const [text, said] of [
+      [
+        `{"version":1,"entries":{"/01/09520123456788":[${cert}],"/01/09520123456788":[${link}]}}`,
+        /"\/01\/09520123456788" twice in one object, "entries"/,
+      ],
+      [
+        `{"version":1,"entries":{"/01/09520123456788":[{"href":"https://a.example/p","href":"https://b.example/","linkType":"gs1:pip","title":"P"}]}}`,
+        /"href" twice in one object/,
+      ],
+      // The same key spelled with an escape is the same key to a reader.
+      [
+        `{"version":1,"entries":{"/01/09520123456788":[${link}],"\u002F01/09520123456788":[${cert}]}}`,
+        /twice in one object/,
+      ],
+      [`{"version":1,"version":1,"entries":{}}`, /"version" twice in one object/],
+    ] as const) {
+      expect(() => parseTableText(text), text.slice(0, 60)).toThrow(said);
+    }
+    // One key in each of two objects, and keys inside strings, are not written twice.
+    expect(() =>
+      parseTableText(
+        `{"version":1,"entries":{"/01/09520123456788":[${link},{"href":"https://a.example/q","linkType":"gs1:pip","title":"\\"href\\":\\"x\\""}]}}`,
+      ),
+    ).not.toThrow();
+  });
+
   it("refuses a title holding a control character or a line break", () => {
     // A title is for a person, shown by whatever reads the linkset to choose a link: a line break
     // splits it wherever it is printed, and a line separator is invisible in the editor of
