@@ -76,8 +76,8 @@ export async function main(args: string[]): Promise<number> {
   let manifest: unknown;
   const compiled: Record<string, unknown> = {};
   try {
-    manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-    for (const [id, file] of targets) compiled[id] = JSON.parse(await readFile(file, "utf8"));
+    manifest = readJson(await readFile(manifestPath, "utf8"));
+    for (const [id, file] of targets) compiled[id] = readJson(await readFile(file, "utf8"));
   } catch (error) {
     stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return EXIT.cannotRead;
@@ -127,4 +127,13 @@ if (invokedDirectly()) {
     // Set rather than called, so anything still buffered on stdout is written first.
     process.exitCode = code;
   });
+}
+
+/**
+ * A JSON file's text read as though a byte-order mark in front were not there, which RFC 8259 lets
+ * a reader drop: a manifest or a target an editor saved with one was refused, the message naming a
+ * character nobody can see.
+ */
+function readJson(text: string): unknown {
+  return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
 }

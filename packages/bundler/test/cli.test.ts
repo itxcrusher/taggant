@@ -59,6 +59,39 @@ describe("main", () => {
   it("reports a manifest it cannot read, with its own exit code", async () => {
     expect(await main(["nope.json", "--target", "a=1.json", "--out", "d"])).toBe(EXIT.cannotRead);
   });
+
+  it("reads a manifest and a target saved with a byte-order mark as though they had none", async () => {
+    // RFC 8259 lets a reader drop the mark, and a file an editor saved with one was refused as one
+    // it could not read, the message naming a character nobody can see.
+    const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "bundle-marked-"));
+    const mark = String.fromCharCode(0xfeff);
+    await writeFile(join(dir, "manifest.json"), `${mark}{}`);
+    await writeFile(join(dir, "front.json"), `${mark}{}`);
+    const said: string[] = [];
+    const write = process.stderr.write;
+    process.stderr.write = ((chunk: unknown) => {
+      said.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const code = await main([
+        join(dir, "manifest.json"),
+        "--target",
+        `front=${join(dir, "front.json")}`,
+        "--out",
+        join(dir, "out"),
+      ]);
+      // Read, and then refused for what they say, an empty manifest being no experience.
+      expect(code, said.join("")).not.toBe(EXIT.cannotRead);
+      expect(said.join("")).not.toMatch(/Unexpected token|not valid JSON/);
+    } finally {
+      process.stderr.write = write;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("the command line reached through a link", () => {
