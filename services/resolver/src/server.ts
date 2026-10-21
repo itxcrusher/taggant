@@ -7,6 +7,7 @@ import {
   candidatesFor,
   chooseLink,
   expandLinkType,
+  languageChoices,
   languageMatch,
   parseAcceptLanguage,
   sameLinkType,
@@ -394,10 +395,8 @@ function handle(
     return;
   }
 
-  const chosen = chooseLink(candidates, {
-    linkType: requested,
-    acceptLanguage: request.headers["accept-language"],
-  });
+  const choice = { linkType: requested, acceptLanguage: request.headers["accept-language"] };
+  const chosen = chooseLink(candidates, choice);
   if (!chosen) {
     emit({
       type: "scan",
@@ -422,12 +421,15 @@ function handle(
   // `q=0` means "not acceptable", `*` was recorded as a language, and a four kilobyte
   // header became a four kilobyte field on that line of the operator's log. What is
   // recorded now is the matched tag off the chosen link, which is the only thing that can
-  // have decided anything, and nothing is recorded when the choice was not the language's.
+  // have decided anything, and nothing is recorded when the choice was not the language's: when
+  // the links the languages chose among were fewer than two. Counted as every link of the chosen
+  // type at every level, a request for `gs1:defaultLink`, which no language changes, recorded one,
+  // and so did a scan of a lot whose own default was the only link at its level.
   const decided = acceptedTags.reduce<string | undefined>(
     (found, wanted) => found ?? languageMatch(chosen.hreflang, wanted),
     undefined,
   );
-  const sameType = candidates.filter((candidate) => sameLinkType(candidate.linkType, chosen.linkType));
+  const among = languageChoices(candidates, choice);
   // The table's own href, not the target. The target carries the caller's query string
   // through, which is what the standard asks for and is also whatever a stranger wrote:
   // `?email=alice@example.com&uid=99123` went verbatim into the event, in a log the
@@ -441,7 +443,7 @@ function handle(
     outcome: "redirect",
     ...recorded,
     target: chosen.href,
-    ...(decided !== undefined && sameType.length > 1 ? { language: decided } : {}),
+    ...(decided !== undefined && among.length > 1 ? { language: decided } : {}),
     tookMs: took(),
   });
   send(response, 307, { ...headers, location: target }, "", method === "HEAD");

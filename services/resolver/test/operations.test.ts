@@ -1185,26 +1185,41 @@ describe("what a link answers with", () => {
         "/01/09520123456788/10/LOT": [
           { href: "https://a.example/lot-fr", linkType: "gs1:pip", title: "LOT", hreflang: ["fr"] },
         ],
+        // A lot with a default of its own: the default at the most specific level that has one.
+        "/01/09520123456788/10/OWN": [
+          { href: "https://a.example/own", linkType: "gs1:pip", title: "OWN", default: true },
+        ],
       },
       seen,
     );
     try {
       for (const asked of ["gs1:defaultLink", "https://gs1.org/voc/defaultLink"]) {
-        for (const path of ["/01/09520123456788", "/01/09520123456788/10/LOT"]) {
+        for (const [path, sent] of [
+          ["/01/09520123456788", "https://a.example/en"],
+          ["/01/09520123456788/10/LOT", "https://a.example/en"],
+          ["/01/09520123456788/10/OWN", "https://a.example/own"],
+        ]) {
           const scan = await fetch(`${at}${path}?linkType=${encodeURIComponent(asked)}&utm=1`, {
             redirect: "manual",
-            headers: { "accept-language": "fr" },
+            // English as well, the default's language, so a language recorded would have matched.
+            headers: { "accept-language": "fr, en" },
           });
           expect(scan.status, `${asked} ${path}`).toBe(307);
-          expect(scan.headers.get("location"), `${asked} ${path}`).toBe("https://a.example/en?utm=1");
+          expect(scan.headers.get("location"), `${asked} ${path}`).toBe(`${sent}?utm=1`);
         }
       }
       expect(seen.map((event) => (event.type === "scan" ? event.requested : null))).toEqual([
         "gs1:defaultLink",
         "gs1:defaultLink",
+        "gs1:defaultLink",
+        "https://gs1.org/voc/defaultLink",
         "https://gs1.org/voc/defaultLink",
         "https://gs1.org/voc/defaultLink",
       ]);
+      // No language decided any of them, so none is recorded as having done so.
+      expect(seen.map((event) => (event.type === "scan" ? event.language : null))).toEqual(
+        Array(6).fill(undefined),
+      );
     } finally {
       await close();
     }
@@ -1215,18 +1230,28 @@ describe("what a link answers with", () => {
     // default of its own to the product's French page, while the lot's own link was the one its
     // code had been pointed at. Taken from the default's level alone, a lot with a page of its own
     // in the scanner's language, and no default, sent that phone to its product's page.
-    const { at, close } = await serve({
-      "/01/09520123456788": [
-        { href: "https://a.example/en", linkType: "gs1:pip", title: "EN", hreflang: ["en"], default: true },
-        { href: "https://a.example/fr", linkType: "gs1:pip", title: "FR", hreflang: ["fr"] },
-      ],
-      "/01/09520123456788/10/LOT": [
-        { href: "https://a.example/lot", linkType: "gs1:pip", title: "LOT", default: true },
-      ],
-      "/01/09520123456788/10/LOT2": [
-        { href: "https://a.example/lot2-de", linkType: "gs1:pip", title: "LOT2", hreflang: ["de"] },
-      ],
-    });
+    const seen: Event[] = [];
+    const { at, close } = await serve(
+      {
+        "/01/09520123456788": [
+          { href: "https://a.example/en", linkType: "gs1:pip", title: "EN", hreflang: ["en"], default: true },
+          { href: "https://a.example/fr", linkType: "gs1:pip", title: "FR", hreflang: ["fr"] },
+        ],
+        "/01/09520123456788/10/LOT": [
+          {
+            href: "https://a.example/lot",
+            linkType: "gs1:pip",
+            title: "LOT",
+            hreflang: ["fr"],
+            default: true,
+          },
+        ],
+        "/01/09520123456788/10/LOT2": [
+          { href: "https://a.example/lot2-de", linkType: "gs1:pip", title: "LOT2", hreflang: ["de"] },
+        ],
+      },
+      seen,
+    );
     try {
       const french = { redirect: "manual" as const, headers: { "accept-language": "fr" } };
       const german = { redirect: "manual" as const, headers: { "accept-language": "de" } };
@@ -1234,6 +1259,9 @@ describe("what a link answers with", () => {
       expect((await fetch(`${at}/01/09520123456788/10/LOT`, french)).headers.get("location")).toBe(
         "https://a.example/lot",
       );
+      // The lot's own link was the only one its languages chose among, so French decided nothing.
+      const lotScan = seen.find((event) => event.type === "scan");
+      expect(lotScan?.type === "scan" ? lotScan.language : null).toBeUndefined();
       // The product's own scan still chooses among the product's languages.
       expect((await fetch(`${at}/01/09520123456788`, french)).headers.get("location")).toBe(
         "https://a.example/fr",

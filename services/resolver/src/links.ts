@@ -516,11 +516,25 @@ export function chooseLink(candidates: Candidate[], request: ChoiceRequest): Can
   // is of that type, so it answered 404 while the linkset advertised the relation, and answered as
   // a plain scan is, a French phone was sent to a French page published under its own type only.
   if (request.linkType && sameLinkType(request.linkType, "gs1:defaultLink")) return fallback;
+  const among = languageChoices(candidates, request);
+  if (request.linkType) return best(among, request.acceptLanguage);
+  return best(among, request.acceptLanguage) ?? fallback;
+}
+
+/**
+ * The links a request's languages choose among, and so the only ones a language can decide
+ * between: for a request for a link type, that type's links at every level; for a plain scan, the
+ * default's type at the default's level and the levels more specific than it; and none for a
+ * request for `gs1:defaultLink`, which gets the default whatever languages it names, or for a plain
+ * scan of a code with no default.
+ */
+export function languageChoices(candidates: Candidate[], request: ChoiceRequest): Candidate[] {
+  if (request.linkType && sameLinkType(request.linkType, "gs1:defaultLink")) return [];
   if (request.linkType) {
-    const asked = candidates.filter((candidate) => sameLinkType(candidate.linkType, request.linkType ?? ""));
-    return best(asked, request.acceptLanguage);
+    return candidates.filter((candidate) => sameLinkType(candidate.linkType, request.linkType ?? ""));
   }
-  if (!fallback) return undefined;
+  const fallback = candidates.find((candidate) => candidate.default === true);
+  if (!fallback) return [];
 
   // The default decides which link type is on offer, and the levels it is chosen from: its own,
   // and those more specific than it, which come first and mark no default. The request then gets
@@ -535,10 +549,9 @@ export function chooseLink(candidates: Candidate[], request: ChoiceRequest): Can
     levels.add(candidate.anchor);
     if (candidate.anchor === fallback.anchor) break;
   }
-  const siblings = candidates.filter(
+  return candidates.filter(
     (candidate) => sameLinkType(candidate.linkType, fallback.linkType) && levels.has(candidate.anchor),
   );
-  return best(siblings, request.acceptLanguage) ?? fallback;
 }
 
 /**
