@@ -119,6 +119,20 @@ describe("escaping", () => {
       expect(shown(`a${String.fromCharCode(code)}b`), code.toString(16)).toBe(`a\\u{${code.toString(16)}}b`);
     }
   });
+
+  it("keeps the experience page when a target id holds a lone surrogate", () => {
+    // A manifest saved by hand can hold one, and the form's address threw, taking the page with it.
+    const lone = String.fromCharCode(0xd800);
+    const card = experiencePage({
+      id: "botanica-500",
+      manifest: { ...MANIFEST, targets: [{ ...MANIFEST.targets[0], id: `front${lone}` }] } as never,
+      problems: [],
+      targets: [{ id: `front${lone}`, source: "artwork/front.png", physicalWidthMm: 62, contentCount: 0 }],
+    });
+    expect(card).toContain('<h3 class="flush">front\\u{d800}</h3>');
+    expect(card).toContain('action="/e/botanica-500/targets/front%EF%BF%BD/compile"');
+    expect(card).toContain('action="/e/botanica-500/targets/front%EF%BF%BD/content"');
+  });
 });
 
 describe("what a stored report is said to be", () => {

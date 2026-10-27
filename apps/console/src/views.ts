@@ -48,6 +48,16 @@ export function shown(value: unknown): string {
   return esc(printable(String(value)));
 }
 
+/**
+ * A target id as a segment of a form's address. A lone surrogate, which a manifest saved by hand can
+ * hold, made `encodeURIComponent` throw and the whole experience page answer 404; written as the
+ * replacement character, the address names no target, the compile says so, and the card says what
+ * the id needs.
+ */
+function segment(value: string): string {
+  return encodeURIComponent(value.replace(/\p{Cs}/gu, String.fromCharCode(0xfffd)));
+}
+
 export interface Notice {
   tone: "good" | "bad" | "warn";
   message: string;
@@ -300,7 +310,7 @@ export function experiencePage(view: ExperienceView): string {
   }
   ${target.distanceLost ? `<p class="quiet small gap-md">${target.notRead !== undefined ? "Its compiled file could not be read, so nothing in it says" : target.unread ? "Its compiled file does not parse, so nothing in it says" : "Its report does not say"} how far away it was meant to be read from. Give that distance to compile it again; publishing will not guess it.</p>` : ""}
   ${target.tooSmall ? `<div class="notice bad gap-md"><p>${esc(target.tooSmall)}</p></div>` : ""}
-  <form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/compile" class="gap-md">
+  <form method="post" action="/e/${esc(view.id)}/targets/${segment(target.id)}/compile" class="gap-md">
     <div class="row bottom">
       <div class="field narrow">
         <label for="d-${shown(target.id)}">Read from, mm</label>
@@ -315,7 +325,7 @@ export function experiencePage(view: ExperienceView): string {
     ${
       target.contentCount >= MOST_CONTENT
         ? `<p class="quiet">This target shows ${MOST_CONTENT} pieces of content, which is as many as the manifest format allows.</p>`
-        : `<form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/content" enctype="multipart/form-data" class="gap-md">
+        : `<form method="post" action="/e/${esc(view.id)}/targets/${segment(target.id)}/content" enctype="multipart/form-data" class="gap-md">
       <div class="row bottom">
         <div class="field narrow">
           <label for="ct-${shown(target.id)}">Type</label>
