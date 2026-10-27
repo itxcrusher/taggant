@@ -713,18 +713,15 @@ export function createWorkspace(root: string, options: WorkspaceOptions = {}): W
       const path = join(directoryFor(id), "targets", filename);
       // Read and parsed apart, because the two are said apart: a file that does not parse, and one
       // that cannot be read, a folder or a link in its place, reading denied or another program
-      // holding it, whose reason the system gives. One gone since it was looked for is neither.
+      // holding it, whose reason the system gives. One gone since it was looked for is neither,
+      // and is taken for gone on the read's own word: a second look, to tell a gone file from a
+      // link to nothing, met the file put back by whatever was replacing it and called it unread.
       let text: string;
       try {
         text = await readFile(path, "utf8");
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        const gone =
-          (error as NodeJS.ErrnoException).code === "ENOENT" &&
-          (await lstat(path).then(
-            () => false,
-            () => true,
-          ));
+        const gone = (error as NodeJS.ErrnoException).code === "ENOENT";
         throw new TargetNotReadError(
           `the compiled target for ${targetId} could not be read: ${reason}`,
           reason,

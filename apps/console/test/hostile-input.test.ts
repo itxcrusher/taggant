@@ -521,6 +521,23 @@ describe("a target whose report gives back no distance", () => {
       { runtimeDir, onRebuild: (_id: string, at: number) => goneRebuilt.push(at) },
     ).catch(() => undefined);
     expect(goneRebuilt).toEqual([150]);
+    // And the card of such a target says what any card with no compiled file says.
+    await remove(path, { force: true });
+    const goneServer = createConsole({
+      workspace: { ...workspace, hasTarget: async () => true },
+      publishRoot: join(root, "gone-bundles"),
+      linkTablePath: join(root, "gone-links.json"),
+    });
+    await new Promise<void>((ready) => goneServer.listen(0, "127.0.0.1", ready));
+    try {
+      const goneCard = await (
+        await fetch(`http://127.0.0.1:${(goneServer.address() as AddressInfo).port}/e/lost-distance`)
+      ).text();
+      expect(goneCard).toContain("Not compiled yet");
+      expect(goneCard).not.toContain("could not be read");
+    } finally {
+      await new Promise<void>((done) => goneServer.close(() => done()));
+    }
 
     // One saved with a byte-order mark in front is read as though it had none, so its report at
     // 600 is the one on record and the publish refuses the piece there, as compiled.
