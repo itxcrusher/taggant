@@ -817,6 +817,25 @@ describe("registering a code", () => {
       /^that would have written a table the resolver refuses, so nothing was written: .*space/,
     );
     expect(await readFile(table, "utf8")).toBe(doubled);
+    // And with its own reason, where a link kept under this code is refused too and comes first.
+    const untitled = JSON.stringify({
+      version: 1,
+      entries: {
+        "/01/09520123456788": [{ ...cert, default: false, title: "" }],
+        "/01/09520123456702": [{ ...cert }, other],
+      },
+    });
+    await writeFile(table, untitled);
+    const blamed = await registerCode(table, {
+      path: "/01/09520123456788",
+      href: "https://new.example/my page",
+      title: "New",
+    }).catch((error: Error) => error.message);
+    expect(blamed).toMatch(
+      /^that would have written a table the resolver refuses, so nothing was written: .*space/,
+    );
+    expect(blamed).not.toContain("has no title");
+    expect(await readFile(table, "utf8")).toBe(untitled);
 
     // This code written in a spelling the resolver refuses is not another code: taken for one, the
     // code was written beside it, and writing that key as the resolver says wrote the code twice.

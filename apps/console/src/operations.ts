@@ -622,16 +622,17 @@ async function writeCode(
       parseTable({ version: next.version, entries: rest });
     } catch (left) {
       const why = left instanceof Error ? left.message : String(left);
-      // Whose fault: the link being registered, or what was there already.
-      let ownLinkRefused = false;
+      // Whose fault: the link being registered, said with its own reason, or what was there already.
+      // Blamed with the first failure of the table, the registration was given a kept link's reason.
+      let ownLinkRefused: string | undefined;
       try {
         parseTable({ version: next.version, entries: { [canonical]: [link] } });
-      } catch {
-        ownLinkRefused = true;
+      } catch (own) {
+        ownLinkRefused = own instanceof Error ? own.message : String(own);
       }
       throw new WorkspaceError(
-        ownLinkRefused
-          ? `that would have written a table the resolver refuses, so nothing was written: ${why}`
+        ownLinkRefused !== undefined
+          ? `that would have written a table the resolver refuses, so nothing was written: ${ownLinkRefused}`
           : `${tablePath} holds an entry the resolver refuses, which registering this code does not change, so nothing was written: ${why}`,
       );
     }
