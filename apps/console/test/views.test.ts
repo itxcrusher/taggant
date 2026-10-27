@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { describeProblem, errorPage, esc, experiencePage, indexPage, page, verdict } from "../src/views.js";
+import {
+  describeProblem,
+  errorPage,
+  esc,
+  experiencePage,
+  indexPage,
+  page,
+  shown,
+  verdict,
+} from "../src/views.js";
 
 /**
  * The wording a person is shown when they cannot publish, and the escaping everything
@@ -101,6 +110,14 @@ describe("escaping", () => {
     ]);
     expect(index).toContain('<span class="name">\\u{202e}Botanica</span>');
     expect(index).not.toMatch(raw);
+  });
+
+  it("writes every kind of character that steers or breaks a line as its code point", () => {
+    // A bell, a next-line, a soft hyphen, the line and paragraph separators and a lone surrogate:
+    // a control, a format character, the two separators and a surrogate, one of each class.
+    for (const code of [0x07, 0x85, 0xad, 0x2028, 0x2029, 0xd800]) {
+      expect(shown(`a${String.fromCharCode(code)}b`), code.toString(16)).toBe(`a\\u{${code.toString(16)}}b`);
+    }
   });
 });
 
