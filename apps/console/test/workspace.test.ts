@@ -322,6 +322,30 @@ describe("writing", () => {
     expect(left.filter((name) => name.includes(".writing-"))).toEqual([]);
   });
 
+  it("says a folder or a link in a manifest's place is one, to be moved aside", async () => {
+    // The read named neither: "illegal operation on a directory" for a folder or a link to one,
+    // and "no such file" for a link to nothing, which called the link missing.
+    const store = await workspace();
+    await store.create("pack", "Pack");
+    const path = join(store.root, "pack", "manifest.json");
+    await rm(path);
+    await mkdir(path);
+    await expect(store.read("pack")).rejects.toThrow(
+      /manifest\.json is a folder, which a manifest cannot be: move it aside/,
+    );
+    await rm(path, { recursive: true });
+    await symlink(join(store.root, "nowhere"), path, "junction");
+    await expect(store.read("pack")).rejects.toThrow(
+      /manifest\.json is a link to nothing, which a manifest cannot be/,
+    );
+    await rm(path, { recursive: true });
+    await mkdir(join(store.root, "elsewhere"));
+    await symlink(join(store.root, "elsewhere"), path, "junction");
+    await expect(store.read("pack")).rejects.toThrow(
+      /manifest\.json is a link to a folder, which a manifest cannot be/,
+    );
+  });
+
   it("names a file that does not exist yet as Windows will store it", async (context) => {
     // Windows drops trailing dots and spaces from a name it creates, so `links.json.` is written
     // to `links.json`, and before it existed its lock was taken under the name as typed: a

@@ -298,6 +298,20 @@ async function writeAtomic(path: string, contents: string | Uint8Array): Promise
 const RENAME_ATTEMPTS = 9;
 
 /**
+ * What is in a file's place when reading it failed for something that is not a file there: a
+ * folder, a link to one, or a link to nothing. The read's own code says "illegal operation on a
+ * directory" or "no such file", which names none of them and tells nobody to move it aside.
+ */
+export async function inPlaceOf(path: string, error: unknown): Promise<string | undefined> {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  if (code !== "EISDIR" && code !== "ENOENT") return undefined;
+  const there = await lstat(path).catch(() => undefined);
+  if (there?.isSymbolicLink()) return code === "EISDIR" ? "a link to a folder" : "a link to nothing";
+  if (there?.isDirectory()) return "a folder";
+  return undefined;
+}
+
+/**
  * Move a finished file over the one it replaces, waiting out a reader that has it open.
  *
  * On Windows a rename onto a file another handle holds open is refused, even when the holder is
@@ -429,6 +443,12 @@ export function createWorkspace(root: string, options: WorkspaceOptions = {}): W
       const text = await readFile(path, "utf8");
       return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
     } catch (error) {
+      const what = await inPlaceOf(path, error);
+      if (what !== undefined) {
+        throw new WorkspaceError(
+          `${path} is ${what}, which a manifest cannot be: move it aside, then try again.`,
+        );
+      }
       throw new WorkspaceError(
         `${id} could not be read: ${error instanceof Error ? error.message : String(error)}`,
       );

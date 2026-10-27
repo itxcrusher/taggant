@@ -36,6 +36,7 @@ import {
   TargetNotReadError,
   type Workspace,
   WorkspaceError,
+  inPlaceOf,
   publishable,
   replaceFile,
 } from "./workspace.js";
@@ -484,6 +485,14 @@ async function writeCode(
   } catch (error) {
     // A table that is not there yet is the ordinary case for a first code. A table that is there
     // and cannot be read as one is not, and writing over it would lose every other code.
+    // A folder or a link where the table goes is said to be one: taken for a table that could not
+    // be read, it was said to hold codes writing over it would lose, and to be nothing else.
+    const what = await inPlaceOf(tablePath, error);
+    if (what !== undefined) {
+      throw new WorkspaceError(
+        `${tablePath} is ${what}, which the link table cannot be: move it aside, then register the code.`,
+      );
+    }
     const missing = (error as NodeJS.ErrnoException)?.code === "ENOENT";
     if (!missing) {
       throw new WorkspaceError(

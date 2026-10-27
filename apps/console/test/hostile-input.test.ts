@@ -801,6 +801,24 @@ describe("registering a code", () => {
     );
     expect(await readFile(table, "utf8")).toBe(doubled);
 
+    // A folder, or a link to nothing, where the table goes is said to be one, to be moved aside:
+    // taken for a table that could not be read, a folder was said to hold codes writing over it
+    // would lose.
+    const { mkdir: makeFolder, rm: remove, symlink } = await import("node:fs/promises");
+    const placed = join(root, "placed.json");
+    await makeFolder(placed);
+    await expect(
+      registerCode(placed, { path: "/01/09520123456788", href: "https://new.example/", title: "New" }),
+    ).rejects.toThrow(
+      /placed\.json is a folder, which the link table cannot be: move it aside, then register the code/,
+    );
+    await remove(placed, { recursive: true });
+    await symlink(join(root, "nowhere"), placed, "junction");
+    await expect(
+      registerCode(placed, { path: "/01/09520123456788", href: "https://new.example/", title: "New" }),
+    ).rejects.toThrow(/placed\.json is a link to nothing, which the link table cannot be/);
+    await remove(placed, { recursive: true });
+
     // A key written twice cannot be read as a table at all, and is not written over.
     const twice = `{"version":1,"entries":{"/01/09520123456702":[${JSON.stringify(other)}],"/01/09520123456702":[${JSON.stringify(old)}]}}`;
     await writeFile(table, twice);
