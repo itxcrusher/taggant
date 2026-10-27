@@ -338,6 +338,14 @@ export async function replaceFile(from: string, to: string): Promise<void> {
           `${to} is ${what}, which a file cannot replace: move it aside, then try again.`,
         );
       }
+      // On Windows a read-only file refuses the rename with the code a reader holding it does, and
+      // waiting does not change it: it was said to be held open for over a second, and trying
+      // again never worked.
+      if (process.platform === "win32" && there?.isFile() && (there.mode & 0o200) === 0) {
+        throw new WorkspaceError(
+          `${to} is read-only, which a write cannot replace: make it writable, then try again.`,
+        );
+      }
       const held =
         process.platform === "win32" && (code === "EPERM" || code === "EACCES" || code === "EBUSY");
       if (!held) throw error;

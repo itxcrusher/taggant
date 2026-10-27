@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, open, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, open, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -298,6 +298,33 @@ describe("writing", () => {
       );
     } finally {
       await reader.close();
+    }
+    const left = await readdir(join(store.root, "pack"));
+    expect(left.filter((name) => name.includes(".writing-"))).toEqual([]);
+  });
+
+  it("says a read-only file in the place of one it writes is read-only, not held open", async (context) => {
+    // Only Windows refuses to rename over a read-only file, with the code a reader holding it causes,
+    // and it was said to be held open for over a second, which trying again never changed.
+    if (process.platform !== "win32") {
+      context.skip();
+      return;
+    }
+    const store = await workspace();
+    await store.create("pack", "Pack");
+    const path = join(store.root, "pack", "manifest.json");
+    await chmod(path, 0o444);
+    try {
+      const refused = await store
+        .update("pack", (manifest) => ({ ...manifest, title: "Changed" }))
+        .then(
+          () => null,
+          (error: Error) => error.message,
+        );
+      expect(refused).toMatch(/manifest\.json is read-only, which a write cannot replace: make it writable/);
+      expect(refused).not.toContain("held it open");
+    } finally {
+      await chmod(path, 0o644);
     }
     const left = await readdir(join(store.root, "pack"));
     expect(left.filter((name) => name.includes(".writing-"))).toEqual([]);
