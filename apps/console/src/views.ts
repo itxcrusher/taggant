@@ -68,7 +68,7 @@ export function page({ title, workspaceRoot, notice, body }: Chrome): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="same-origin">
-<title>${esc(title)}</title>
+<title>${shown(title)}</title>
 <link rel="stylesheet" href="/console.css">
 </head>
 <body>
@@ -106,7 +106,7 @@ export function indexPage(experiences: Listed[]): string {
       const targets = entry.manifest.targets.length;
       const content = entry.manifest.targets.reduce((total, target) => total + target.content.length, 0);
       return `<a class="entry plain" href="/e/${esc(entry.id)}">
-  <span class="name">${esc(entry.manifest.title ?? entry.id)}</span>
+  <span class="name">${shown(entry.manifest.title ?? entry.id)}</span>
   <span class="meta mono">${esc(entry.id)} &middot; ${targets} target${targets === 1 ? "" : "s"} &middot; ${content} content item${content === 1 ? "" : "s"}</span>
 </a>`;
     })
@@ -339,7 +339,7 @@ export function experiencePage(view: ExperienceView): string {
     )
     .join("\n");
 
-  return `<h2>${esc(view.manifest.title ?? view.id)}</h2>
+  return `<h2>${shown(view.manifest.title ?? view.id)}</h2>
 <p class="lede mono small">${esc(view.id)}</p>
 
 <h3>Targets</h3>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeProblem, errorPage, esc, experiencePage, page, verdict } from "../src/views.js";
+import { describeProblem, errorPage, esc, experiencePage, indexPage, page, verdict } from "../src/views.js";
 
 /**
  * The wording a person is shown when they cannot publish, and the escaping everything
@@ -78,6 +78,29 @@ describe("escaping", () => {
     expect(notice).toContain("x\\u{2069}");
     expect(notice).not.toMatch(raw);
     expect(errorPage(404, `${rlo}missing`)).toContain("\\u{202e}missing");
+    // An experience's title is a name its manifest gives too: in the tab, the heading and the
+    // index it laid itself out backwards, written as its author wrote it.
+    const titled = experiencePage({
+      id: "botanica-500",
+      manifest: { ...MANIFEST, title: `${rlo}Botanica` } as never,
+      problems: [],
+      targets: [],
+    });
+    expect(titled).toContain("<h2>\\u{202e}Botanica</h2>");
+    expect(titled).not.toMatch(raw);
+    const tab = page({ title: `${rlo}Botanica - taggant console`, workspaceRoot: "w", body: "" });
+    expect(tab).toContain("<title>\\u{202e}Botanica - taggant console</title>");
+    const index = indexPage([
+      {
+        ok: true,
+        id: "botanica-500",
+        directory: "d",
+        manifest: { ...MANIFEST, title: `${rlo}Botanica` },
+        problems: [],
+      } as never,
+    ]);
+    expect(index).toContain('<span class="name">\\u{202e}Botanica</span>');
+    expect(index).not.toMatch(raw);
   });
 });
 
