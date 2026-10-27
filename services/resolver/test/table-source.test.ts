@@ -33,7 +33,8 @@ async function scratch(): Promise<string> {
 /**
  * A rename over the table, retried as an editor's save is when Windows finds the file open: the
  * watch reading the table holds it for a moment, and on a busy machine the rename met it there.
- * The codes are the ones the console's own replacement of a file retries.
+ * The codes are the ones the console's own replacement of a file retries on Windows, the one
+ * system whose rename refuses a file another program holds open.
  */
 async function renameOver(from: string, to: string): Promise<void> {
   for (let attempt = 1; ; attempt++) {
