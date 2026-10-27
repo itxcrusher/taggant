@@ -76,8 +76,8 @@ export async function main(args: string[]): Promise<number> {
   let manifest: unknown;
   const compiled: Record<string, unknown> = {};
   try {
-    manifest = readJson(await readFile(manifestPath, "utf8"));
-    for (const [id, file] of targets) compiled[id] = readJson(await readFile(file, "utf8"));
+    manifest = await readJsonFile(manifestPath);
+    for (const [id, file] of targets) compiled[id] = await readJsonFile(file);
   } catch (error) {
     stderr.write(`${said(error instanceof Error ? error.message : String(error))}\n`);
     return EXIT.cannotRead;
@@ -145,4 +145,25 @@ function said(message: string): string {
  */
 function readJson(text: string): unknown {
   return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+}
+
+/**
+ * A file given on the command line, read and parsed, any failure naming it: with two targets given,
+ * "EISDIR: illegal operation on a directory, read" did not say which of the three files was a
+ * folder, and a parser's message names no file at all.
+ */
+async function readJsonFile(path: string): Promise<unknown> {
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code === "EISDIR") throw new Error(`${path} is a folder, not a file.`);
+    throw new Error(`${path} could not be read: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  try {
+    return readJson(text);
+  } catch (error) {
+    throw new Error(`${path} does not parse: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }

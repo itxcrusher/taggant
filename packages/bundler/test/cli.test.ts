@@ -102,11 +102,31 @@ describe("main", () => {
       ).toBe(EXIT.cannotRead);
       expect(said.join("")).toContain("\\u{feff}");
       expect(said.join("")).not.toContain(mark);
+      expect(said.join("")).toContain(`${join(dir, "manifest.json")} does not parse`);
+      // A folder given as a file is said to be one, by its name: with two targets given, the
+      // system's "illegal operation on a directory" named none of the three.
+      said.length = 0;
+      const { mkdir } = await import("node:fs/promises");
+      await writeFile(join(dir, "manifest.json"), "{}");
+      await mkdir(join(dir, "back.json"));
+      expect(
+        await main([
+          join(dir, "manifest.json"),
+          "--target",
+          `front=${join(dir, "front.json")}`,
+          "--target",
+          `back=${join(dir, "back.json")}`,
+          "--out",
+          join(dir, "out"),
+        ]),
+      ).toBe(EXIT.cannotRead);
+      expect(said.join("")).toContain(`${join(dir, "back.json")} is a folder, not a file.`);
     } finally {
       process.stderr.write = write;
       await rm(dir, { recursive: true, force: true });
     }
   });
+
 });
 
 describe("the command line reached through a link", () => {
