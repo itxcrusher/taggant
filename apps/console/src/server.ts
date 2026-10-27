@@ -836,7 +836,9 @@ export function createConsole(options: ConsoleOptions): Server {
         message: [
           written.stillRefused === undefined
             ? `${written.path} points here.`
-            : `${written.path} points here in the link table, which the resolver still refuses for another code: ${written.stillRefused}. Register that code here if it holds two defaults, or correct it by hand.`,
+            : // Its reason may end in a full stop of its own. Registering that code from this page
+              // would point it here, so the notice says where to register it from.
+              `${written.path} points here in the link table, which the resolver still refuses for another code: ${written.stillRefused.replace(/\.$/, "")}. If that code holds two defaults, registering it from the experience it belongs to keeps one; otherwise correct it by hand.`,
           written.replaced > 0
             ? `${written.replaced} product ${written.replaced === 1 ? "link" : "links"} of that kind ${written.replaced === 1 ? "was" : "were"} replaced.`
             : "",

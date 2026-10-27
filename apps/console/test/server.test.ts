@@ -636,8 +636,24 @@ describe("what it says", () => {
     expect(page).toContain(
       "/01/09520123456788 points here in the link table, which the resolver still refuses for another code: /01/09520123456702 has two default links",
     );
-    expect(page).toContain("Register that code here if it holds two defaults, or correct it by hand.");
+    // Not to register it here, which would point that code at this experience.
+    expect(page).toContain(
+      "mark only the link it should follow. If that code holds two defaults, registering it from the experience it belongs to keeps one; otherwise correct it by hand.",
+    );
     expect(page).not.toContain("/01/09520123456788 points here.");
+    // A reason that ends in a full stop of its own is followed by one, not two.
+    await writeFile(
+      linkTable,
+      JSON.stringify({ version: 1, entries: { "/01/9520123456702": [{ ...pip, default: true }] } }),
+    );
+    const spelled = await post(
+      "/e/still-refused/code",
+      new URLSearchParams({ path: "/01/09520123456788", href: "https://example.com/s/" }),
+    );
+    const spelledPage = await pageAt(spelled.headers.get("location") ?? "/");
+    expect(spelledPage).toContain(
+      "Write it as &quot;/01/09520123456702&quot;. If that code holds two defaults",
+    );
     // Put back to an empty table, so nothing after this starts from a table the resolver refuses.
     await writeFile(linkTable, JSON.stringify({ version: 1, entries: {} }));
   });
