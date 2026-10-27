@@ -641,6 +641,11 @@ describe("what it says", () => {
       "mark only the link it should follow. If that code holds two defaults, registering it from the experience it belongs to keeps one; otherwise correct it by hand.",
     );
     expect(page).not.toContain("/01/09520123456788 points here.");
+    // As a warning, neither good nor bad: the code is written, and scans still do not reach it.
+    expect(page).toMatch(
+      /<div class="notice [^"]*" role="status">\s*<p>\/01\/09520123456788 points here in the link table/,
+    );
+    expect(page).not.toMatch(/class="notice (good|bad)"/);
     // A reason that ends in a full stop of its own is followed by one, not two.
     await writeFile(
       linkTable,
