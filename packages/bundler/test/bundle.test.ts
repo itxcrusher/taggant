@@ -283,6 +283,18 @@ describe("publishing again", () => {
       bundle({ manifest: MANIFEST, targets: { front: TARGET }, sourceDir, outDir, runtimeDir: RUNTIME_DIST }),
     ).rejects.toThrow(/is a file, not a folder, so it will not be replaced/);
     expect(await readFile(outDir, "utf8")).toBe("notes");
+    // A destination inside that file is not one, and is not called one.
+    const inside = join(outDir, "inside");
+    const refused = await bundle({
+      manifest: MANIFEST,
+      targets: { front: TARGET },
+      sourceDir,
+      outDir: inside,
+      runtimeDir: RUNTIME_DIST,
+    }).catch((error: Error) => error.message);
+    expect(refused).toEqual(expect.any(String));
+    expect(refused).not.toContain(`${inside} is a file`);
+    expect(await readFile(outDir, "utf8")).toBe("notes");
   });
 
   it("does not ship files that were already sitting in the folder", async () => {

@@ -78,8 +78,15 @@ async function mayReplace(outDir: string): Promise<boolean> {
     if (code === "ENOENT") return false;
     // A file, which the swap's rename would replace with the bundle's folder: the manifest being
     // bundled, given as the destination, was gone that way, and the command said it had written
-    // the bundle there.
-    if (code === "ENOTDIR") {
+    // the bundle there. Looked at first, because a destination inside a file is refused with the
+    // same code on Linux and macOS, and was called a file itself.
+    if (
+      code === "ENOTDIR" &&
+      (await stat(outDir).then(
+        (there) => !there.isDirectory(),
+        () => false,
+      ))
+    ) {
       throw new Error(
         `${outDir} is a file, not a folder, so it will not be replaced. Publish into a folder.`,
       );
