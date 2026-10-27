@@ -654,7 +654,9 @@ async function vendorRuntime(outDir: string, runtimeDir?: string): Promise<strin
  * character, line and paragraph separator and lone surrogate written as `\u{...}` with its code
  * point, the notation `quoted` uses for a name. A right-to-left override in a name laid a whole
  * sentence out backwards, and the character that ends an isolate let one run past the element
- * meant to hold it.
+ * meant to hold it. Unlike `quoted`, it leaves a backslash as it is, so a Windows path reads as
+ * written, and text that holds a backslash followed by `u{202e}` reads the same as text holding
+ * the character itself.
  */
 export function printable(text: string): string {
   let shown = "";
