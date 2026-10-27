@@ -72,8 +72,21 @@ async function mayReplace(outDir: string): Promise<boolean> {
   let existing: string[];
   try {
     existing = await readdir(outDir);
-  } catch {
-    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    // Nothing there yet, which the swap fills.
+    if (code === "ENOENT") return false;
+    // A file, which the swap's rename would replace with the bundle's folder: the manifest being
+    // bundled, given as the destination, was gone that way, and the command said it had written
+    // the bundle there.
+    if (code === "ENOTDIR") {
+      throw new Error(
+        `${outDir} is a file, not a folder, so it will not be replaced. Publish into a folder.`,
+      );
+    }
+    throw new Error(
+      `${outDir} could not be looked at (${code ?? (error instanceof Error ? error.message : String(error))}), so nothing was published.`,
+    );
   }
   if (existing.length === 0) return true;
   if (!existing.includes(MARKER)) {

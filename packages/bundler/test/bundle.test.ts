@@ -273,6 +273,18 @@ describe("publishing again", () => {
     ).rejects.toThrow(/was not published by this tool/);
   });
 
+  it("refuses a destination that is a file, rather than putting the bundle in its place", async () => {
+    // The swap's rename replaced a file given as the destination with the bundle's folder, the
+    // manifest being bundled among such files, and said the bundle was written there.
+    const { sourceDir, outDir } = await scratch();
+    await mkdir(dirname(outDir), { recursive: true });
+    await writeFile(outDir, "notes");
+    await expect(
+      bundle({ manifest: MANIFEST, targets: { front: TARGET }, sourceDir, outDir, runtimeDir: RUNTIME_DIST }),
+    ).rejects.toThrow(/is a file, not a folder, so it will not be replaced/);
+    expect(await readFile(outDir, "utf8")).toBe("notes");
+  });
+
   it("does not ship files that were already sitting in the folder", async () => {
     const { sourceDir, outDir } = await scratch();
     await bundle({
