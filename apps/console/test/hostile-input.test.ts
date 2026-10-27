@@ -818,6 +818,17 @@ describe("registering a code", () => {
     );
     expect(await readFile(table, "utf8")).toBe(doubled);
 
+    // This code written in a spelling the resolver refuses is not another code: taken for one, the
+    // code was written beside it, and writing that key as the resolver says wrote the code twice.
+    const spelled = JSON.stringify({ version: 1, entries: { "/01/9520123456788": [cert, old] } });
+    await writeFile(table, spelled);
+    await expect(
+      registerCode(table, { path: "/01/09520123456788", href: "https://new.example/", title: "New" }),
+    ).rejects.toThrow(
+      /holds an entry the resolver refuses, which registering this code does not change, so nothing was written: the key "\/01\/9520123456788" is not in its canonical form/,
+    );
+    expect(await readFile(table, "utf8")).toBe(spelled);
+
     // A folder, or a link to nothing, where the table goes is said to be one, to be moved aside:
     // taken for a table that could not be read, a folder was said to hold codes writing over it
     // would lose.

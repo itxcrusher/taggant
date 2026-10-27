@@ -521,8 +521,19 @@ async function writeCode(
         `${tablePath} is refused by the resolver for something registering this code does not change, so nothing was written: ${whole}`,
       );
     }
+    // A key that is this code in a spelling the resolver refuses is not another code: taken for one,
+    // the code was written beside it, and the resolver's advice, to write that key in its canonical
+    // form, then wrote the code twice.
+    const spellsThisCode = (key: string): boolean => {
+      try {
+        return parseDigitalLink(key).canonicalPath === canonical;
+      } catch {
+        return false;
+      }
+    };
     for (const [key, links] of Object.entries(current.entries)) {
-      if (key !== canonical && refusalOf({ [key]: links }) !== undefined) refusedCodes.add(key);
+      if (key === canonical || spellsThisCode(key)) continue;
+      if (refusalOf({ [key]: links }) !== undefined) refusedCodes.add(key);
     }
     const own: unknown = current.entries[canonical];
     const sortable =
