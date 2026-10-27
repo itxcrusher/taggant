@@ -127,6 +127,49 @@ describe("main", () => {
     }
   });
 
+  it("shows what it was given by its code points on a usage error and on a write that failed", async () => {
+    // Both name what the command line was given, and a right-to-left override in it reversed the
+    // line the terminal printed.
+    const { cp, mkdtemp, readFile, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const dir = await mkdtemp(join(tmpdir(), "bundle-said-"));
+    await cp(fileURLToPath(new URL("../../../examples/postcard", import.meta.url)), dir, { recursive: true });
+    // Printed wide enough for its report, so the bundle gets as far as its destination.
+    const manifest = JSON.parse(await readFile(join(dir, "manifest.json"), "utf8"));
+    manifest.targets[0].physicalWidthMm = 300;
+    await writeFile(join(dir, "manifest.json"), JSON.stringify(manifest));
+    const rlo = String.fromCharCode(0x202e);
+    const notes = join(dir, `notes${rlo}.txt`);
+    await writeFile(notes, "notes");
+    const said: string[] = [];
+    const write = process.stderr.write;
+    process.stderr.write = ((chunk: unknown) => {
+      said.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      expect(await main([`--out${rlo}`])).toBe(EXIT.usage);
+      expect(said.join("")).toContain("unknown option --out\\u{202e}");
+      expect(said.join("")).not.toContain(rlo);
+      said.length = 0;
+      expect(
+        await main([
+          join(dir, "manifest.json"),
+          "--target",
+          `front=${join(dir, "front.target.json")}`,
+          "--out",
+          notes,
+        ]),
+      ).toBe(EXIT.cannotWrite);
+      expect(said.join("")).toContain("notes\\u{202e}.txt is a file, not a folder");
+      expect(said.join("")).not.toContain(rlo);
+    } finally {
+      process.stderr.write = write;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("the command line reached through a link", () => {
