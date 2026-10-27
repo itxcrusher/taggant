@@ -407,6 +407,17 @@ describe("what a table may not say", () => {
         /"title" twice in one object, a link under "\/01\/09520123456788",/,
       ],
       [`{"version":1,"version":1,"entries":{}}`, /"version" twice in one object, and/],
+      // An object in any other list is not a link, and is not called one.
+      [
+        `{"version":1,"entries":{"/01/09520123456788":[{"href":"https://a.example/p","linkType":"gs1:pip","title":"P","hreflang":[{"k":1,"k":2}]}]}}`,
+        /"k" twice in one object, and/,
+      ],
+      [`{"version":1,"entries":[{"k":1,"k":2}]}`, /"k" twice in one object, and/],
+      [`{"version":1,"entries":{},"extra":[{"k":1,"k":2}]}`, /"k" twice in one object, and/],
+      [`{"version":1,"entries":{"/01/09520123456788":[[{"k":1,"k":2}]]}}`, /"k" twice in one object, and/],
+      [`{"version":1,"entries":{},"extra":{"k":[{"a":1,"a":2}]}}`, /"a" twice in one object, and/],
+      // An object under a code that is not in a list is named by its own key, not called a link.
+      [`{"version":1,"entries":{"/01/09520123456788":{"a":{"k":1,"k":2}}}}`, /"k" twice in one object, "a"/],
     ] as const) {
       expect(() => parseTableText(text), text.slice(0, 60)).toThrow(said);
     }

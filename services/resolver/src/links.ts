@@ -76,13 +76,14 @@ export function readTableText(text: string): unknown {
 
 /**
  * The first key a JSON text writes twice in one object, with the key that object is the value of,
- * or, for an object in a list, the key the list is the value of. The text has been parsed already,
- * so it is valid JSON and is walked only for its keys.
+ * or, for a link, the code whose list of links holds it. An object in any other list is named by
+ * nothing. The text has been parsed already, so it is valid JSON and is walked only for its keys.
  */
 function keyWrittenTwice(text: string): { key: string; within?: string; inList?: boolean } | undefined {
   // One frame for each object or list open: an object's keys, none for a list, and the key it is
-  // the value of. An object in a list takes the list's key, so a link holding a field twice names
-  // the entry it is under, where it named nothing.
+  // the value of. A link takes the key of the list it is in, so a link holding a field twice names
+  // the code it is under, where it named nothing; an object in a list anywhere else, in a link's
+  // languages or under a key the format does not have, was called a link under that list's key.
   const frames: Array<{ keys?: Set<string>; within?: string; inList?: boolean }> = [];
   let expectingKey = false;
   let lastKey: string | undefined;
@@ -108,11 +109,18 @@ function keyWrittenTwice(text: string): { key: string; within?: string; inList?:
       at = end;
     } else if (character === "{" || character === "[") {
       const parent = frames[frames.length - 1];
-      const within = parent === undefined ? undefined : parent.keys ? lastKey : parent.within;
+      // A link is an object in a list that is the value of a key of the object under "entries".
+      const link =
+        character === "{" &&
+        frames.length === 3 &&
+        parent?.keys === undefined &&
+        frames[1]?.keys !== undefined &&
+        frames[1].within === "entries";
+      const within = parent?.keys ? lastKey : link ? parent?.within : undefined;
       frames.push({
         ...(character === "{" ? { keys: new Set<string>() } : {}),
         ...(within === undefined ? {} : { within }),
-        ...(parent !== undefined && parent.keys === undefined ? { inList: true } : {}),
+        ...(link ? { inList: true } : {}),
       });
       expectingKey = character === "{";
     } else if (character === "}" || character === "]") {
