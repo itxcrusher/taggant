@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -292,9 +292,21 @@ describe("publishing again", () => {
       outDir: inside,
       runtimeDir: RUNTIME_DIST,
     }).catch((error: Error) => error.message);
-    expect(refused).toEqual(expect.any(String));
-    expect(refused).not.toContain(`${inside} is a file`);
+    expect(refused).toContain(`${inside} lies inside a file, so nothing can be published there`);
     expect(await readFile(outDir, "utf8")).toBe("notes");
+    // A link to nothing lists as nothing there, and the bundle was built for it and then could not
+    // be moved in; it is said to be one before anything is built.
+    const dangling = join(dirname(outDir), "dangling");
+    await symlink(join(dirname(outDir), "nowhere"), dangling, "junction");
+    const linked = await bundle({
+      manifest: MANIFEST,
+      targets: { front: TARGET },
+      sourceDir,
+      outDir: dangling,
+      runtimeDir: RUNTIME_DIST,
+    }).catch((error: Error) => error.message);
+    expect(linked).toContain(`${dangling} is a link to nothing, so it will not be replaced`);
+    expect((await readdir(dirname(outDir))).filter((name) => name.includes(".publishing-"))).toEqual([]);
   });
 
   it("does not ship files that were already sitting in the folder", async () => {

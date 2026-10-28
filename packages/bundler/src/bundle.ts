@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
 import process from "node:process";
@@ -74,8 +74,27 @@ async function mayReplace(outDir: string): Promise<boolean> {
     existing = await readdir(outDir);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code;
-    // Nothing there yet, which the swap fills.
-    if (code === "ENOENT") return false;
+    // A path inside a file, which Windows lists as nothing there and Linux and macOS as a file:
+    // built into, the bundle could not be moved in, and the path was called a file itself.
+    if ((code === "ENOENT" || code === "ENOTDIR") && (await insideAFile(outDir))) {
+      throw new Error(
+        `${outDir} lies inside a file, so nothing can be published there. Publish into a folder.`,
+      );
+    }
+    if (code === "ENOENT") {
+      // A link to nothing lists as nothing there too, and the bundle built for it could not be
+      // moved in after the whole of it was written.
+      if (
+        await lstat(outDir).then(
+          (there) => there.isSymbolicLink(),
+          () => false,
+        )
+      ) {
+        throw new Error(`${outDir} is a link to nothing, so it will not be replaced. Publish into a folder.`);
+      }
+      // Nothing there yet, which the swap fills.
+      return false;
+    }
     // A file, which the swap's rename would replace with the bundle's folder: the manifest being
     // bundled, given as the destination, was gone that way, and the command said it had written
     // the bundle there. Looked at first, because a destination inside a file is refused with the
@@ -102,6 +121,15 @@ async function mayReplace(outDir: string): Promise<boolean> {
     );
   }
   return true;
+}
+
+/** Whether the nearest part of a path that exists is a file, so that nothing can be made at it. */
+async function insideAFile(path: string): Promise<boolean> {
+  for (let at = dirname(resolve(path)); ; at = dirname(at)) {
+    const found = await stat(at).catch(() => undefined);
+    if (found !== undefined) return !found.isDirectory();
+    if (dirname(at) === at) return false;
+  }
 }
 
 /** The new bundle is built at `<destination>.publishing-<hex>`, beside the destination. */
@@ -524,7 +552,13 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   const suffix = randomBytes(4).toString("hex");
   const staging = `${options.outDir}.${STAGING}${suffix}`;
   await sweepLeftovers(options.outDir);
-  await mkdir(staging, { recursive: true });
+  // A name the system does not allow, a bar on Windows among them, is refused here, where the
+  // system's error named the folder the bundle is built in, which nobody asked for.
+  await mkdir(staging, { recursive: true }).catch((error: unknown) => {
+    throw new Error(
+      `the bundle could not be built beside ${options.outDir} (${(error as NodeJS.ErrnoException)?.code ?? String(error)}), so nothing was published. Publish into a folder whose name this system allows.`,
+    );
+  });
   try {
     await write(staging);
   } catch (error) {
