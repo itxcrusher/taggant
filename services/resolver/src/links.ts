@@ -173,8 +173,13 @@ export function parseTable(value: unknown): LinkTable {
       );
     }
     if (canonical !== path) {
+      // Where the table holds the canonical key already, writing this one as it would be the key
+      // written twice, which the table's reader refuses: the advice was followed, and no code could
+      // be registered and the resolver would not start.
       throw new TypeError(
-        `the key ${JSON.stringify(path)} is not in its canonical form and could never be reached. Write it as ${JSON.stringify(canonical)}.`,
+        Object.hasOwn(table.entries, canonical)
+          ? `the key ${JSON.stringify(path)} is not in its canonical form and could never be reached, and the table holds ${JSON.stringify(canonical)} already: move its links into that entry and remove this key.`
+          : `the key ${JSON.stringify(path)} is not in its canonical form and could never be reached. Write it as ${JSON.stringify(canonical)}.`,
       );
     }
 

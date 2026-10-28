@@ -378,6 +378,20 @@ describe("what a table may not say", () => {
     ).toThrow(/two default links/);
   });
 
+  it("says to move a key's links into its canonical form where the table holds that already", () => {
+    // Told to write the key in its canonical form, an operator whose table held that key already
+    // wrote it twice, and the table could not be read at all.
+    const link = { href: "https://a.example/p", linkType: "gs1:pip", title: "P", default: true };
+    expect(() =>
+      parseTable({ version: 1, entries: { "/01/09520123456788": [link], "/01/9520123456788": [link] } }),
+    ).toThrow(
+      /the key "\/01\/9520123456788" is not in its canonical form and could never be reached, and the table holds "\/01\/09520123456788" already: move its links into that entry and remove this key/,
+    );
+    expect(() => parseTable({ version: 1, entries: { "/01/9520123456788": [link] } })).toThrow(
+      /Write it as "\/01\/09520123456788"/,
+    );
+  });
+
   it("refuses a table that writes one key twice in an object, which a reader keeps only the last of", () => {
     // An identifier written twice lost every link under its first, its certification link
     // answering 404 while the table was called ready; a field written twice lost its first value.
