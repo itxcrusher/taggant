@@ -612,9 +612,16 @@ export function createWorkspace(root: string, options: WorkspaceOptions = {}): W
         let raw: unknown;
         try {
           raw = await readManifestFile(id);
-        } catch {
-          // A directory with no readable manifest is not an experience. It may be anything
-          // the operator put there, and the console does not claim it.
+        } catch (error) {
+          // A directory with no manifest is not an experience. It may be anything the operator put
+          // there, and the console does not claim it. One whose manifest's place holds something
+          // that cannot be read as one, a folder or a link among them, is listed with what is
+          // wrong: dropped, its message was reached only by typing its address.
+          const there = await lstat(join(directoryFor(id), "manifest.json")).then(
+            () => true,
+            () => false,
+          );
+          if (there) listed.push({ ok: false, id, directory: directoryFor(id), reason: reasonFor(error) });
           continue;
         }
         try {

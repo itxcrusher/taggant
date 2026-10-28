@@ -360,6 +360,11 @@ describe("writing", () => {
     await expect(store.read("pack")).rejects.toThrow(
       /manifest\.json is a folder, which a manifest cannot be: move it aside/,
     );
+    // And the index lists it with that, where it was dropped from the list without a word.
+    expect((await store.list()).find((entry) => entry.id === "pack")).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/manifest\.json is a folder, which a manifest cannot be/),
+    });
     await rm(path, { recursive: true });
     await symlink(join(store.root, "nowhere"), path, "junction");
     await expect(store.read("pack")).rejects.toThrow(
