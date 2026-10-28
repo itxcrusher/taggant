@@ -85,7 +85,7 @@ export function page({ title, workspaceRoot, notice, body }: Chrome): string {
 <div class="shell">
   <header class="bench">
     <h1><a href="/" class="plain">taggant console</a></h1>
-    <span class="path mono">${esc(workspaceRoot)}</span>
+    <span class="path mono">${shown(workspaceRoot)}</span>
   </header>
   ${notice ? renderNotice(notice) : ""}
   ${body}

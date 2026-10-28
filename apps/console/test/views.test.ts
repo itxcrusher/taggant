@@ -99,6 +99,10 @@ describe("escaping", () => {
     expect(titled).not.toMatch(raw);
     const tab = page({ title: `${rlo}Botanica - taggant console`, workspaceRoot: "w", body: "" });
     expect(tab).toContain("<title>\\u{202e}Botanica - taggant console</title>");
+    // The workspace's folder in the header is a name the operator gave, and was written as given.
+    const rooted = page({ title: "t", workspaceRoot: `ws${rlo}txt.exe`, body: "" });
+    expect(rooted).toContain('<span class="path mono">ws\\u{202e}txt.exe</span>');
+    expect(rooted).not.toMatch(raw);
     const index = indexPage([
       {
         ok: true,
