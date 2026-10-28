@@ -35,6 +35,11 @@ describe("parseArguments", () => {
   it("refuses a flag with no value, and a flag whose value is another flag", () => {
     expect("error" in parseArguments(["m.json", "--out"])).toBe(true);
     expect("error" in parseArguments(["m.json", "--target", "--out", "dist"])).toBe(true);
+    // An empty value names nothing: an empty file was said to be unreadable with no name, and an
+    // empty folder built the whole bundle in the working folder before it failed.
+    expect("error" in parseArguments(["m.json", "--target", "a=1.json", "--out", ""])).toBe(true);
+    expect("error" in parseArguments(["m.json", "--target", "a=", "--out", "d"])).toBe(true);
+    expect("error" in parseArguments(["", "--target", "a=1.json", "--out", "d"])).toBe(true);
   });
 
   it("refuses an unknown option instead of ignoring it", () => {
@@ -57,8 +62,19 @@ describe("main", () => {
     expect(await main([])).toBe(EXIT.usage);
   });
 
-  it("reports a manifest it cannot read, with its own exit code", async () => {
-    expect(await main(["nope.json", "--target", "a=1.json", "--out", "d"])).toBe(EXIT.cannotRead);
+  it("reports a manifest it cannot read, with its own exit code, by its name", async () => {
+    const said: string[] = [];
+    const write = process.stderr.write;
+    process.stderr.write = ((chunk: unknown) => {
+      said.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      expect(await main(["nope.json", "--target", "a=1.json", "--out", "d"])).toBe(EXIT.cannotRead);
+    } finally {
+      process.stderr.write = write;
+    }
+    expect(said.join("")).toContain("nope.json could not be read: ENOENT");
   });
 
   it("reads a manifest and a target saved with a byte-order mark as though they had none", async () => {
@@ -194,6 +210,35 @@ describe("main", () => {
       ).toBe(EXIT.cannotWrite);
       expect(said.join("")).toContain("notes\\u{202e}.txt is a file, not a folder");
       expect(said.join("")).not.toContain(rlo);
+      // A line feed in what was given is written by its code point too, where it printed a line of
+      // its own in the middle of the message.
+      said.length = 0;
+      expect(await main(["--wat\nforged"])).toBe(EXIT.usage);
+      expect(said.join("")).toContain("unknown option --wat\\u{a}forged");
+      expect(said.join("").split("\n")).not.toContain("forged");
+      // And on success, where the folder written to was printed as given.
+      const printed: string[] = [];
+      const out = process.stdout.write;
+      process.stdout.write = ((chunk: unknown) => {
+        printed.push(String(chunk));
+        return true;
+      }) as typeof process.stdout.write;
+      try {
+        expect(
+          await main([
+            join(dir, "manifest.json"),
+            "--target",
+            `front=${join(dir, "front.target.json")}`,
+            "--out",
+            join(dir, `out${rlo}`),
+          ]),
+        ).toBe(EXIT.ok);
+      } finally {
+        process.stdout.write = out;
+      }
+      expect(printed.join("")).toContain("files written to");
+      expect(printed.join("")).toContain("out\\u{202e}");
+      expect(printed.join("")).not.toContain(rlo);
     } finally {
       process.stderr.write = write;
       await rm(dir, { recursive: true, force: true });

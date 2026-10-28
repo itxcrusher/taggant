@@ -35,22 +35,34 @@ export function parseArguments(args: string[]): { arguments: Arguments } | { err
     if (arg === undefined) continue;
     if (arg === "--target" || arg === "--out") {
       const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) return { error: `${arg} needs a value` };
+      // An empty value names nothing: an empty file read as nothing and was said to be unreadable
+      // with no name, and an empty folder built the whole bundle in the working folder first.
+      if (value === undefined || value === "" || value.startsWith("--"))
+        return { error: `${arg} needs a value` };
       i++;
       if (arg === "--out") {
         if (out !== undefined) return { error: "--out was given more than once" };
         out = value;
         continue;
       }
+      // What was given is written by its code points, as every message here is, and before the
+      // message is split into lines: a line feed in it printed a line of its own.
       const split = value.indexOf("=");
-      if (split < 1) return { error: `--target must be written as <id>=<file>, and this is ${value}` };
+      if (split < 1 || split === value.length - 1) {
+        return { error: `--target must be written as <id>=<file>, and this is ${printable(value)}` };
+      }
       const id = value.slice(0, split);
-      if (targets.some(([existing]) => existing === id)) return { error: `--target ${id} was given twice` };
+      if (targets.some(([existing]) => existing === id)) {
+        return { error: `--target ${printable(id)} was given twice` };
+      }
       targets.push([id, value.slice(split + 1)]);
       continue;
     }
-    if (arg.startsWith("--")) return { error: `unknown option ${arg}` };
-    if (manifest !== undefined) return { error: `only one manifest can be bundled, and ${arg} is a second` };
+    if (arg.startsWith("--")) return { error: `unknown option ${printable(arg)}` };
+    if (arg === "") return { error: "an empty argument was given where a manifest's path goes" };
+    if (manifest !== undefined) {
+      return { error: `only one manifest can be bundled, and ${printable(arg)} is a second` };
+    }
     manifest = arg;
   }
 
@@ -92,9 +104,10 @@ export async function main(args: string[]): Promise<number> {
       sourceDir: dirname(resolve(manifestPath)),
       outDir: out,
     });
-    stdout.write(`\n  ${result.files.length} files written to ${result.outDir}\n`);
+    // The folder and the files as given are written by their code points here too.
+    stdout.write(`\n  ${result.files.length} files written to ${printable(result.outDir)}\n`);
     for (const asset of result.assets) {
-      stdout.write(`  ${asset.from} -> ${asset.to} (${asset.bytes} bytes)\n`);
+      stdout.write(`  ${printable(asset.from)} -> ${asset.to} (${asset.bytes} bytes)\n`);
     }
     stdout.write("\n  Serve that folder over HTTPS or from localhost. It needs nothing else.\n\n");
     return EXIT.ok;
