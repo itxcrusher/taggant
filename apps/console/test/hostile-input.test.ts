@@ -836,6 +836,24 @@ describe("registering a code", () => {
     );
     expect(blamed).not.toContain("has no title");
     expect(await readFile(table, "utf8")).toBe(untitled);
+    // And where the link kept under this code has no link type, which the registration cannot sort.
+    const unsorted = JSON.stringify({
+      version: 1,
+      entries: {
+        "/01/09520123456788": [{ href: "https://a.example/cert", title: "Cert" }],
+        "/01/09520123456702": [{ ...cert }, other],
+      },
+    });
+    await writeFile(table, unsorted);
+    const unsortedBlame = await registerCode(table, {
+      path: "/01/09520123456788",
+      href: "https://new.example/my page",
+      title: "New",
+    }).catch((error: Error) => error.message);
+    expect(unsortedBlame).toMatch(
+      /^that would have written a table the resolver refuses, so nothing was written: .*space/,
+    );
+    expect(await readFile(table, "utf8")).toBe(unsorted);
 
     // This code written in a spelling the resolver refuses is not another code: taken for one, the
     // code was written beside it, and writing that key as the resolver says wrote the code twice.

@@ -24,6 +24,7 @@ import {
 import {
   type LinkTable,
   type StoredLink,
+  emptyTable,
   parseDigitalLink,
   parseTable,
   readTableText,
@@ -502,6 +503,28 @@ async function writeCode(
     current = { version: 1, entries: {} };
   }
 
+  // A title is required rather than optional, because the resolver's own parser refuses a
+  // link without one. Optional here meant this function could build a table the resolver
+  // would then reject, which is the shape of a defect that only appears in production.
+  const linkType = entry.linkType ?? "gs1:pip";
+  const link: StoredLink = {
+    href: entry.href,
+    linkType,
+    title: entry.title,
+    default: true,
+    ...(entry.language === undefined ? {} : { hreflang: [entry.language] }),
+  };
+  // The link being registered is checked on its own before anything the table holds, so a refusal
+  // of it gives its own reason: checked after, it was given the reason of a link kept under the
+  // code, or of an entry there the registration could not sort.
+  try {
+    parseTable({ ...emptyTable(), entries: { [canonical]: [link] } });
+  } catch (error) {
+    throw new WorkspaceError(
+      `that would have written a table the resolver refuses, so nothing was written: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
   // In a table refused as it stands, the codes refused each on its own, and whether this code's own
   // entry is one a registration can change at all: one that is not a list of links, each with a
   // link type, cannot be sorted into links kept and links replaced, and was a 500.
@@ -552,18 +575,6 @@ async function writeCode(
       );
     }
   }
-
-  // A title is required rather than optional, because the resolver's own parser refuses a
-  // link without one. Optional here meant this function could build a table the resolver
-  // would then reject, which is the shape of a defect that only appears in production.
-  const linkType = entry.linkType ?? "gs1:pip";
-  const link: StoredLink = {
-    href: entry.href,
-    linkType,
-    title: entry.title,
-    default: true,
-    ...(entry.language === undefined ? {} : { hreflang: [entry.language] }),
-  };
 
   /**
    * A code carries several links, and this replaces the ones it is about.
@@ -621,19 +632,9 @@ async function writeCode(
     try {
       parseTable({ version: next.version, entries: rest });
     } catch (left) {
-      const why = left instanceof Error ? left.message : String(left);
-      // Whose fault: the link being registered, said with its own reason, or what was there already.
-      // Blamed with the first failure of the table, the registration was given a kept link's reason.
-      let ownLinkRefused: string | undefined;
-      try {
-        parseTable({ version: next.version, entries: { [canonical]: [link] } });
-      } catch (own) {
-        ownLinkRefused = own instanceof Error ? own.message : String(own);
-      }
+      // The link being registered was checked on its own above, so what is left is what was there.
       throw new WorkspaceError(
-        ownLinkRefused !== undefined
-          ? `that would have written a table the resolver refuses, so nothing was written: ${ownLinkRefused}`
-          : `${tablePath} holds an entry the resolver refuses, which registering this code does not change, so nothing was written: ${why}`,
+        `${tablePath} holds an entry the resolver refuses, which registering this code does not change, so nothing was written: ${left instanceof Error ? left.message : String(left)}`,
       );
     }
     stillRefused = reason;
