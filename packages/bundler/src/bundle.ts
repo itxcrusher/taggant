@@ -568,14 +568,20 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
     throw error;
   }
   await inTurnForSwap(options.outDir, async () => {
-    // Asked again in turn: a publish of the same destination that swapped in while this one was
-    // building has put a bundle there, which this one now replaces rather than collides with.
-    const now =
-      replacing ||
-      (await readdir(options.outDir).then(
-        () => true,
-        () => false,
-      ));
+    // Asked again in turn, as it was asked before the build: a publish of the same destination that
+    // swapped in while this one was building has put a bundle there, which this one now replaces
+    // rather than collides with; and anything else put there meanwhile is refused as it would have
+    // been then, where a file was taken for nothing and, on Windows, replaced by the bundle's folder.
+    let now = replacing;
+    if (!now) {
+      try {
+        now = await mayReplace(options.outDir);
+      } catch (error) {
+        const left = await discard(staging);
+        if (left !== "" && error instanceof Error) error.message += left;
+        throw error;
+      }
+    }
     await swapIn(staging, options.outDir, now, suffix);
   });
 

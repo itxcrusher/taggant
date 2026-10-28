@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 import { within } from "../src/assets.js";
@@ -307,6 +307,43 @@ describe("publishing again", () => {
     }).catch((error: Error) => error.message);
     expect(linked).toContain(`${dangling} is a link to nothing, so it will not be replaced`);
     expect((await readdir(dirname(outDir))).filter((name) => name.includes(".publishing-"))).toEqual([]);
+  });
+
+  it("refuses a file put at the destination while the bundle is built", async () => {
+    // Asked about once, before the build, the destination took a file put there meanwhile for
+    // nothing, and on Windows the bundle's folder was renamed over it and the command said it had
+    // written the bundle there.
+    const { sourceDir, outDir } = await scratch();
+    const folder = dirname(outDir);
+    await mkdir(folder, { recursive: true });
+    let settled = false;
+    const publishing = bundle({
+      manifest: MANIFEST,
+      targets: { front: TARGET },
+      sourceDir,
+      outDir,
+      runtimeDir: RUNTIME_DIST,
+    }).then(
+      () => "published",
+      (error: Error) => error.message,
+    );
+    void publishing.then(() => {
+      settled = true;
+    });
+    let appeared = false;
+    while (!appeared && !settled) {
+      if ((await readdir(folder)).some((name) => name.startsWith(`${basename(outDir)}.publishing-`))) {
+        await writeFile(outDir, "notes");
+        appeared = true;
+      } else {
+        await new Promise((done) => setTimeout(done, 2));
+      }
+    }
+    const said = await publishing;
+    expect(appeared, "the bundle was built before a file could be put in its way").toBe(true);
+    expect(said).toMatch(/is a file, not a folder, so it will not be replaced/);
+    expect(await readFile(outDir, "utf8")).toBe("notes");
+    expect((await readdir(folder)).filter((name) => name.includes(".publishing-"))).toEqual([]);
   });
 
   it("does not ship files that were already sitting in the folder", async () => {
