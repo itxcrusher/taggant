@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EXIT, main, parseArguments } from "../src/cli.js";
+import { currentFeatures, currentReport } from "./current-report.js";
 
 describe("parseArguments", () => {
   it("reads a manifest, several targets and an output folder", () => {
@@ -130,16 +131,44 @@ describe("main", () => {
   it("shows what it was given by its code points on a usage error and on a write that failed", async () => {
     // Both name what the command line was given, and a right-to-left override in it reversed the
     // line the terminal printed.
-    const { cp, mkdtemp, readFile, rm, writeFile } = await import("node:fs/promises");
+    const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
-    const { fileURLToPath } = await import("node:url");
     const dir = await mkdtemp(join(tmpdir(), "bundle-said-"));
-    await cp(fileURLToPath(new URL("../../../examples/postcard", import.meta.url)), dir, { recursive: true });
-    // Printed wide enough for its report, so the bundle gets as far as its destination.
-    const manifest = JSON.parse(await readFile(join(dir, "manifest.json"), "utf8"));
-    manifest.targets[0].physicalWidthMm = 300;
-    await writeFile(join(dir, "manifest.json"), JSON.stringify(manifest));
+    // An experience the bundle gets as far as its destination with, written from the fixtures the
+    // bundler's other tests use: copied from the example, it needed the target another package's
+    // tests compile, and failed where this package ran alone.
+    await writeFile(
+      join(dir, "manifest.json"),
+      JSON.stringify({
+        schemaVersion: "1.0.0",
+        id: "postcard",
+        title: "Postcard",
+        targets: [
+          {
+            id: "front",
+            source: "artwork.png",
+            physicalWidthMm: 148,
+            content: [{ type: "image", src: "overlay.svg" }],
+          },
+        ],
+      }),
+    );
+    await writeFile(
+      join(dir, "front.target.json"),
+      JSON.stringify({
+        formatVersion: 2,
+        id: "front",
+        width: 640,
+        height: 452,
+        features: currentFeatures(),
+        report: await currentReport(),
+      }),
+    );
+    await writeFile(
+      join(dir, "overlay.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#c33" /></svg>',
+    );
     const rlo = String.fromCharCode(0x202e);
     const notes = join(dir, `notes${rlo}.txt`);
     await writeFile(notes, "notes");
