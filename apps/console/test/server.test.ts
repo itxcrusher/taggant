@@ -633,12 +633,14 @@ describe("what it says", () => {
     );
     expect(response.status).toBe(303);
     const page = await pageAt(response.headers.get("location") ?? "/");
+    // What became of this code's own links comes before the other code's reason, so "it" in those
+    // sentences is this code.
     expect(page).toContain(
-      "/01/09520123456788 points here in the link table, which the resolver still refuses for another code: /01/09520123456702 has two default links",
+      "/01/09520123456788 points here in the link table. 1 product link of that kind was replaced. The link a plain scan of it followed before keeps its place and is no longer the default. The resolver still refuses the table, for another code: /01/09520123456702 has two default links",
     );
     // Not to register it here, which would point that code at this experience.
     expect(page).toContain(
-      "mark only the link it should follow. If that code holds two defaults, registering it from the experience it belongs to keeps one; otherwise correct it by hand.",
+      "mark only the link it should follow. If that code holds two defaults, registering it from the experience it should point at leaves it one, the link to that experience; otherwise correct it by hand.",
     );
     expect(page).not.toContain("/01/09520123456788 points here.");
     // As a warning, neither good nor bad: the code is written, and scans still do not reach it.

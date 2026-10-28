@@ -836,9 +836,7 @@ export function createConsole(options: ConsoleOptions): Server {
         message: [
           written.stillRefused === undefined
             ? `${written.path} points here.`
-            : // Its reason may end in a full stop of its own. Registering that code from this page
-              // would point it here, so the notice says where to register it from.
-              `${written.path} points here in the link table, which the resolver still refuses for another code: ${written.stillRefused.replace(/\.$/, "")}. If that code holds two defaults, registering it from the experience it belongs to keeps one; otherwise correct it by hand.`,
+            : `${written.path} points here in the link table.`,
           written.replaced > 0
             ? `${written.replaced} product ${written.replaced === 1 ? "link" : "links"} of that kind ${written.replaced === 1 ? "was" : "were"} replaced.`
             : "",
@@ -848,6 +846,13 @@ export function createConsole(options: ConsoleOptions): Server {
           written.kept > 0
             ? `${written.kept} other ${written.kept === 1 ? "link" : "links"} on that code ${written.kept === 1 ? "was" : "were"} left alone.`
             : "",
+          // Last, so the sentences before it are read as about the code registered here, where they
+          // followed the other code's reason. That reason may end in a full stop of its own, and
+          // registering that code from this page would point it here, so the notice says where to
+          // register it from and what that leaves, all of its links of the kind registered replaced.
+          written.stillRefused === undefined
+            ? ""
+            : `The resolver still refuses the table, for another code: ${written.stillRefused.replace(/\.$/, "")}. If that code holds two defaults, registering it from the experience it should point at leaves it one, the link to that experience; otherwise correct it by hand.`,
         ]
           .filter(Boolean)
           .join(" "),
