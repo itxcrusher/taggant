@@ -7,9 +7,8 @@ on:
 
 jobs:
   build:
-    # Ubuntu 24.04 rather than the latest image: the WebKit build this Playwright version installs
-    # is linked against that release's ICU (libicudata.so.74) and does not start on 26.04, so the
-    # claim below that all three engines agree could not be earned there.
+    # A release named rather than the latest image, so the system the three engines are held to
+    # changes when this file says so and not when the image does.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -32,10 +31,17 @@ jobs:
       # The browser downloads are the largest thing this job fetches and they only change
       # when the lockfile does. `playwright install` still runs on a hit, because the system
       # libraries `--with-deps` installs are not in this cache.
+      #
+      # Playwright downloads browsers built for the system's release, so the cache is keyed by the
+      # image's release as well as the lockfile: keyed by the OS's name alone, a cache filled on
+      # Ubuntu 24.04 handed its WebKit to Ubuntu 26.04, which lacks the library it was linked
+      # against, and the job could not start it.
+      - id: image
+        run: echo "release=$ImageOS" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: playwright-${{ runner.os }}-${{ steps.image.outputs.release }}-${{ hashFiles('pnpm-lock.yaml') }}
       - run: pnpm exec playwright install --with-deps chromium firefox webkit
       - run: pnpm -r build
       # A browser that installs and then cannot launch is skipped with a warning rather
