@@ -114,8 +114,7 @@ function keyWrittenTwice(text: string): { key: string; within?: string; inList?:
         character === "{" &&
         frames.length === 3 &&
         parent?.keys === undefined &&
-        frames[1]?.keys !== undefined &&
-        frames[1].within === "entries";
+        frames[1]?.within === "entries";
       const within = parent?.keys ? lastKey : link ? parent?.within : undefined;
       frames.push({
         ...(character === "{" ? { keys: new Set<string>() } : {}),
