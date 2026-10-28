@@ -7,7 +7,10 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04 rather than the latest image: the WebKit build this Playwright version installs
+    # is linked against that release's ICU (libicudata.so.74) and does not start on 26.04, so the
+    # claim below that all three engines agree could not be earned there.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
