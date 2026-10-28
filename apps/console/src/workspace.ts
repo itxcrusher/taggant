@@ -299,14 +299,21 @@ const RENAME_ATTEMPTS = 9;
 
 /**
  * What is in a file's place when reading it failed for something that is not a file there: a
- * folder, a link to one, or a link to nothing. The read's own code says "illegal operation on a
- * directory" or "no such file", which names none of them and tells nobody to move it aside.
+ * folder, a link to one, a link to nothing, or a link that leads round in a loop. The read's own
+ * code says "illegal operation on a directory", "no such file" or ELOOP, which names none of them
+ * and tells nobody to move it aside.
  */
 export async function inPlaceOf(path: string, error: unknown): Promise<string | undefined> {
   const code = (error as NodeJS.ErrnoException)?.code;
-  if (code !== "EISDIR" && code !== "ENOENT") return undefined;
+  if (code !== "EISDIR" && code !== "ENOENT" && code !== "ELOOP") return undefined;
   const there = await lstat(path).catch(() => undefined);
-  if (there?.isSymbolicLink()) return code === "EISDIR" ? "a link to a folder" : "a link to nothing";
+  if (there?.isSymbolicLink()) {
+    return code === "EISDIR"
+      ? "a link to a folder"
+      : code === "ELOOP"
+        ? "a link that leads round in a loop"
+        : "a link to nothing";
+  }
   if (there?.isDirectory()) return "a folder";
   return undefined;
 }

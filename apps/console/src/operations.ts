@@ -436,7 +436,7 @@ export async function registerCode(
   // short name, the rename that puts a new table in place renamed the table itself, so the
   // file the resolver reads was gone and a table nobody reads held every code.
   return await inTurn(tableQueues, queueKey(tablePath), () =>
-    writeCode(canonical(tablePath), entry, options),
+    writeCode(canonical(tablePath), entry, options, tablePath),
   );
 }
 
@@ -444,6 +444,7 @@ async function writeCode(
   tablePath: string,
   entry: { path: string; href: string; title: string; linkType?: string; language?: string },
   options: { holds?: () => string | null },
+  given: string = tablePath,
 ): Promise<{ path: string; replaced: number; kept: number; unmarked: number; stillRefused?: string }> {
   // Asked first, inside the turn, so a console whose lock on the table was taken over writes
   // nothing: two consoles that both believed they held one table kept twenty codes of forty.
@@ -487,11 +488,13 @@ async function writeCode(
     // A table that is not there yet is the ordinary case for a first code. A table that is there
     // and cannot be read as one is not, and writing over it would lose every other code.
     // A folder or a link where the table goes is said to be one: taken for a table that could not
-    // be read, it was said to hold codes writing over it would lose, and to be nothing else.
-    const what = await inPlaceOf(tablePath, error);
+    // be read, it was said to hold codes writing over it would lose, and to be nothing else. A link
+    // is named as the console was given it, where the folder it leads to was named instead.
+    const linked = await inPlaceOf(given, error);
+    const what = linked ?? (await inPlaceOf(tablePath, error));
     if (what !== undefined) {
       throw new WorkspaceError(
-        `${tablePath} is ${what}, which the link table cannot be: move it aside, then register the code.`,
+        `${linked === undefined ? tablePath : given} is ${what}, which the link table cannot be: move it aside, then register the code.`,
       );
     }
     const missing = (error as NodeJS.ErrnoException)?.code === "ENOENT";

@@ -883,6 +883,26 @@ describe("registering a code", () => {
       registerCode(placed, { path: "/01/09520123456788", href: "https://new.example/", title: "New" }),
     ).rejects.toThrow(/placed\.json is a link to nothing, which the link table cannot be/);
     await remove(placed, { recursive: true });
+    // A link to a folder is named as the console was given it, not by the folder it leads to; and a
+    // link that leads round in a loop is said to be one, where its read's ELOOP was given as a reason
+    // writing over the table would lose its codes.
+    await makeFolder(join(root, "a-folder"));
+    await symlink(join(root, "a-folder"), placed, "junction");
+    await expect(
+      registerCode(placed, { path: "/01/09520123456788", href: "https://new.example/", title: "New" }),
+    ).rejects.toThrow(/placed\.json is a link to a folder, which the link table cannot be/);
+    await remove(placed, { recursive: true });
+    await symlink(join(root, "loop-b.json"), join(root, "loop-a.json"), "junction");
+    await symlink(join(root, "loop-a.json"), join(root, "loop-b.json"), "junction");
+    await expect(
+      registerCode(join(root, "loop-a.json"), {
+        path: "/01/09520123456788",
+        href: "https://new.example/",
+        title: "New",
+      }),
+    ).rejects.toThrow(/loop-a\.json is a link that leads round in a loop, which the link table cannot be/);
+    await remove(join(root, "loop-a.json"), { recursive: true });
+    await remove(join(root, "loop-b.json"), { recursive: true });
 
     // A key written twice cannot be read as a table at all, and is not written over.
     const twice = `{"version":1,"entries":{"/01/09520123456702":[${JSON.stringify(other)}],"/01/09520123456702":[${JSON.stringify(old)}]}}`;
