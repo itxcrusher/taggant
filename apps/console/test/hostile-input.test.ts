@@ -510,17 +510,21 @@ describe("a target whose report gives back no distance", () => {
     }
     expect(linkPage).not.toContain("held it open");
     await remove(path);
-    // A file gone between being looked for and being read, as when another program is replacing it,
-    // is not compiled at a guess or sent to be moved aside: there is nothing in its place, and it is
-    // compiled as anything not compiled yet is.
+    // A file gone between being looked for and being read, and still gone when read once more, as
+    // when another program is replacing it, is not compiled at a guess: compiled at 150, the compile
+    // was written over the file put back, and a piece refused at its own distance was published.
     const goneRebuilt: number[] = [];
-    await publish(
-      { ...workspace, hasTarget: async () => true },
-      await workspace.read(created.id),
-      join(root, "lost-distance-out"),
-      { runtimeDir, onRebuild: (_id: string, at: number) => goneRebuilt.push(at) },
-    ).catch(() => undefined);
-    expect(goneRebuilt).toEqual([150]);
+    await expect(
+      publish(
+        { ...workspace, hasTarget: async () => true },
+        await workspace.read(created.id),
+        join(root, "lost-distance-out"),
+        { runtimeDir, onRebuild: (_id: string, at: number) => goneRebuilt.push(at) },
+      ),
+    ).rejects.toThrow(
+      /front's compiled file was there when it was looked for and gone when it was read, .* so it is not compiled again at a guess/,
+    );
+    expect(goneRebuilt).toEqual([]);
     // And the card of such a target says what any card with no compiled file says.
     await remove(path, { force: true });
     const goneServer = createConsole({

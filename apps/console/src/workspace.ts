@@ -297,6 +297,19 @@ async function writeAtomic(path: string, contents: string | Uint8Array): Promise
  */
 const RENAME_ATTEMPTS = 9;
 
+/** A compiled target's text parsed, a byte-order mark in front read as though it were not there. */
+function parseTarget(text: string, targetId: string): unknown {
+  try {
+    // As the link table is: a target file an editor saved with a mark could not be read, and its
+    // report with it.
+    return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+  } catch (error) {
+    throw new WorkspaceError(
+      `the compiled target for ${targetId} does not parse: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 /**
  * What is in a file's place when reading it failed for something that is not a file there: a
  * folder, a link to one, a link to nothing, or a link that leads round in a loop. The read's own
@@ -728,13 +741,23 @@ export function createWorkspace(root: string, options: WorkspaceOptions = {}): W
       const path = join(directoryFor(id), "targets", filename);
       // Read and parsed apart, because the two are said apart: a file that does not parse, and one
       // that cannot be read, a folder or a link in its place, reading denied or another program
-      // holding it, whose reason the system gives. One gone since it was looked for is neither,
-      // and is taken for gone on the read's own word: a second look, to tell a gone file from a
-      // link to nothing, met the file put back by whatever was replacing it and called it unread.
+      // holding it, whose reason the system gives. One gone since it was looked for is neither. A
+      // file being replaced is gone for a moment and then back, so a read that finds nothing reads
+      // once more: taken for gone at once, a publish compiled it again at a guess over the file put
+      // back; taken for unread after a second look found it, its card asked for a distance on disk.
       let text: string;
       try {
         text = await readFile(path, "utf8");
-      } catch (error) {
+      } catch (first) {
+        const again =
+          (first as NodeJS.ErrnoException).code === "ENOENT"
+            ? await readFile(path, "utf8").then(
+                (value) => ({ value }),
+                (error: unknown) => ({ error }),
+              )
+            : { error: first };
+        if ("value" in again) return parseTarget(again.value, targetId);
+        const error = again.error;
         const reason = error instanceof Error ? error.message : String(error);
         const gone = (error as NodeJS.ErrnoException).code === "ENOENT";
         throw new TargetNotReadError(
@@ -743,15 +766,7 @@ export function createWorkspace(root: string, options: WorkspaceOptions = {}): W
           gone,
         );
       }
-      try {
-        // Read as though a byte-order mark in front were not there, as the link table is: a
-        // target file an editor saved with one could not be read, and its report with it.
-        return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
-      } catch (error) {
-        throw new WorkspaceError(
-          `the compiled target for ${targetId} does not parse: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
+      return parseTarget(text, targetId);
     },
 
     async hasTarget(id: string, targetId: string): Promise<boolean> {

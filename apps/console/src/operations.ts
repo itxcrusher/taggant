@@ -301,9 +301,15 @@ async function publishOnce(
         }
       } catch (error) {
         if (error instanceof TargetNotReadError && error.gone) {
-          // Gone since it was looked for, as when another program is replacing it: nothing is in
-          // its place to say a distance, and it is compiled as anything not compiled yet is.
-        } else if (stored === undefined) {
+          // Gone when read, and gone when read once more, as when another program is replacing it
+          // and has not put it back yet. Compiled at the default as anything not compiled yet is,
+          // the compile was written over the file put back, and a piece refused at its own
+          // distance was published.
+          throw new WorkspaceError(
+            `${target.id}'s compiled file was there when it was looked for and gone when it was read, as when another program is replacing it, so it is not compiled again at a guess over what comes back. Publish again once it is in place, or compile it from its card.`,
+          );
+        }
+        if (stored === undefined) {
           unread = error instanceof TargetNotReadError ? { cause: error.reason } : {};
           distanceLost = true;
         } else {
