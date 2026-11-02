@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-import { readFile, writeFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { randomBytes } from "node:crypto";
+import { realpathSync, statSync } from "node:fs";
+import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import process, { argv, stderr, stdout } from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { type CompiledTarget, compileTarget, toTargetJson } from "./compile.js";
-import { type Report, describeWidth } from "./report.js";
+import { type Report, SCAN_DISTANCE_MM, describeRepetition, describeWidth } from "./report.js";
 
 /**
  * Exit codes, so a build script can read the outcome instead of parsing stderr.
@@ -23,8 +25,8 @@ export const EXIT = {
 const USAGE = "usage: taggant-compile <artwork> [--id <id>] [--scan-distance <mm>] [--out <file>]\n";
 
 /** Distances a person can actually hold a phone at, or stand back to, in millimetres. */
-const MIN_SCAN_DISTANCE_MM = 50;
-const MAX_SCAN_DISTANCE_MM = 10_000;
+const MIN_SCAN_DISTANCE_MM = SCAN_DISTANCE_MM.nearest;
+const MAX_SCAN_DISTANCE_MM = SCAN_DISTANCE_MM.furthest;
 
 const FLAGS = new Set(["--id", "--scan-distance", "--out"]);
 
@@ -52,6 +54,11 @@ export function parseArguments(args: string[]): { arguments: Arguments } | { err
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
     if (token === undefined) continue;
+    // A single dash is an option somebody meant, not a file. `-h` was taken as the artwork, its
+    // name became the id, and the answer was a rule about ids.
+    if (token.startsWith("-") && !token.startsWith("--")) {
+      return { error: `unknown option ${token}; the options are ${[...FLAGS].join(", ")} and --help` };
+    }
     if (!token.startsWith("--")) {
       if (source !== undefined) return { error: `unexpected extra argument ${token}` };
       source = token;
@@ -91,12 +98,26 @@ export function parseArguments(args: string[]): { arguments: Arguments } | { err
   }
 
   const out = values.get("--out");
+  // Writing the target over the artwork it was compiled from destroyed the artwork, printed
+  // "written" and exited 0, so the one file nobody can regenerate was the one that went. The
+  // comparison folds case where the filesystem does, because there `Art.png` and `art.png`
+  // are one file.
+  if (out !== undefined && samePath(out, source)) {
+    return { error: `--out ${out} is the artwork being compiled, and writing there would destroy it` };
+  }
   return {
     arguments: out === undefined ? { source, id, scanDistanceMm } : { source, id, scanDistanceMm, out },
   };
 }
 
-export function formatReportLines(source: string, target: CompiledTarget, scanDistanceMm: number): string[] {
+/**
+ * The report as a person reads it in a terminal.
+ *
+ * Two arguments. It took the scan distance as a third and never read it, which is the shape of
+ * the defect the report carries its own distance to prevent: a caller holding a width and a
+ * distance separately can pair them wrongly, and the linter does not notice an unread parameter.
+ */
+export function formatReportLines(source: string, target: CompiledTarget): string[] {
   const { report } = target;
   const lines = [
     "",
@@ -110,7 +131,11 @@ export function formatReportLines(source: string, target: CompiledTarget, scanDi
     // requirement set by the camera and the target, not a measurement of the design, and
     // a bare millimetre figure under a filename reads as the latter.
     `  minimum print width   ${describeWidth(report)}`,
-    `  repeated detail       ${describeRepetition(report)}`,
+    // What the verdict is made of, beside it. The line here before was a repetition figure
+    // under a judgement it could not support: it fell as a design repeated, so a sheet of
+    // sixteen identical postcards read "31%, which is normal" above "ready for press".
+    `  maps onto itself      ${describeRepetition(report)}`,
+    `  recognised            ${describeRecognition(report)}`,
     `  verdict               ${report.pass ? "ready for press" : "not ready"}`,
   ];
   for (const reason of report.reasons) lines.push(`      ${reason}`);
@@ -119,8 +144,10 @@ export function formatReportLines(source: string, target: CompiledTarget, scanDi
 }
 
 export async function main(args: string[]): Promise<number> {
-  if (args.length === 0 || args[0] === "--help") {
-    const asked = args[0] === "--help";
+  // Help anywhere on the line, not only first: `taggant-compile art.png --help` was refused as an
+  // unknown option, which is the one flag every command line is expected to know.
+  if (args.length === 0 || args.includes("--help")) {
+    const asked = args.includes("--help");
     (asked ? stdout : stderr).write(USAGE);
     return asked ? EXIT.ok : EXIT.usage;
   }
@@ -142,13 +169,13 @@ export async function main(args: string[]): Promise<number> {
     return EXIT.cannotRead;
   }
 
-  stdout.write(`${formatReportLines(source, target, scanDistanceMm).join("\n")}\n`);
+  stdout.write(`${formatReportLines(source, target).join("\n")}\n`);
 
   if (out !== undefined) {
     try {
-      await writeFile(out, JSON.stringify(toTargetJson(target)));
+      await writeTarget(out, JSON.stringify(toTargetJson(target)));
     } catch (error) {
-      stderr.write(`could not write ${out}: ${error instanceof Error ? error.message : String(error)}\n`);
+      stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       return EXIT.cannotWrite;
     }
     stdout.write(`  written ${out}\n\n`);
@@ -156,10 +183,29 @@ export async function main(args: string[]): Promise<number> {
   return target.report.pass ? EXIT.ok : EXIT.artworkNotReady;
 }
 
-// argv[1] is a filesystem path, and on Windows it uses backslashes, so it has to be
-// converted to a URL before it can be compared with import.meta.url.
-const invokedDirectly = argv[1] !== undefined && import.meta.url === pathToFileURL(argv[1]).href;
-if (invokedDirectly) {
+/**
+ * Whether this file is the program that was run, rather than a module something imported.
+ *
+ * Compared as the files the two paths name. Compared as text, a command line reached through a
+ * link, which is how a package manager puts one on the path and how pnpm lays out a workspace,
+ * had `argv[1]` naming the link and `import.meta.url` naming the file, so it did nothing at all
+ * and exited 0.
+ */
+function invokedDirectly(): boolean {
+  if (argv[1] === undefined) return false;
+  const self = realpathSync.native(fileURLToPath(import.meta.url));
+  // Node runs a name given without its extension as the `.js` file, so both spellings are tried:
+  // named `cli`, the program ran, did nothing and exited 0.
+  for (const named of [argv[1], `${argv[1]}.js`]) {
+    try {
+      if (realpathSync.native(named) === self) return true;
+    } catch {
+      // Nothing by that name.
+    }
+  }
+  return false;
+}
+if (invokedDirectly()) {
   // exitCode rather than exit(), so node finishes flushing stdout before it goes. On
   // Windows a write to a pipe is asynchronous, and exit() mid write truncates the report.
   main(argv.slice(2)).then((code) => {
@@ -167,10 +213,92 @@ if (invokedDirectly) {
   });
 }
 
-/** How much of the artwork looks like the rest of it, in words rather than a bare fraction. */
-function describeRepetition(report: Report): string {
-  if (report.repetition === null) return "not measured";
-  const percent = Math.round(report.repetition * 100);
-  if (percent <= 40) return `${percent}% of features have a look-alike, which is normal`;
-  return `${percent}% of features have a look-alike elsewhere on the artwork`;
+/** What the recogniser made of the artwork, in the sentence a printer can check. */
+function describeRecognition(report: Report): string {
+  const seen = report.recognition;
+  // Said without a cause, because the cause is in the reasons below and is not always the
+  // artwork: a distance that puts the smallest size past the widest piece a manifest can declare
+  // stops it here too, and "the artwork did not get that far" blamed a postcard that is ready
+  // from closer.
+  if (seen === null) return "not asked, for the reason below";
+  if (report.pass) {
+    // The middle of the five worst turns, which is what three of five reaching the line means:
+    // every turn at three of the widths found at least that many. It read "at the middle one",
+    // as though it were the worst turn at the middle width, which it is not.
+    return `at that size, every turn found it with ${seen.needed} or more points agreeing at ${seen.widthsAgreed} of ${seen.widths} widths, and with at least ${seen.inliers} at three of them, and no look put it in the wrong place`;
+  }
+  // A size was confirmed and the looks pointed at a copy, which come after, refused it. This read
+  // "at the size that came closest ... where most are needed" beside five widths of five agreeing.
+  if (seen.found) {
+    return `at the smallest size it was confirmed at, every turn found it with ${seen.needed} or more points agreeing at ${seen.widthsAgreed} of ${seen.widths} widths, and with at least ${seen.inliers} at three of them, and no look centred on it put it in the wrong place`;
+  }
+  return `at the size that came closest, every turn found it with ${seen.needed} or more points agreeing at ${seen.widthsAgreed} of ${seen.widths} widths, where most are needed${seen.misplaced > 0 ? `, and ${seen.misplaced} looks put it in the wrong place` : ""}`;
+}
+
+/**
+ * Whether two paths name one file.
+ *
+ * Compared by what the filesystem says the file is, not by how it is spelled. Folding case was
+ * not enough: the short name Windows keeps beside a long one, `ARTWOR~1.PNG`, and a junction to
+ * the artwork's folder both named the artwork, and `--out` through either replaced it with the
+ * target and printed "written".
+ */
+function samePath(a: string, b: string): boolean {
+  try {
+    // As exact integers. NTFS file ids run past 2 to the 53, where two adjacent ids are one
+    // Number, so a different file was refused as the artwork being compiled.
+    const first = statSync(a, { bigint: true });
+    const second = statSync(b, { bigint: true });
+    if (first.ino !== 0n && first.dev === second.dev && first.ino === second.ino) return true;
+  } catch {
+    // One of the two does not exist, which a file about to be written usually does not: it
+    // cannot be the artwork, unless the two spellings are of one path, which is checked below.
+  }
+  const caseFolds = process.platform === "win32" || process.platform === "darwin";
+  const fold = (path: string) => (caseFolds ? canonical(path).toLowerCase() : canonical(path));
+  return fold(a) === fold(b);
+}
+
+/** The path as the filesystem names it, through its folder when the file is not there yet. */
+function canonical(path: string): string {
+  const absolute = resolve(path);
+  try {
+    return realpathSync.native(absolute);
+  } catch {
+    try {
+      return join(realpathSync.native(dirname(absolute)), basename(absolute));
+    } catch {
+      return absolute;
+    }
+  }
+}
+
+/**
+ * Write the target beside its destination and rename it into place.
+ *
+ * It was the one file in the repository written in place, and it is the one the console and
+ * the bundler both read: a write interrupted part way left half a file under the right name,
+ * which surfaced later as a JSON parse error with a byte offset and nothing about where it
+ * came from.
+ */
+async function writeTarget(out: string, text: string): Promise<void> {
+  const staging = `${out}.writing-${randomBytes(4).toString("hex")}`;
+  try {
+    await writeFile(staging, text);
+    await rename(staging, out);
+  } catch (error) {
+    await rm(staging, { force: true });
+    // Said about the file asked for, not the temporary one beside it: `--out` naming a folder
+    // was answered with a sentence about `outdir.writing-79b82021`, a name nobody gave it.
+    const code = (error as NodeJS.ErrnoException).code;
+    const isFolder = await stat(out).then(
+      (info) => info.isDirectory(),
+      () => false,
+    );
+    throw new Error(
+      isFolder
+        ? `${out} is a folder; give --out the name of a file to write`
+        : `${out} could not be written${code === undefined ? "" : ` (${code})`}`,
+    );
+  }
 }

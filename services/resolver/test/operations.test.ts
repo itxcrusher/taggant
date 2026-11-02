@@ -1,9 +1,9 @@
 import type { Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { type AddressInfo, connect } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Event } from "../src/events.js";
 import { type LinkTable, parseTable } from "../src/links.js";
-import { createResolver } from "../src/server.js";
+import { createResolver, loggable } from "../src/server.js";
 
 /**
  * The operational surface: what a scan is, and what an orchestrator can ask.
@@ -26,6 +26,12 @@ const TABLE: LinkTable = parseTable({
         default: true,
       },
       { href: "https://example.com/produit", linkType: "gs1:pip", title: "Produit", hreflang: ["fr"] },
+      {
+        href: "https://example.com/recettes",
+        linkType: "gs1:recipeInfo",
+        title: "Recettes",
+        hreflang: ["fr"],
+      },
     ],
   },
 });
@@ -75,6 +81,17 @@ describe("what counts as a scan", () => {
     expect(scans()[0]).toMatchObject({ outcome: "unresolved", identifier: "/01/09520123456702" });
   });
 
+  it("counts an assigned code asked for a link type it lacks as unresolved as well", async () => {
+    // So the unresolved count is not by itself a count of codes nobody assigned, and anyone can
+    // add to it. Those are the ones with nothing linked to them at all, as above.
+    expect((await get("/01/09520123456788?linkType=gs1:allergenInfo")).status).toBe(404);
+    expect(scans()[0]).toMatchObject({
+      outcome: "unresolved",
+      identifier: "/01/09520123456788",
+      requested: "gs1:allergenInfo",
+    });
+  });
+
   it("counts a HEAD, because clients follow links with it", async () => {
     await get("/01/09520123456788", { method: "HEAD" });
     expect(scans().length).toBe(1);
@@ -103,15 +120,251 @@ describe("what counts as a scan", () => {
   });
 
   it("does not record a language that decided nothing", async () => {
-    // Only one link of this type exists, so the header cannot have chosen between any.
-    // Recording it anyway reads, in a report, as the reason the redirect went where it did.
+    // Only one link of this type exists, so the header cannot have chosen between any, even
+    // though that link is in the language asked for. Recording it anyway reads, in a report,
+    // as the reason the redirect went where it did.
     await get("/01/09520123456788?linkType=gs1:recipeInfo", { headers: { "accept-language": "fr" } });
     await get("/01/09520123456702", { headers: { "accept-language": "fr" } });
     const events = scans();
     // Without this the test passes when scan recording has stopped entirely, which is the
     // regression it would most want to report.
     expect(events.length, "no scan was recorded, so nothing was inspected").toBe(2);
+    // And a redirect, because a scan that went nowhere has nothing a language could have chosen.
+    expect(events[0]).toMatchObject({ outcome: "redirect", target: "https://example.com/recettes" });
     for (const event of events) expect("language" in event).toBe(false);
+  });
+});
+
+describe("what a scan event may not carry", () => {
+  it("records the table's href, not the target the caller's query was appended to", async () => {
+    // The query string is carried on to the target because the standard asks for it, and it
+    // is also whatever a stranger wrote: `?email=alice@example.com&uid=99123&fbclid=...`
+    // went verbatim into the event, in a log the security policy promises holds nothing
+    // about whoever scanned. The `Location` still carries it, because a campaign
+    // parameter on a printed code is the point; the event records where the table sent the
+    // scan, which is what a report needs and is the operator's own data.
+    const response = await get("/01/09520123456788?email=alice%40example.com&uid=99123&fbclid=IwAR9x");
+    expect(response.headers.get("location")).toContain("email=alice%40example.com");
+    const scan = events.find((event) => event.type === "scan");
+    expect(scan, "no scan was recorded").toBeDefined();
+    const line = JSON.stringify(scan);
+    expect(line, `the event carried the caller's query: ${line}`).not.toMatch(/alice|99123|IwAR9x/);
+    expect(scan?.type === "scan" ? scan.target : "").toBe("https://example.com/product");
+  });
+
+  it("records and publishes the address the scan was sent to, whatever spelling the table holds", async () => {
+    // A backslash before an `@` is a path to a browser and a user name to other parsers, and a
+    // zero-width space or a right-to-left override is invisible where it is printed: written so,
+    // the linkset and the line named an address the Location did not send.
+    const backslash = String.fromCharCode(92);
+    const cases: Array<[string, string]> = [
+      [
+        `https://evil.example${backslash}@good.example/a${String.fromCharCode(0x200b)}b`,
+        "https://evil.example/@good.example/a%E2%80%8Bb",
+      ],
+      [`https://a.example/a${String.fromCharCode(0x202e)}b`, "https://a.example/a%E2%80%AEb"],
+      [`https://a.example/caf${String.fromCharCode(0xe9)}`, "https://a.example/caf%C3%A9"],
+      [`https://b${String.fromCharCode(0xfc)}cher.example/`, "https://xn--bcher-kva.example/"],
+      ["https://Example.COM:443/a/../b", "https://example.com/b"],
+      ["https://example.com", "https://example.com/"],
+    ];
+    for (const [written, address] of cases) {
+      const seen: Event[] = [];
+      const resolver = createResolver({
+        table: parseTable({
+          version: 1,
+          entries: {
+            "/01/09520123456788": [{ href: written, linkType: "gs1:pip", title: "A", default: true }],
+          },
+        }),
+        events: (event) => seen.push(event),
+      });
+      await new Promise<void>((resolve) => resolver.listen(0, "127.0.0.1", resolve));
+      try {
+        const at = `http://127.0.0.1:${(resolver.address() as AddressInfo).port}`;
+        const sent = (await fetch(`${at}/01/09520123456788`, { redirect: "manual" })).headers.get("location");
+        const linkset = (await (
+          await fetch(`${at}/01/09520123456788`, { headers: { accept: "application/linkset+json" } })
+        ).json()) as { linkset: Array<Record<string, Array<{ href: string }>>> };
+        const published = linkset.linkset[0]?.["https://gs1.org/voc/pip"]?.[0]?.href;
+        const recorded = seen.find((event) => event.type === "scan" && event.outcome === "redirect");
+        expect(sent, written).toBe(address);
+        expect(published, written).toBe(address);
+        expect(recorded?.type === "scan" ? recorded.target : undefined, written).toBe(address);
+      } finally {
+        await new Promise<void>((resolve) => resolver.close(() => resolve()));
+      }
+    }
+  });
+
+  it("keeps two spellings of one address under two titles as two links, the default with its own", async () => {
+    // Told apart by their titles: taken for copies, the second would be dropped, and the default
+    // it carries with it, and a plain scan of the code would find no default.
+    const resolver = createResolver({
+      table: parseTable({
+        version: 1,
+        entries: {
+          "/01/09520123456788": [
+            { href: "https://a.example", linkType: "gs1:pip", title: "A" },
+            { href: "https://a.example/", linkType: "gs1:pip", title: "A again", default: true },
+          ],
+        },
+      }),
+      events: () => {},
+    });
+    await new Promise<void>((resolve) => resolver.listen(0, "127.0.0.1", resolve));
+    try {
+      const at = `http://127.0.0.1:${(resolver.address() as AddressInfo).port}`;
+      const scan = await fetch(`${at}/01/09520123456788`, { redirect: "manual" });
+      expect(scan.status).toBe(307);
+      expect(scan.headers.get("location")).toBe("https://a.example/");
+    } finally {
+      await new Promise<void>((resolve) => resolver.close(() => resolve()));
+    }
+  });
+
+  it("records the language that chose, and only when the language chose", async () => {
+    // The field was the raw `Accept-Language` header, recorded whenever more than one link
+    // of the type existed, without asking whether the header matched anything: a German
+    // header on a redirect to the English default recorded `language: "de"`, so a report
+    // attributed an English scan to a German speaker. `fr;q=0` was recorded as a language
+    // although q=0 means "not acceptable", and a four kilobyte header became a four
+    // kilobyte field.
+    const cases: [string, string, string | undefined][] = [
+      // header, where it goes, what is recorded
+      ["fr", "https://example.com/produit", "fr"],
+      ["fr-CA", "https://example.com/produit", "fr"],
+      ["de", "https://example.com/product", undefined],
+      ["fr;q=0", "https://example.com/product", undefined],
+      ["fr;q=0, de", "https://example.com/product", undefined],
+      // The same weight spelt in capitals, which HTTP allows: `fr;Q=0` went to the French link
+      // and was recorded as the language that chose it.
+      ["fr;Q=0", "https://example.com/product", undefined],
+      ["fr;Q=0, de", "https://example.com/product", undefined],
+      ["*", "https://example.com/product", undefined],
+      // A private subtag truncates to `fr`, so the French link is right and the field is
+      // two characters where the header was four kilobytes, which was the point of it.
+      [`fr-x-${"a".repeat(4000)}`, "https://example.com/produit", "fr"],
+    ];
+    for (const [header, target, recorded] of cases) {
+      events.length = 0;
+      const response = await get("/01/09520123456788", { headers: { "accept-language": header } });
+      expect(response.headers.get("location"), `${header} went somewhere unexpected`).toBe(target);
+      const scan = events.find((event) => event.type === "scan");
+      const language = scan?.type === "scan" ? scan.language : undefined;
+      expect(language, `${header.slice(0, 40)} recorded ${String(language)}`).toBe(recorded);
+    }
+  });
+
+  it("records the link type asked for only when the identifier's links or the GS1 vocabulary name it", async () => {
+    // The type asked for is the caller's own text, and it went into the event whatever it was: an
+    // email address as readily as a type, and fifteen kilobytes as one line of the log.
+    const cases: [string, number, string | undefined][] = [
+      // query, status, what is recorded as the type asked for
+      ["?linkType=gs1:pip", 307, "gs1:pip"],
+      ["?linkType=https://gs1.org/voc/pip", 307, "https://gs1.org/voc/pip"],
+      ["?linkType=gs1:recipeInfo", 307, "gs1:recipeInfo"],
+      // A term of the vocabulary this identifier has no link of: worth counting, and nobody's.
+      ["?linkType=gs1:certificationInfo", 404, "gs1:certificationInfo"],
+      ["?linkType=alice%40example.com", 404, undefined],
+      [`?linkType=${"x".repeat(4000)}`, 404, undefined],
+      ["?linkType=", 307, undefined],
+      // A term's shape is not a term: a name and a birth date written as one were recorded.
+      ["?linkType=gs1:JohnSmith19800101", 404, undefined],
+      ["?linkType=https://gs1.org/voc/tel447700900123", 404, undefined],
+    ];
+    for (const [query, status, recorded] of cases) {
+      events.length = 0;
+      const response = await get(`/01/09520123456788${query}`);
+      expect(response.status, query.slice(0, 40)).toBe(status);
+      const scan = events.find((event) => event.type === "scan");
+      expect(scan, `${query.slice(0, 40)} recorded no scan`).toBeDefined();
+      expect(scan?.type === "scan" ? scan.requested : undefined, query.slice(0, 40)).toBe(recorded);
+    }
+
+    // And a type outside the vocabulary that this identifier's links have, which is the table's
+    // own word, beside one they do not have, which is the caller's.
+    const logged: Event[] = [];
+    const own = createResolver({
+      table: parseTable({
+        version: 1,
+        entries: {
+          "/01/09520123456788": [
+            { href: "https://example.com/", linkType: "urn:example:rel", title: "T", default: true },
+          ],
+        },
+      }),
+      events: (event) => logged.push(event),
+    });
+    await new Promise<void>((resolve) => own.listen(0, "127.0.0.1", resolve));
+    const at = `http://127.0.0.1:${(own.address() as AddressInfo).port}/01/09520123456788`;
+    try {
+      for (const [type, recorded] of [
+        ["urn:example:rel", "urn:example:rel"],
+        ["urn:example:other", undefined],
+      ] as const) {
+        logged.length = 0;
+        await fetch(`${at}?linkType=${encodeURIComponent(type)}`, { redirect: "manual" });
+        const scan = logged.find((event) => event.type === "scan");
+        expect(scan?.type === "scan" ? scan.requested : "no scan", type).toBe(recorded);
+      }
+    } finally {
+      await new Promise<void>((resolve) => own.close(() => resolve()));
+    }
+  });
+
+  it("records the tag the request ranked first, never one it refused, whatever form the type is in", async () => {
+    // A link can be for more than one language, and then which of its tags is recorded turns
+    // on how the header is read: in the order it was written, with `q=0` kept, `en;q=0, fr`
+    // recorded `en` for a scan whose header said English was not acceptable. And the links of a
+    // type are the same type however each is written, `gs1:pip` or its full URI.
+    const table = parseTable({
+      version: 1,
+      entries: {
+        "/01/09520123456788": [
+          {
+            href: "https://example.com/both",
+            linkType: "gs1:pip",
+            title: "Product",
+            hreflang: ["en", "fr"],
+            default: true,
+          },
+          {
+            href: "https://example.com/deutsch",
+            linkType: "https://gs1.org/voc/pip",
+            title: "Produkt",
+            hreflang: ["de"],
+          },
+        ],
+      },
+    });
+    const recorded: Event[] = [];
+    const bilingual = createResolver({ table, events: (event) => recorded.push(event) });
+    await new Promise<void>((resolve) => bilingual.listen(0, "127.0.0.1", resolve));
+    const at = `http://127.0.0.1:${(bilingual.address() as AddressInfo).port}`;
+    try {
+      const cases: [string, string, string | undefined][] = [
+        // header, where it goes, what is recorded
+        ["en;q=0, fr", "https://example.com/both", "fr"],
+        ["en;q=0.5, fr", "https://example.com/both", "fr"],
+        ["de", "https://example.com/deutsch", "de"],
+        // Refused and nothing else asked: the default is the choice, and a tag the header said
+        // was not acceptable is not recorded as the reason, though it is on the link chosen.
+        ["en;q=0", "https://example.com/both", undefined],
+      ];
+      for (const [header, target, language] of cases) {
+        recorded.length = 0;
+        const response = await fetch(`${at}/01/09520123456788`, {
+          redirect: "manual",
+          headers: { "accept-language": header },
+        });
+        expect(response.headers.get("location"), header).toBe(target);
+        const scan = recorded.find((event) => event.type === "scan");
+        expect(scan?.type === "scan" ? scan.language : undefined, header).toBe(language);
+      }
+    } finally {
+      await new Promise<void>((resolve) => bilingual.close(() => resolve()));
+    }
   });
 });
 
@@ -152,16 +405,153 @@ describe("what an orchestrator can ask", () => {
     await get("/healthz");
     expect(events).toEqual([]);
   });
+
+  it("publishes every counter against what actually happened, and no counter that is a copy", async () => {
+    // Nothing asserted the set of counters or their values, so a counter could carry a name
+    // that claimed more than it counted and no test would mind. One did:
+    // `taggant_answered_total` incremented once per scan, which made it exactly the sum of
+    // the scan counter, under a name suggesting every answer this resolver gives. Health
+    // checks, readiness checks, metrics scrapes and bad requests are all answers and none
+    // were in it, so a dashboard reading it as a request rate read low by however often an
+    // orchestrator polls. It is gone, and this is what keeps the rest honest.
+    // Deltas, not totals: every test in this file shares one server, so the counters carry
+    // whatever ran before. Reading them twice is safe because a metrics scrape is not a
+    // scan, which the test above this one is what keeps true.
+    const read = async (): Promise<(name: string) => number> => {
+      const body = await (await get("/metrics")).text();
+      return (name: string): number => {
+        const line = body.split("\n").find((each) => each.startsWith(name));
+        expect(line, `${name} is not published`).toBeDefined();
+        return Number((line ?? "").slice(name.length).trim());
+      };
+    };
+    const before = await read();
+
+    const redirects = 2;
+    const linksets = 1;
+    const unresolved = 1;
+    const bad = 1;
+    for (let i = 0; i < redirects; i++) await get("/01/09520123456788");
+    for (let i = 0; i < linksets; i++) await get("/01/09520123456788?linkType=linkset");
+    for (let i = 0; i < unresolved; i++) await get("/01/09520123456702");
+    for (let i = 0; i < bad; i++) await get("/nothing/here");
+    // Answered too, and deliberately counted nowhere.
+    await get("/healthz");
+    await get("/readyz");
+
+    const after = await read();
+    const rose = (name: string): number => after(name) - before(name);
+
+    expect(rose('taggant_scans_total{outcome="redirect"}')).toBe(redirects);
+    expect(rose('taggant_scans_total{outcome="linkset"}')).toBe(linksets);
+    expect(rose('taggant_scans_total{outcome="unresolved"}')).toBe(unresolved);
+    expect(rose("taggant_bad_requests_total")).toBe(bad);
+    expect(rose("taggant_server_errors_total")).toBe(0);
+
+    // Each counter against the events, which are the other record of the same requests.
+    // `events` is emptied before each test, so these are this test's own.
+    const scans = events.filter((event) => event.type === "scan");
+    expect(redirects + linksets + unresolved).toBe(scans.length);
+    expect(rose("taggant_resolve_seconds_total")).toBeCloseTo(
+      scans.reduce((total, event) => total + (event.type === "scan" ? event.tookMs : 0), 0) / 1000,
+      4,
+    );
+
+    // And no counter is a second name for a number already published. The first version of
+    // this filtered out every line containing a brace and then mapped the values away, so
+    // it pinned unlabelled names and nothing else: the deleted counter, put back
+    // as `taggant_answered_total{kind="all"}` and as
+    // `resolver_answered_total`, passed both times, while the comment above it
+    // claimed every value was compared against the scan sum. Both halves are real now.
+    const series = (await (await get("/metrics")).text())
+      .split("\n")
+      .filter((line) => line !== "" && !line.startsWith("#"))
+      .map((line) => {
+        const cut = line.lastIndexOf(" ");
+        return { series: line.slice(0, cut), value: Number(line.slice(cut + 1)) };
+      });
+
+    // Every series, labels and prefix included, so a name outside the taggant_ prefix or
+    // wearing a label cannot slip in.
+    expect(series.map((each) => each.series).sort()).toEqual([
+      "taggant_bad_requests_total",
+      "taggant_resolve_seconds_total",
+      'taggant_scans_total{outcome="linkset"}',
+      'taggant_scans_total{outcome="redirect"}',
+      'taggant_scans_total{outcome="unresolved"}',
+      "taggant_server_errors_total",
+    ]);
+
+    // And by value: nothing outside the scan counter carries the scan sum. The counts above
+    // are chosen so that the sum is four while the bad requests are one and the seconds are
+    // a fraction, and a delta is compared rather than a total, so equality here means a
+    // duplicate rather than a coincidence.
+    const scanSum = redirects + linksets + unresolved;
+    const copies = series.filter(
+      (each) => !each.series.startsWith("taggant_scans_total") && each.value === scanSum,
+    );
+    expect(
+      copies.map((each) => each.series),
+      `these carry the scan sum: ${JSON.stringify(copies)}`,
+    ).toEqual([]);
+  });
+
+  it("counts an answer it failed to give, and tells whoever asked nothing about why", async () => {
+    // Reaching the catch at the top of the server is this resolver's own fault, and it was
+    // written to the log and counted nowhere, so every scan could fail while `/metrics` said
+    // nothing had. A table that cannot be had, once, is the fault here.
+    const logged: Event[] = [];
+    let broken = true;
+    const faulty = createResolver({
+      table: () => {
+        if (!broken) return TABLE;
+        broken = false;
+        throw new Error("the table could not be had");
+      },
+      events: (event) => logged.push(event),
+    });
+    await new Promise<void>((resolve) => faulty.listen(0, "127.0.0.1", resolve));
+    const at = `http://127.0.0.1:${(faulty.address() as AddressInfo).port}`;
+    try {
+      const failed = await fetch(`${at}/01/09520123456788?email=alice%40example.com`, { redirect: "manual" });
+      expect(failed.status).toBe(500);
+      expect(await failed.text()).not.toContain("could not be had");
+      const metrics = await (await fetch(`${at}/metrics`)).text();
+      expect(metrics).toMatch(/^taggant_server_errors_total 1$/m);
+      expect(metrics, "a fault of the resolver's own counted as the caller's").toMatch(
+        /^taggant_bad_requests_total 0$/m,
+      );
+      // In the log with what went wrong, and without the caller's query.
+      expect(logged).toEqual([
+        expect.objectContaining({ type: "problem", status: 500, path: "/01/09520123456788" }),
+      ]);
+      expect(JSON.stringify(logged)).toContain("could not be had");
+    } finally {
+      await new Promise<void>((resolve) => faulty.close(() => resolve()));
+    }
+  });
 });
 
 describe("what a stranger can put in a header", () => {
-  it("encodes the path prefix, which is the part the caller writes", async () => {
-    // The identifier parts were always encoded; the prefix in front of them was not, and
-    // it goes into a Link header and into the subject of every fact in a linkset.
-    const response = await get("/%22%3E%3Cscript%3E/01/09520123456788");
+  it("publishes nothing of the path the caller wrote in front of the identifier", async () => {
+    // This used to check that the prefix was encoded when it was published, which it was.
+    // What encoding does not fix: the prefix is the
+    // caller's, so `/attacker/chosen/stem/01/09520123456788` published
+    // `<origin>/attacker/chosen/stem/01/09520123456788` as that product's identity, under
+    // `owl:sameAs`, with an origin configured and doing nothing about it. It is not in the
+    // subject at all now, so the encoding question does not arise.
+    const response = await get("/%22%3E%3Cscript%3E/attacker/stem/01/09520123456788");
     const header = response.headers.get("link") ?? "";
     expect(header).not.toContain('"><script>');
-    expect(header).toContain("%22%3E%3Cscript%3E");
+    expect(header).not.toContain("%22%3E%3Cscript%3E");
+    expect(header).not.toContain("attacker");
+    expect(header).toContain("/01/09520123456788");
+
+    // And in the linkset, whose every anchor is a subject too.
+    const linkset = (await (await get("/attacker/stem/01/09520123456788?linkType=linkset")).json()) as {
+      linkset: Array<{ anchor: string }>;
+    };
+    expect(linkset.linkset.map((entry) => entry.anchor)).toEqual(["http://localhost/01/09520123456788"]);
   });
 
   it("answers a path carrying a line break rather than failing on it", async () => {
@@ -170,6 +560,236 @@ describe("what a stranger can put in a header", () => {
     const response = await get("/a%0d%0aX-Injected:%20yes/01/09520123456788");
     expect(response.status).toBe(307);
     expect(response.headers.get("x-injected")).toBeNull();
+  });
+
+  it("publishes nothing a Host header says, over a raw socket that can actually send one", async () => {
+    // `fetch` silently replaces a caller-set `host`, which is why the test this replaces
+    // could not fail for its own reason: the header never left
+    // the client, and sent raw, `Host: evil.example` was published as the
+    // linkset anchor, in all three `Link` references including `owl:sameAs`, and as
+    // `resolverRoot` in the description file. A socket, therefore, not `fetch`.
+    const raw = async (path: string, host: string): Promise<string> => {
+      const { connect } = await import("node:net");
+      const url = new URL(origin);
+      return await new Promise<string>((settle, fail) => {
+        const socket = connect(Number(url.port), url.hostname, () => {
+          socket.write(`GET ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+        });
+        const chunks: Buffer[] = [];
+        socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+        socket.on("error", fail);
+        socket.on("end", () => settle(Buffer.concat(chunks).toString("utf8")));
+      });
+    };
+
+    const linkset = await raw("/01/09520123456788?linkType=linkset", "evil.example");
+    expect(linkset).toContain("200 OK");
+    expect(linkset, "a Host header reached the subject").not.toContain("evil.example");
+    const described = await raw("/.well-known/gs1resolver", "evil.example");
+    expect(described, "a Host header reached the description file").not.toContain("evil.example");
+  });
+
+  it("answers a Host that is not a host with a refusal rather than a 500", async () => {
+    // The request target was parsed against `http://${request.headers.host}`, so a Host
+    // that `URL` rejects threw before anything was validated and became a 500, which also
+    // moved no counter and left readiness green. Nothing reads the host now.
+    const { connect } = await import("node:net");
+    const url = new URL(origin);
+    const statuses: string[] = [];
+    for (const host of ["::1", "[", "a b", "%", "@", "evil.example:99999"]) {
+      const answer = await new Promise<string>((settle, fail) => {
+        const socket = connect(Number(url.port), url.hostname, () => {
+          socket.write(`GET /01/09520123456788 HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\n\r\n`);
+        });
+        const chunks: Buffer[] = [];
+        socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+        socket.on("error", fail);
+        socket.on("end", () => settle(Buffer.concat(chunks).toString("utf8").split("\r\n")[0] ?? ""));
+      });
+      statuses.push(answer);
+    }
+    expect(
+      statuses.filter((line) => line.includes("500")),
+      statuses.join(" | "),
+    ).toEqual([]);
+  });
+
+  it("answers a request target that is not a URL with a counted refusal rather than a 500", async () => {
+    // HTTP/1.1 allows a target in absolute form, and a proxy sends one. The base a target is
+    // parsed against does not apply to it, so a malformed one threw into a 500 that moved no
+    // counter. Sent over a socket, because a client library refuses to send these at all.
+    const { connect } = await import("node:net");
+    const url = new URL(origin);
+    const statusOf = (target: string) =>
+      new Promise<string>((settle, fail) => {
+        const socket = connect(Number(url.port), url.hostname, () => {
+          socket.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+        });
+        const chunks: Buffer[] = [];
+        socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+        socket.on("error", fail);
+        socket.on("end", () => settle(Buffer.concat(chunks).toString("utf8").split("\r\n")[0] ?? ""));
+      });
+    const counter = async (name: string): Promise<number> => {
+      const line = (await (await get("/metrics")).text())
+        .split("\n")
+        .find((each) => each.startsWith(`${name} `));
+      return Number(line?.slice(name.length + 1));
+    };
+    const bad = await counter("taggant_bad_requests_total");
+    const faults = await counter("taggant_server_errors_total");
+
+    const targets = [
+      "http://[/01/09520123456788",
+      "http://a:99999/01/09520123456788",
+      "http://exa%00mple/01/09520123456788",
+      "https://[::1/01/09520123456788",
+      // A target in absolute form can carry a user name and password, a query and a fragment,
+      // and none of them is logged: this was, whole, until only the query was dropped.
+      "http://alice%40example.com:secret@[/01/09520123456788?email=bob%40example.com#carol",
+      // And a fragment with no query before it, which cutting at the query alone would keep.
+      "http://[/01/09520123456788#dave",
+    ];
+    for (const target of targets) {
+      expect(await statusOf(target), target).toContain(" 400 ");
+    }
+    expect(await counter("taggant_bad_requests_total")).toBe(bad + targets.length);
+    expect(await counter("taggant_server_errors_total")).toBe(faults);
+    // Each one recorded as a problem, with the target as asked and nothing of the caller's.
+    const problems = events.filter((event) => event.type === "problem");
+    expect(problems.length).toBe(targets.length);
+    expect(problems.slice(-2).map((event) => (event.type === "problem" ? event.path : ""))).toEqual([
+      "http://[/01/09520123456788",
+      "http://[/01/09520123456788",
+    ]);
+    expect(JSON.stringify(problems)).not.toMatch(/alice|secret|bob|carol|dave/);
+    // And a well formed one in absolute form is answered from its path, as it was.
+    expect(await statusOf("http://id.example.com/01/09520123456788")).toContain(" 307 ");
+  });
+
+  it("reads a path that starts with two slashes as a path, and logs no user name from one", async () => {
+    // Resolved against the base, `//01/09520123456788`, which is what a browser sends for a code
+    // printed with its slash doubled, was a reference to a host called `01`: the identifier lost
+    // its first segment and the scan was refused. And a target reading `//name:password@host/`,
+    // or the same after `/\`, was an authority to the parser, so it threw, and the problem line
+    // carried it whole, user name and password with it.
+    const { connect } = await import("node:net");
+    const url = new URL(origin);
+    const statusOf = (target: string) =>
+      new Promise<string>((settle, fail) => {
+        const socket = connect(Number(url.port), url.hostname, () => {
+          socket.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+        });
+        const chunks: Buffer[] = [];
+        socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+        socket.on("error", fail);
+        socket.on("end", () => settle(Buffer.concat(chunks).toString("utf8").split("\r\n")[0] ?? ""));
+      });
+    for (const target of ["//01/09520123456788", "/\\01/09520123456788"]) {
+      expect(await statusOf(target), target).toContain(" 307 ");
+    }
+    expect(scans().map((event) => (event.type === "scan" ? event.identifier : ""))).toEqual([
+      "/01/09520123456788",
+      "/01/09520123456788",
+    ]);
+
+    events.length = 0;
+    for (const target of [
+      "//alice%40example.com:secret@[/01/09520123456788",
+      "//bob%40example.com:hunter2@id.example.com:99999/01/09520123456788",
+      "/\\carol%40example.com:pa55word@[/01/09520123456788",
+      "//dave%40example.com:letmein@[/nothing/here",
+    ]) {
+      expect(await statusOf(target), target).toMatch(/ (307|400) /);
+    }
+    const lines = JSON.stringify(events);
+    expect(events.length, "nothing was recorded, so nothing was inspected").toBe(4);
+    expect(lines).not.toMatch(/alice|secret|bob|hunter2|carol|pa55word|dave|letmein/);
+
+    // A parser reads an authority after two or more slashes or backslashes as readily as after
+    // two, and after a scheme followed by any number. Each of these is refused, so each reaches
+    // the line that logs it, and that line keeps the rest of the target and loses the credentials.
+    events.length = 0;
+    const backslash = String.fromCharCode(92);
+    const credentials = "erin%40example.com:secret@";
+    const refused: Array<[string, string]> = [
+      [`///${credentials}id.example.com/nothing/here`, "///id.example.com/nothing/here"],
+      [`////${credentials}id.example.com/nothing/here`, "////id.example.com/nothing/here"],
+      [`/${backslash}/${credentials}id.example.com/nothing/here`, "///id.example.com/nothing/here"],
+      [`//${backslash}${credentials}id.example.com/nothing/here`, "///id.example.com/nothing/here"],
+      [
+        `/${backslash}${backslash}${credentials}id.example.com/nothing/here`,
+        "///id.example.com/nothing/here",
+      ],
+      [`http:///${credentials}[/01/09520123456788`, "http:///[/01/09520123456788"],
+      [`http:////${credentials}[/01/09520123456788`, "http:////[/01/09520123456788"],
+    ];
+    for (const [target] of refused) {
+      expect(await statusOf(target), target).toContain(" 400 ");
+    }
+    expect(events.map((event) => (event.type === "problem" ? event.path : event.type))).toEqual(
+      refused.map(([, logged]) => logged),
+    );
+    expect(JSON.stringify(events)).not.toMatch(/erin|secret/);
+  });
+
+  it("cuts credentials from a target however a parser would find them, and keeps what follows", () => {
+    // The spellings no request reaches the log with, because Node's own parser refuses them or
+    // reads the target as a path first, and which a line for a target the parser cannot read
+    // would still carry as sent.
+    const backslash = String.fromCharCode(92);
+    expect(loggable("http:alice:secret@id.example.com/01/09520123456788")).toBe(
+      "http:id.example.com/01/09520123456788",
+    );
+    expect(loggable(`https:${backslash}${backslash}alice:secret@id.example.com/x`)).toBe(
+      `https:${backslash}${backslash}id.example.com/x`,
+    );
+    expect(loggable(`${backslash}${backslash}alice:secret@id.example.com/x`)).toBe(
+      `${backslash}${backslash}id.example.com/x`,
+    );
+    expect(loggable("//alice:secret@[/01/09520123456788?email=bob%40example.com#carol")).toBe(
+      "//[/01/09520123456788",
+    );
+    // An `@` past the first segment is in a path, where no parser reads a user name.
+    for (const left of [
+      "/01/09520123456788",
+      "/nothing/@here",
+      "/a//b:c@d",
+      `//id.example.com${backslash}path@x`,
+      "http://id.example.com/01/09520123456788",
+    ]) {
+      expect(loggable(left)).toBe(left);
+    }
+    // The cut errs towards cutting: after any scheme, what comes before an `@` goes.
+    expect(loggable("mailto:alice@example.com")).toBe("mailto:example.com");
+  });
+
+  it("says what it counts as a bad request, which is not a request the HTTP parser refused", async () => {
+    // The help text said every request that could not be read as a Digital Link, and a request
+    // the parser refuses never reaches the resolver: a space in the target, or a header with no
+    // name, is answered 400 by Node and moves nothing. The text says so now, and this holds it to it.
+    const { connect } = await import("node:net");
+    const url = new URL(origin);
+    const metrics = async (): Promise<string> => (await get("/metrics")).text();
+    const counted = (text: string): number =>
+      Number(text.match(/^taggant_bad_requests_total (\d+)$/m)?.[1] ?? Number.NaN);
+    const before = await metrics();
+    expect(before).toMatch(/# HELP taggant_bad_requests_total .*HTTP parser refuses.*not counted/);
+    for (const request of [
+      "GET /01/0952 0123456788 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+      "GET /01/09520123456788 HTTP/1.1\r\nHost: 127.0.0.1\r\n: no name\r\n\r\n",
+    ]) {
+      const first = await new Promise<string>((settle, fail) => {
+        const socket = connect(Number(url.port), url.hostname, () => socket.write(request));
+        const chunks: Buffer[] = [];
+        socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+        socket.on("error", fail);
+        socket.on("close", () => settle(Buffer.concat(chunks).toString("utf8").split("\r\n")[0] ?? ""));
+      });
+      expect(first, JSON.stringify(request)).toContain(" 400 ");
+    }
+    expect(counted(await metrics())).toBe(counted(before));
+    expect(events).toEqual([]);
   });
 
   it("never puts an internal error message in a response", async () => {
@@ -288,6 +908,468 @@ describe("a table an operator wrote by hand", () => {
           entries: { "/01/09520123456788": [{ href, linkType: "gs1:pip", title: "T" }] },
         }),
       ).toThrow(/absolute address|not http or https/);
+    }
+  });
+});
+
+describe("what a link answers with", () => {
+  /** A resolver over a table nobody checked, listening on a free port, and how to stop it. */
+  async function serve(entries: Record<string, unknown[]>, seen: Event[] = []) {
+    const resolver = createResolver({
+      table: { version: 1, entries } as LinkTable,
+      events: (event) => seen.push(event),
+    });
+    await new Promise<void>((resolve) => resolver.listen(0, "127.0.0.1", resolve));
+    const at = `http://127.0.0.1:${(resolver.address() as AddressInfo).port}`;
+    const close = () => new Promise<void>((resolve) => resolver.close(() => resolve()));
+    return { at, close };
+  }
+
+  /** The status line and the Location of a request sent over a socket, as it is written. */
+  function rawGet(at: string, target: string): Promise<{ status: string; location: string | null }> {
+    const url = new URL(at);
+    return new Promise((settle, fail) => {
+      const socket = connect(Number(url.port), url.hostname, () => {
+        socket.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`);
+      });
+      const chunks: Buffer[] = [];
+      socket.on("data", (chunk: Buffer) => chunks.push(chunk));
+      socket.on("error", fail);
+      socket.on("end", () => {
+        const lines = Buffer.concat(chunks).toString("utf8").split("\r\n");
+        const location = lines.find((line) => line.toLowerCase().startsWith("location: "));
+        settle({ status: lines[0] ?? "", location: location?.slice("location: ".length) ?? null });
+      });
+    });
+  }
+
+  it("sends the published address with the request's pairs after its own query, which it leaves as written", async () => {
+    // Appended as a form encodes them, the request's pairs rewrote the href's own query as well:
+    // `a=1;b=2` was sent as `a=1%3Bb%3D2`, a different address, and `%20` as `+`.
+    const href = "https://a.example/p?a=1;b=2&q=red%20shoes&flag&t=~&p=%2b";
+    const seen: Event[] = [];
+    const { at, close } = await serve(
+      { "/01/09520123456788": [{ href, linkType: "gs1:pip", title: "P", default: true }] },
+      seen,
+    );
+    try {
+      const sent = await rawGet(at, "/01/09520123456788?utm_source=print&linkType=gs1:pip&ref=a%20b");
+      expect(sent.status).toContain(" 307 ");
+      expect(sent.location).toBe(`${href}&utm_source=print&ref=a%20b`);
+      // Without pairs of its own, or with only the instruction to the resolver, the address alone.
+      expect((await rawGet(at, "/01/09520123456788")).location).toBe(href);
+      expect((await rawGet(at, "/01/09520123456788?linkType=gs1:pip")).location).toBe(href);
+      const linkset = (await (
+        await fetch(`${at}/01/09520123456788`, { headers: { accept: "application/linkset+json" } })
+      ).json()) as { linkset: Array<Record<string, Array<{ href: string }>>> };
+      expect(linkset.linkset[0]?.["https://gs1.org/voc/pip"]?.[0]?.href).toBe(href);
+      const redirect = seen.find((event) => event.type === "scan" && event.outcome === "redirect");
+      expect(redirect?.type === "scan" ? redirect.target : undefined).toBe(href);
+    } finally {
+      await close();
+    }
+  });
+
+  it("carries a query on after an href's query however it ends, and reads its pairs as the resolver does", async () => {
+    const seen: Event[] = [];
+    const { at, close } = await serve(
+      {
+        "/01/09520123456788": [
+          { href: "https://a.example/p?", linkType: "gs1:pip", title: "P", default: true },
+          { href: "https://a.example/r?a=1&", linkType: "gs1:recipeInfo", title: "R" },
+        ],
+      },
+      seen,
+    );
+    try {
+      // An empty query is part of the published address, so a scan with nothing to add is sent it.
+      expect((await rawGet(at, "/01/09520123456788")).location).toBe("https://a.example/p?");
+      expect((await rawGet(at, "/01/09520123456788?utm=1")).location).toBe("https://a.example/p?utm=1");
+      // One `&` between the href's query and the request's, not two.
+      expect((await rawGet(at, "/01/09520123456788?linkType=gs1:recipeInfo&utm=1")).location).toBe(
+        "https://a.example/r?a=1&utm=1",
+      );
+      // `?linkType` after a second `?` is not the resolver's `linkType`: it chooses nothing, so it
+      // is carried on as the scan wrote it rather than left out.
+      expect((await rawGet(at, "/01/09520123456788??linkType=gs1:recipeInfo&utm=1")).location).toBe(
+        "https://a.example/p??linkType=gs1:recipeInfo&utm=1",
+      );
+      const last = seen.at(-1);
+      expect(last?.type === "scan" ? last.requested : "a scan").toBeUndefined();
+    } finally {
+      await close();
+    }
+  });
+
+  it("keeps one page listed once for each language, with the default on either", async () => {
+    // Taken for copies of each other, the second was dropped and its default with it: every plain
+    // scan of the code answered that no default was set, while readiness said ready.
+    const { at, close } = await serve({
+      "/01/09520123456788": [
+        { href: "https://a.example/p", linkType: "gs1:pip", title: "Product", hreflang: ["en"] },
+        {
+          href: "https://a.example/p",
+          linkType: "gs1:pip",
+          title: "Produit",
+          hreflang: ["fr"],
+          default: true,
+        },
+      ],
+    });
+    try {
+      const scan = await fetch(`${at}/01/09520123456788`, { redirect: "manual" });
+      expect(scan.status).toBe(307);
+      expect(scan.headers.get("location")).toBe("https://a.example/p");
+      const linkset = (await (
+        await fetch(`${at}/01/09520123456788`, { headers: { accept: "application/linkset+json" } })
+      ).json()) as { linkset: Array<Record<string, Array<{ hreflang?: string[] }>>> };
+      expect(linkset.linkset[0]?.["https://gs1.org/voc/pip"]?.map((target) => target.hreflang)).toEqual([
+        ["en"],
+        ["fr"],
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  it("lists a link written twice once, though its address is spelled two ways", async () => {
+    // Every href is published as its address, so two spellings of one address with every other
+    // field the same were the same link twice in the linkset.
+    const { at, close } = await serve({
+      "/01/09520123456788": [
+        { href: "https://a.example/p", linkType: "gs1:pip", title: "Product", default: true },
+        { href: "https://b.example", linkType: "gs1:recipeInfo", title: "Recipes" },
+        { href: "https://b.example/", linkType: "gs1:recipeInfo", title: "Recipes" },
+      ],
+    });
+    try {
+      const linkset = (await (
+        await fetch(`${at}/01/09520123456788`, { headers: { accept: "application/linkset+json" } })
+      ).json()) as { linkset: Array<Record<string, Array<{ href: string }>>> };
+      expect(linkset.linkset[0]?.["https://gs1.org/voc/recipeInfo"]?.map((target) => target.href)).toEqual([
+        "https://b.example/",
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  it("keeps two links apart by any one field published for them", async () => {
+    // A copy is every published field the same, so each field alone tells two links apart: a
+    // second href, title, language, media type or link type is a second link, listed as one.
+    const first = {
+      href: "https://a.example/r",
+      linkType: "gs1:recipeInfo",
+      title: "R",
+      hreflang: ["en"],
+      type: "text/html",
+    };
+    const recipes = "https://gs1.org/voc/recipeInfo";
+    const cases: [string, Record<string, unknown>, Record<string, number>][] = [
+      // what differs, the second link, how many each relation lists
+      ["href", { ...first, href: "https://a.example/s" }, { [recipes]: 2 }],
+      ["title", { ...first, title: "R again" }, { [recipes]: 2 }],
+      ["languages", { ...first, hreflang: ["fr"] }, { [recipes]: 2 }],
+      ["media type", { ...first, type: "application/pdf" }, { [recipes]: 2 }],
+      ["link type", { ...first, linkType: "gs1:pip" }, { [recipes]: 1, "https://gs1.org/voc/pip": 1 }],
+    ];
+    for (const [differs, second, listed] of cases) {
+      const { at, close } = await serve({ "/01/09520123456788": [first, second] });
+      try {
+        const linkset = (await (
+          await fetch(`${at}/01/09520123456788`, { headers: { accept: "application/linkset+json" } })
+        ).json()) as { linkset: Array<Record<string, unknown[]>> };
+        for (const [relation, count] of Object.entries(listed)) {
+          expect(linkset.linkset[0]?.[relation]?.length, `${differs}: ${relation}`).toBe(count);
+        }
+      } finally {
+        await close();
+      }
+    }
+  });
+
+  it("takes a link written twice as one, and as the default when either copy is marked", async () => {
+    // Whether a link is the default is not in its own published entry, so two copies that differ
+    // only there were listed twice under their type; kept as one, the mark goes with it.
+    const plain = { href: "https://b.example", linkType: "gs1:pip", title: "P" };
+    const marked = { href: "https://b.example/", linkType: "gs1:pip", title: "P", default: true };
+    for (const order of [
+      [plain, marked],
+      [marked, plain],
+    ]) {
+      const { at, close } = await serve({ "/01/09520123456788": order });
+      try {
+        const scan = await fetch(`${at}/01/09520123456788`, { redirect: "manual" });
+        expect(scan.status).toBe(307);
+        expect(scan.headers.get("location")).toBe("https://b.example/");
+        const linkset = (await (
+          await fetch(`${at}/01/09520123456788`, { headers: { accept: "application/linkset+json" } })
+        ).json()) as { linkset: Array<Record<string, unknown[]>> };
+        expect(linkset.linkset[0]?.["https://gs1.org/voc/pip"]).toEqual([
+          { href: "https://b.example/", title: "P" },
+        ]);
+        expect(linkset.linkset[0]?.["https://gs1.org/voc/defaultLink"]).toEqual([
+          { href: "https://b.example/", title: "P" },
+        ]);
+      } finally {
+        await close();
+      }
+    }
+  });
+
+  it("answers from a table nobody checked as before, an href it cannot read published as written", async () => {
+    // Reading every href as an address made one that is not an address a failure of every answer
+    // about the code, the plain scan and the linkset included, where only a redirect to it fails.
+    const { at, close } = await serve({
+      "/01/09520123456788": [
+        { href: "https://a.example/good", linkType: "gs1:pip", title: "Good", default: true },
+        { href: "not an address", linkType: "gs1:recipeInfo", title: "Bad" },
+      ],
+    });
+    try {
+      const scan = await fetch(`${at}/01/09520123456788`, { redirect: "manual" });
+      expect(scan.status).toBe(307);
+      expect(scan.headers.get("location")).toBe("https://a.example/good");
+      const lot = await fetch(`${at}/01/09520123456788/10/ABC`, { redirect: "manual" });
+      expect(lot.status).toBe(307);
+      const linkset = await fetch(`${at}/01/09520123456788`, {
+        headers: { accept: "application/linkset+json" },
+      });
+      expect(linkset.status).toBe(200);
+      const body = (await linkset.json()) as { linkset: Array<Record<string, Array<{ href: string }>>> };
+      expect(body.linkset[0]?.["https://gs1.org/voc/recipeInfo"]?.[0]?.href).toBe("not an address");
+    } finally {
+      await close();
+    }
+  });
+
+  it("records the type asked for on a linkset and on a code with nothing linked to it", async () => {
+    const seen: Event[] = [];
+    const { at, close } = await serve(
+      {
+        "/01/09520123456788": [
+          { href: "https://a.example/p", linkType: "gs1:pip", title: "P", default: true },
+        ],
+      },
+      seen,
+    );
+    try {
+      await fetch(`${at}/01/09520123456702?linkType=gs1:pip`, { redirect: "manual" });
+      await fetch(`${at}/01/09520123456788?linkType=gs1:pip`, {
+        headers: { accept: "application/linkset+json" },
+      });
+      // `linkset` itself asks for the linkset, and is no link type of either kind.
+      await fetch(`${at}/01/09520123456788?linkType=linkset`);
+      expect(seen.map((event) => (event.type === "scan" ? [event.outcome, event.requested] : []))).toEqual([
+        ["unresolved", "gs1:pip"],
+        ["linkset", "gs1:pip"],
+        ["linkset", undefined],
+      ]);
+    } finally {
+      await close();
+    }
+  });
+
+  it("answers a request for gs1:defaultLink with the link marked as the default, whatever languages it names", async () => {
+    // The linkset publishes the default under that relation, and no link in a table is of it, so a
+    // request for it answered 404 while the linkset advertised it; and answered as a plain scan is,
+    // a French phone was sent to the French page, which the linkset publishes under its own type.
+    const seen: Event[] = [];
+    const { at, close } = await serve(
+      {
+        "/01/09520123456788": [
+          { href: "https://a.example/r", linkType: "gs1:recipeInfo", title: "R" },
+          { href: "https://a.example/en", linkType: "gs1:pip", title: "EN", hreflang: ["en"], default: true },
+          { href: "https://a.example/fr", linkType: "gs1:pip", title: "FR", hreflang: ["fr"] },
+        ],
+        "/01/09520123456788/10/LOT": [
+          { href: "https://a.example/lot-fr", linkType: "gs1:pip", title: "LOT", hreflang: ["fr"] },
+        ],
+        // A lot with a default of its own: the default at the most specific level that has one.
+        "/01/09520123456788/10/OWN": [
+          { href: "https://a.example/own", linkType: "gs1:pip", title: "OWN", default: true },
+        ],
+      },
+      seen,
+    );
+    try {
+      for (const asked of ["gs1:defaultLink", "https://gs1.org/voc/defaultLink"]) {
+        for (const [path, sent] of [
+          ["/01/09520123456788", "https://a.example/en"],
+          ["/01/09520123456788/10/LOT", "https://a.example/en"],
+          ["/01/09520123456788/10/OWN", "https://a.example/own"],
+        ]) {
+          const scan = await fetch(`${at}${path}?linkType=${encodeURIComponent(asked)}&utm=1`, {
+            redirect: "manual",
+            // English as well, the default's language, so a language recorded would have matched.
+            headers: { "accept-language": "fr, en" },
+          });
+          expect(scan.status, `${asked} ${path}`).toBe(307);
+          expect(scan.headers.get("location"), `${asked} ${path}`).toBe(`${sent}?utm=1`);
+        }
+      }
+      expect(seen.map((event) => (event.type === "scan" ? event.requested : null))).toEqual([
+        "gs1:defaultLink",
+        "gs1:defaultLink",
+        "gs1:defaultLink",
+        "https://gs1.org/voc/defaultLink",
+        "https://gs1.org/voc/defaultLink",
+        "https://gs1.org/voc/defaultLink",
+      ]);
+      // No language decided any of them, so none is recorded as having done so.
+      expect(seen.map((event) => (event.type === "scan" ? event.language : null))).toEqual(
+        Array(6).fill(undefined),
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  it("chooses a plain scan's language at the default's level and the levels more specific than it", async () => {
+    // Taken from every level, the default's siblings sent a French phone scanning a lot with a
+    // default of its own to the product's French page, while the lot's own link was the one its
+    // code had been pointed at. Taken from the default's level alone, a lot with a page of its own
+    // in the scanner's language, and no default, sent that phone to its product's page.
+    const seen: Event[] = [];
+    const { at, close } = await serve(
+      {
+        "/01/09520123456788": [
+          { href: "https://a.example/en", linkType: "gs1:pip", title: "EN", hreflang: ["en"], default: true },
+          { href: "https://a.example/fr", linkType: "gs1:pip", title: "FR", hreflang: ["fr"] },
+        ],
+        "/01/09520123456788/10/LOT": [
+          {
+            href: "https://a.example/lot",
+            linkType: "gs1:pip",
+            title: "LOT",
+            hreflang: ["fr"],
+            default: true,
+          },
+        ],
+        "/01/09520123456788/10/LOT2": [
+          { href: "https://a.example/lot2-de", linkType: "gs1:pip", title: "LOT2", hreflang: ["de"] },
+        ],
+      },
+      seen,
+    );
+    try {
+      const french = { redirect: "manual" as const, headers: { "accept-language": "fr" } };
+      const german = { redirect: "manual" as const, headers: { "accept-language": "de" } };
+      const none = { redirect: "manual" as const };
+      expect((await fetch(`${at}/01/09520123456788/10/LOT`, french)).headers.get("location")).toBe(
+        "https://a.example/lot",
+      );
+      // The lot's own link was the only one its languages chose among, so French decided nothing.
+      const lotScan = seen.find((event) => event.type === "scan");
+      expect(lotScan?.type === "scan" ? lotScan.language : null).toBeUndefined();
+      // The product's own scan still chooses among the product's languages.
+      expect((await fetch(`${at}/01/09520123456788`, french)).headers.get("location")).toBe(
+        "https://a.example/fr",
+      );
+      // A lot with no default of its own follows its product's, and its own page in the scanner's
+      // language answers before the product's; one in no language asked for leaves the default.
+      expect((await fetch(`${at}/01/09520123456788/10/LOT2`, german)).headers.get("location")).toBe(
+        "https://a.example/lot2-de",
+      );
+      expect((await fetch(`${at}/01/09520123456788/10/LOT2`, french)).headers.get("location")).toBe(
+        "https://a.example/fr",
+      );
+      expect((await fetch(`${at}/01/09520123456788/10/LOT2`, none)).headers.get("location")).toBe(
+        "https://a.example/en",
+      );
+    } finally {
+      await close();
+    }
+  });
+
+  it("cuts a long path on a problem line between characters, never inside one", async () => {
+    // At 512 characters the cut fell inside an escape, `%7`, or inside the bytes of one
+    // character, `%F0%9F`, so the line held a path that named no character there.
+    const seen: Event[] = [];
+    const { at, close } = await serve({}, seen);
+    try {
+      const cases: [string, string][] = [
+        // what is sent, what the line keeps
+        [`/nothing/${"a".repeat(501)}{{`, `/nothing/${"a".repeat(501)}`],
+        [`/nothing/${"a".repeat(499)}%F0%9F%98%80`, `/nothing/${"a".repeat(499)}`],
+        [`/nothing/${"a".repeat(491)}%F0%9F%98%80`, `/nothing/${"a".repeat(491)}%F0%9F%98%80`],
+      ];
+      // Characters of two, three and four bytes, one written in small letters as a client may,
+      // each cut after every byte but its last, where it goes, and just after its last, where it
+      // stays. "/nothing/" is nine characters, so after 503 - 3k letters the 512th character
+      // ends the kth byte.
+      for (const character of ["%C3%A9", "%E2%82%AC", "%e4%b8%ad", "%F0%9F%98%80"]) {
+        const bytes = character.length / 3;
+        for (let k = 1; k <= bytes; k++) {
+          const before = `/nothing/${"a".repeat(503 - 3 * k)}`;
+          cases.push([`${before}${character}b`, k < bytes ? before : `${before}${character}`]);
+        }
+      }
+      for (const [target, kept] of cases) {
+        seen.length = 0;
+        expect((await rawGet(at, target)).status).toContain(" 400 ");
+        const problem = seen.find((event) => event.type === "problem");
+        const path = problem?.type === "problem" ? problem.path : "";
+        expect(path, target.slice(-14)).toBe(kept);
+        expect(() => decodeURIComponent(path)).not.toThrow();
+        const whole = target.replaceAll("{", "%7B");
+        // A path that fits carries no count of what was left out.
+        expect(problem?.type === "problem" ? problem.omitted : undefined).toBe(
+          whole.length > kept.length ? whole.length - kept.length : undefined,
+        );
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  it("keeps a problem line short whatever the length of the path, and says how much it left out", async () => {
+    // Each brace is three characters once the parser escapes it, so a line holding every path
+    // whole was three times the length of the request that made it.
+    const seen: Event[] = [];
+    const { at, close } = await serve({}, seen);
+    try {
+      const target = `/nothing/${"{".repeat(2000)}`;
+      expect((await rawGet(at, target)).status).toContain(" 400 ");
+      const problem = seen.find((event) => event.type === "problem");
+      expect(problem?.type === "problem" ? problem.path : "").toBe(
+        // 512 falls inside an escape here, so the line stops before it, at 510.
+        `/nothing/${"%7B".repeat(2000)}`.slice(0, 510),
+      );
+      expect(problem?.type === "problem" ? problem.omitted : undefined).toBe(9 + 3 * 2000 - 510);
+      expect(JSON.stringify(problem).length).toBeLessThan(1000);
+      // A path that fits is whole, and says nothing was left out.
+      seen.length = 0;
+      await rawGet(at, "/nothing/here");
+      expect(seen[0]).toMatchObject({ type: "problem", path: "/nothing/here" });
+      expect(seen[0]).not.toHaveProperty("omitted");
+    } finally {
+      await close();
+    }
+  });
+
+  it("records the path of a failure it did not expect as every other problem line does", async () => {
+    // The line for a failure of the resolver's own carried the target as sent, so a target in
+    // absolute form was cut differently there than on the line for the same path refused.
+    const seen: Event[] = [];
+    const { at, close } = await serve(
+      {
+        "/01/09520123456788": [{ href: "not an address", linkType: "gs1:pip", title: "P", default: true }],
+      },
+      seen,
+    );
+    try {
+      const sent = await rawGet(
+        at,
+        "http://h.example//erin%40example.com:secret@x.example/01/09520123456788",
+      );
+      expect(sent.status).toContain(" 500 ");
+      expect(seen).toEqual([
+        expect.objectContaining({ type: "problem", status: 500, path: "//x.example/01/09520123456788" }),
+      ]);
+      expect(JSON.stringify(seen)).not.toMatch(/erin|secret/);
+    } finally {
+      await close();
     }
   });
 });

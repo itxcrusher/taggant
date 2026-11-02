@@ -1,8 +1,19 @@
 import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { watchTable } from "../src/table-source.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { parseTable, parseTableText } from "../src/links.js";
+import { stampFor, watchTable } from "../src/table-source.js";
+
+/** Every folder a test makes, removed after it, or each run leaves one per test behind. */
+const made: string[] = [];
+
+afterEach(async () => {
+  // Best effort: a folder Windows has not let go of yet is not a test failure.
+  for (const folder of made.splice(0)) {
+    await rm(folder, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+  }
+});
 
 /**
  * The two ways noticing a changed file goes wrong.
@@ -14,7 +25,28 @@ import { watchTable } from "../src/table-source.js";
  */
 
 async function scratch(): Promise<string> {
-  return join(await mkdtemp(join(tmpdir(), "table-source-")), "links.json");
+  const folder = await mkdtemp(join(tmpdir(), "table-source-"));
+  made.push(folder);
+  return join(folder, "links.json");
+}
+
+/**
+ * A rename over the table, retried as an editor's save is when Windows finds the file open: the
+ * watch reading the table holds it for a moment, and on a busy machine the rename met it there.
+ * The codes are the ones the console's own replacement of a file retries on Windows, the one
+ * system whose rename refuses a file another program holds open.
+ */
+async function renameOver(from: string, to: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!(code === "EPERM" || code === "EACCES" || code === "EBUSY") || attempt === 40) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
 }
 
 /** Wait for a condition rather than for a duration, so this is not a race. */
@@ -58,7 +90,7 @@ describe("noticing that the table changed", () => {
     });
 
     await writeFile(`${path}.writing`, "2");
-    await rename(`${path}.writing`, path);
+    await renameOver(`${path}.writing`, path);
     expect(await until(() => changes >= 1)).toBe(true);
 
     const afterSwap = changes;
@@ -68,17 +100,19 @@ describe("noticing that the table changed", () => {
     // And again, because one recovery could be luck.
     const afterEdit = changes;
     await writeFile(`${path}.writing`, "4");
-    await rename(`${path}.writing`, path);
+    await renameOver(`${path}.writing`, path);
     expect(await until(() => changes > afterEdit)).toBe(true);
     source.stop();
-  });
+    // Three waits of up to four seconds, one after another, which together outlast the runner's
+    // five-second default before the last could say what it waited for.
+  }, 30_000);
 
   it("notices without any file events at all, which is what a bind mount gives", async () => {
     // Measured against this project's compose stack on Docker Desktop: an edit on the host
     // produced no event inside the container, so the watch is a fast path and the timer is
     // the mechanism. Here the watch is never allowed to help: the file is created after the
     // source is already watching a directory that does not exist.
-    const path = join(await mkdtemp(join(tmpdir(), "table-source-")), "absent", "links.json");
+    const path = join(await scratch(), "..", "absent", "links.json");
     let changes = 0;
     const source = await watchTable(path, {
       pollMs: 50,
@@ -152,6 +186,67 @@ describe("noticing that the table changed", () => {
     source.stop();
   });
 
+  it("takes a save between the caller's read and the watch as a change", async () => {
+    // A caller stamps the file, reads it, then starts watching. A save landing after the read
+    // and before the watch's own first stamp was the state the watch started from: the older
+    // table was served, the stamp matched the newer file, and nothing would ever report a
+    // change. The stamp taken before the read is passed in, so that save is one.
+    const path = await scratch();
+    await writeFile(path, "1");
+    const since = await stampFor(path);
+    await writeFile(path, "22");
+    let changes = 0;
+    const source = await watchTable(path, {
+      since,
+      pollMs: 60_000,
+      onChange: () => {
+        changes++;
+      },
+    });
+    await source.check();
+    expect(await until(() => changes >= 1, 2000), "the save before the watch was never seen").toBe(true);
+    source.stop();
+  });
+
+  it("finishes a change it is handling before it says it has stopped, and starts none after", async () => {
+    // A reload in flight went on after the stop: the command line read the table and said it had
+    // reloaded it after the stop it hands a caller had resolved, every time, against a large table.
+    const path = await scratch();
+    await writeFile(path, "1");
+    let release: () => void = () => undefined;
+    const handling = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let begun = 0;
+    let finished = 0;
+    const source = await watchTable(path, {
+      pollMs: 20,
+      onChange: async () => {
+        begun++;
+        await handling;
+        finished++;
+      },
+    });
+    await writeFile(path, "22");
+    expect(await until(() => begun === 1), "the change was never noticed").toBe(true);
+    let stopped = false;
+    const stopping = source.stop().then(() => {
+      stopped = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(stopped, "the stop resolved while a change was still being handled").toBe(false);
+    release();
+    await stopping;
+    expect(finished).toBe(1);
+    await writeFile(path, "333");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(begun, "a change was handled after the stop").toBe(1);
+    // Nor does a check asked for after the stop, though the file has changed since: the timer and
+    // the watch are gone by then, so this is the only way one could begin.
+    expect(await source.check(), "a check after the stop found the change").toBe(false);
+    expect(begun, "a check after the stop handled the change").toBe(1);
+  });
+
   it("stops when it is stopped", async () => {
     const path = await scratch();
     await writeFile(path, "1");
@@ -166,5 +261,327 @@ describe("noticing that the table changed", () => {
     await writeFile(path, "2");
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(changes).toBe(0);
+  });
+});
+
+describe("what a table may not say", () => {
+  it("refuses a media type in time however many empty parameters it holds", () => {
+    // Spaces that can belong to two places make a pattern's time grow with every ` ; ` added: a
+    // second to refuse sixteen of them and an `x`, and the table is checked before the resolver
+    // starts. The first value takes the measured second where the spaces are ambiguous.
+    const link = { href: "https://a.example/", linkType: "gs1:pip", title: "A", default: true };
+    for (const type of [`text/html${" ; ".repeat(16)}x`, `text/html${" ; ".repeat(100_000)}x`]) {
+      // The processor's time this process spends, not the clock's: on a busy machine the clock ran
+      // on while the parse waited its turn, and even the fastest of three runs failed the bound with
+      // nothing wrong, where the processor's time is the pattern's own. The fastest of three still,
+      // for what else the process does meanwhile, such as collecting garbage.
+      const runs = [0, 1, 2].map(() => {
+        const started = process.cpuUsage();
+        expect(() =>
+          parseTable({ version: 1, entries: { "/01/09520123456788": [{ ...link, type }] } }),
+        ).toThrow(/not a media type/);
+        const used = process.cpuUsage(started);
+        return (used.user + used.system) / 1000;
+      });
+      expect(Math.min(...runs), `${type.length} characters`).toBeLessThan(250);
+    }
+  });
+
+  it("reads a table saved with a byte-order mark as one without it", () => {
+    // RFC 8259 lets a reader drop the mark, and an editor that saves UTF-8 with one in front wrote
+    // a table the resolver would not start on, naming a character nobody can see.
+    const text = JSON.stringify({
+      version: 1,
+      entries: {
+        "/01/09520123456788": [
+          { href: "https://a.example/", linkType: "gs1:pip", title: "A", default: true },
+        ],
+      },
+    });
+    expect(parseTableText(`${String.fromCharCode(0xfeff)}${text}`)).toEqual(parseTableText(text));
+  });
+
+  it("refuses two default links of one type under one identifier", () => {
+    // Both were accepted, the resolver followed the first, and the linkset published both
+    // as `gs1:defaultLink`, so a client reading the linkset and a client following a plain
+    // scan disagreed about the same printed code, with nothing saying so.
+    expect(() =>
+      parseTable({
+        version: 1,
+        entries: {
+          "/01/09520123456788": [
+            { href: "https://a.example/", linkType: "gs1:pip", title: "A", default: true },
+            { href: "https://b.example/", linkType: "gs1:pip", title: "B", default: true },
+          ],
+        },
+      }),
+    ).toThrow(/two default links/);
+  });
+
+  it("refuses two default links of different types under one identifier", () => {
+    // The linkset publishes every link marked as the default as `gs1:defaultLink` and a plain scan
+    // follows one, so two of different types disagreed exactly as two of one type did.
+    expect(() =>
+      parseTable({
+        version: 1,
+        entries: {
+          "/01/09520123456788": [
+            { href: "https://a.example/r", linkType: "gs1:recipeInfo", title: "R", default: true },
+            { href: "https://a.example/p", linkType: "gs1:pip", title: "P", default: true },
+          ],
+        },
+      }),
+    ).toThrow(/two default links, of types "gs1:recipeInfo" and "gs1:pip"/);
+    // One at each level is one for each identifier, and stays.
+    expect(() =>
+      parseTable({
+        version: 1,
+        entries: {
+          "/01/09520123456788": [
+            { href: "https://a.example/p", linkType: "gs1:pip", title: "P", default: true },
+          ],
+          "/01/09520123456788/10/ABC": [
+            { href: "https://a.example/r", linkType: "gs1:recipeInfo", title: "R", default: true },
+          ],
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("takes a link written twice with both copies marked as one default", () => {
+    // The resolver takes the two for one link, so the table check does too: refused, both copies
+    // marked was called two defaults of one type.
+    for (const second of ["https://a.example/p", "https://a.example:443/p"]) {
+      expect(() =>
+        parseTable({
+          version: 1,
+          entries: {
+            "/01/09520123456788": [
+              { href: "https://a.example/p", linkType: "gs1:pip", title: "P", default: true },
+              { href: second, linkType: "gs1:pip", title: "P", default: true },
+            ],
+          },
+        }),
+      ).not.toThrow();
+    }
+    // A copy differing in a field it publishes is another link, and two defaults.
+    expect(() =>
+      parseTable({
+        version: 1,
+        entries: {
+          "/01/09520123456788": [
+            { href: "https://a.example/p", linkType: "gs1:pip", title: "P", default: true },
+            { href: "https://a.example/p", linkType: "gs1:pip", title: "Q", default: true },
+          ],
+        },
+      }),
+    ).toThrow(/two default links/);
+  });
+
+  it("says to move a key's links into its canonical form where the table holds that already", () => {
+    // Told to write the key in its canonical form, an operator whose table held that key already
+    // wrote it twice, and the table could not be read at all.
+    const link = { href: "https://a.example/p", linkType: "gs1:pip", title: "P", default: true };
+    expect(() =>
+      parseTable({ version: 1, entries: { "/01/09520123456788": [link], "/01/9520123456788": [link] } }),
+    ).toThrow(
+      /the key "\/01\/9520123456788" is not in its canonical form and could never be reached, and the table holds "\/01\/09520123456788" already: move its links into that entry and remove this key/,
+    );
+    expect(() => parseTable({ version: 1, entries: { "/01/9520123456788": [link] } })).toThrow(
+      /Write it as "\/01\/09520123456788"/,
+    );
+  });
+
+  it("refuses a table that writes one key twice in an object, which a reader keeps only the last of", () => {
+    // An identifier written twice lost every link under its first, its certification link
+    // answering 404 while the table was called ready; a field written twice lost its first value.
+    const link = '{"href":"https://a.example/p","linkType":"gs1:pip","title":"P","default":true}';
+    const cert = '{"href":"https://a.example/c","linkType":"gs1:certificationInfo","title":"C"}';
+    for (const [text, said] of [
+      [
+        `{"version":1,"entries":{"/01/09520123456788":[${cert}],"/01/09520123456788":[${link}]}}`,
+        /"\/01\/09520123456788" twice in one object, "entries"/,
+      ],
+      [
+        `{"version":1,"entries":{"/01/09520123456788":[{"href":"https://a.example/p","href":"https://b.example/","linkType":"gs1:pip","title":"P"}]}}`,
+        /"href" twice in one object, a link under "\/01\/09520123456788",/,
+      ],
+      // The same key spelled with an escape is the same key to a reader. Two backslashes, so the
+      // escape reaches the JSON text rather than being read by JavaScript first.
+      [
+        `{"version":1,"entries":{"/01/09520123456788":[${link}],"\\u002F01/09520123456788":[${cert}]}}`,
+        /"\/01\/09520123456788" twice in one object, "entries"/,
+      ],
+      [
+        `{"version":1,"entries":{"/01/09520123456788":[{"href":"https://a.example/p","\\u0068ref":"https://b.example/","linkType":"gs1:pip","title":"P"}]}}`,
+        /"href" twice in one object, a link under "\/01\/09520123456788",/,
+      ],
+      // A second link under the code, holding its title twice, is named by the code it is under.
+      [
+        `{"version":1,"entries":{"/01/09520123456788":[${cert},{"href":"https://a.example/q","linkType":"gs1:pip","title":"Q","title":"R"}]}}`,
+        /"title" twice in one object, a link under "\/01\/09520123456788",/,
+      ],
+      [`{"version":1,"version":1,"entries":{}}`, /"version" twice in one object, and/],
+      // An object in any other list is not a link, and is not called one.
+      [
+        `{"version":1,"entries":{"/01/09520123456788":[{"href":"https://a.example/p","linkType":"gs1:pip","title":"P","hreflang":[{"k":1,"k":2}]}]}}`,
+        /"k" twice in one object, and/,
+      ],
+      [`{"version":1,"entries":[{"k":1,"k":2}]}`, /"k" twice in one object, and/],
+      [`{"version":1,"entries":{},"extra":[{"k":1,"k":2}]}`, /"k" twice in one object, and/],
+      [`{"version":1,"entries":{"/01/09520123456788":[[{"k":1,"k":2}]]}}`, /"k" twice in one object, and/],
+      [`{"version":1,"entries":{},"extra":{"k":[{"a":1,"a":2}]}}`, /"a" twice in one object, and/],
+      // An object under a code that is not in a list is named by its own key, not called a link.
+      [`{"version":1,"entries":{"/01/09520123456788":{"a":{"k":1,"k":2}}}}`, /"k" twice in one object, "a"/],
+    ] as const) {
+      expect(() => parseTableText(text), text.slice(0, 60)).toThrow(said);
+    }
+    // One key in each of two objects, and keys inside strings, are not written twice.
+    expect(() =>
+      parseTableText(
+        `{"version":1,"entries":{"/01/09520123456788":[${link},{"href":"https://a.example/q","linkType":"gs1:pip","title":"\\"href\\":\\"x\\""}]}}`,
+      ),
+    ).not.toThrow();
+  });
+
+  it("refuses a title holding a control character or a line break", () => {
+    // A title is for a person, shown by whatever reads the linkset to choose a link: a line break
+    // splits it wherever it is printed, and a line separator is invisible in the editor of
+    // whoever wrote the table.
+    // Built from code points rather than written as escapes. Written as escapes they have
+    // arrived in this file as the characters themselves twice, which the repository's own
+    // sweep for control characters in tracked files then refuses, correctly.
+    const cr = String.fromCharCode(13);
+    const lf = String.fromCharCode(10);
+    const nul = String.fromCharCode(0);
+    const lineSeparator = String.fromCharCode(0x2028);
+    for (const title of [`a${cr}${lf}X-Injected: yes`, `a${nul}b`, `a${lineSeparator}b`]) {
+      expect(() =>
+        parseTable({
+          version: 1,
+          entries: {
+            "/01/09520123456788": [{ href: "https://a.example/", linkType: "gs1:pip", title, default: true }],
+          },
+        }),
+      ).toThrow(/control character/);
+    }
+  });
+
+  it("refuses languages, a media type, a default, a link type or a title a scan could not be answered from", () => {
+    // The languages are searched for the one a phone asks in, and every browser sends one, so a
+    // list that was not a list of tags was a 500 on the commonest scan there is, at any identifier
+    // with two links of a type, while readiness said ready. A default written as a string was no
+    // default at all, so a plain scan of the code answered that none was set.
+    const link = { href: "https://a.example/", linkType: "gs1:pip", title: "A", default: true };
+    const table = (fields: Record<string, unknown>) => ({
+      version: 1,
+      entries: { "/01/09520123456788": [{ ...link, ...fields }] },
+    });
+    const refused: Array<[Record<string, unknown>, RegExp]> = [
+      [{ hreflang: "en" }, /not a list of language tags/],
+      [{ hreflang: [44] }, /not a list of language tags/],
+      [{ hreflang: [""] }, /not a list of language tags/],
+      [{ hreflang: ["en_US"] }, /not a list of language tags/],
+      [{ hreflang: ["en", null] }, /not a list of language tags/],
+      [{ hreflang: ["*"] }, /not a list of language tags/],
+      [{ type: 44 }, /not a media type/],
+      [{ type: "" }, /not a media type/],
+      [{ type: "html" }, /not a media type/],
+      // Spaces only where the grammar has them, after a `;`: not after the type or a parameter.
+      [{ type: "text/html  " }, /not a media type/],
+      [{ type: "text/html; a=b " }, /not a media type/],
+      [{ default: "true" }, /true or false/],
+      [{ default: 1 }, /true or false/],
+      // A media type broken across lines is not one, and a GS1 link type with no term names
+      // nothing in the vocabulary.
+      [{ type: `text/html${String.fromCharCode(10)}; charset=utf-8` }, /not a media type/],
+      [{ linkType: "gs1:" }, /names no term of the GS1 vocabulary/],
+      [{ linkType: "https://gs1.org/voc/" }, /names no term of the GS1 vocabulary/],
+      [{ linkType: "pip" }, /not a GS1 vocabulary term or an absolute URI/],
+      // Characters a URI cannot hold, and GS1 terms that are not words: each was accepted and
+      // published as a relation name.
+      [{ linkType: "urn:a<b>" }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: 'tag:x"y' }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: `urn:${String.fromCharCode(0xe9)}` }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: "urn:a%zz" }, /not a GS1 vocabulary term or an absolute URI/],
+      [{ linkType: "gs1:/" }, /names no term of the GS1 vocabulary/],
+      [{ linkType: "gs1:#" }, /names no term of the GS1 vocabulary/],
+      [{ linkType: "gs1:<pip>" }, /names no term of the GS1 vocabulary/],
+      [{ linkType: "https://gs1.org/voc/pip/x" }, /names no term of the GS1 vocabulary/],
+      // Absolute URIs, in GS1's namespace and naming no word of it.
+      [{ linkType: "https://gs1.org/voc/pip?v=2" }, /names no term of the GS1 vocabulary/],
+      [{ linkType: "https://gs1.org/voc/pip#x" }, /names no term of the GS1 vocabulary/],
+      // GS1's namespace written another way, which no request for the term finds.
+      [{ linkType: "HTTPS://gs1.org/voc/pip/x" }, /GS1's vocabulary written another way/],
+      [{ linkType: "https://GS1.ORG/voc/pip/x" }, /GS1's vocabulary written another way/],
+      [{ linkType: "https://gs1.org:443/voc/pip/x" }, /GS1's vocabulary written another way/],
+      [{ linkType: "https://gs1.org/%76oc/pip/x" }, /GS1's vocabulary written another way/],
+      [{ linkType: "HTTPS://GS1.ORG/voc/pip" }, /GS1's vocabulary written another way/],
+      [{ linkType: "http://gs1.org/voc/pip" }, /GS1's vocabulary written another way/],
+      [{ linkType: "GS1:pip/x" }, /GS1's vocabulary written another way/],
+      [{ linkType: "GS1:pip" }, /GS1's vocabulary written another way/],
+      // The vocabulary's own address without its last slash.
+      [{ linkType: "https://gs1.org/voc" }, /GS1's vocabulary written another way/],
+      // The type the resolver publishes for the default link, written in the table as well.
+      [{ linkType: "gs1:defaultLink" }, /publishes for the link marked/],
+      [{ linkType: "https://gs1.org/voc/defaultLink" }, /publishes for the link marked/],
+      // GS1's relation for one of several defaults, which a table writes as one default and the
+      // others of its type with their languages.
+      [{ linkType: "gs1:defaultLinkMulti" }, /names one of several defaults/],
+      [{ linkType: "https://gs1.org/voc/defaultLinkMulti" }, /names one of several defaults/],
+      // A field this format does not have, which was ignored: a misspelled default set none, and
+      // every plain scan of the code answered that no default was set.
+      [{ Default: true }, /does not have/],
+      [{ hrefLang: ["fr"] }, /does not have/],
+      [{ note: "for the spring range" }, /does not have/],
+      // The C1 controls are control characters too; U+0085 is a line break to some parsers.
+      [{ title: `a${String.fromCharCode(0x85)}b` }, /control character/],
+      [{ title: `a${String.fromCharCode(0x9b)}b` }, /control character/],
+      // An href with spaces round it, a tab or a line break inside, or another control character:
+      // `new URL` drops some of them in silence, and an href holding one is not written as the
+      // address it names. A space is caught as a space; the others only as control characters.
+      [{ href: " https://a.example/ " }, /space or a control character/],
+      [{ href: `https://a.example/a${String.fromCharCode(9)}b` }, /space or a control character/],
+      [{ href: `https://a.example/a${String.fromCharCode(10)}` }, /space or a control character/],
+      [{ href: "https://a.example/a b" }, /space or a control character/],
+      [{ href: `https://a.example/a${String.fromCharCode(1)}b` }, /space or a control character/],
+      [{ href: `https://a.example/a${String.fromCharCode(0x7f)}b` }, /space or a control character/],
+      [{ href: `https://a.example/a${String.fromCharCode(0x85)}b` }, /space or a control character/],
+    ];
+    for (const [fields, expected] of refused) {
+      expect(() => parseTable(table(fields)), JSON.stringify(fields)).toThrow(expected);
+    }
+    // And what a table does say is still read.
+    for (const fields of [
+      { href: "https://a.example/a%20b" },
+      // A zero-width non-joiner is part of how Persian is written, so a title holding one is kept.
+      { title: `mi${String.fromCharCode(0x200c)}khaham` },
+      { linkType: "urn:example:rel" },
+      { linkType: "tag:example.com,2026:manual" },
+      { hreflang: [] },
+      { hreflang: ["en", "fr-CA", "zh-Hant-TW", "es-419"] },
+      { type: "text/html" },
+      { type: "text/html; charset=utf-8" },
+      { type: 'text/html; charset="utf-8"' },
+      { type: "application/ld+json" },
+      // As RFC 9110 writes a media type: an empty parameter, an escaped quote, and a tab inside a
+      // quoted value. Each kept a resolver from starting.
+      { type: "text/html;" },
+      { type: 'text/html; title="a\\"b"' },
+      { type: `text/html; title="a${String.fromCharCode(9)}b"` },
+      { type: "text/html; " },
+      { linkType: "gs1:recipeInfo" },
+      { linkType: "https://gs1.org/voc/recipeInfo" },
+      { linkType: "https://example.com/voc/pip" },
+      // GS1's host and path under a scheme that is not the web's, another URI and no spelling of
+      // the vocabulary, and a path that only starts with its word.
+      { linkType: "ftp://gs1.org/voc/pip" },
+      { linkType: "https://gs1.org/vocabulary/pip" },
+      { linkType: "https://example.com/rels/manual?v=2#top" },
+      { linkType: "urn:example:a%20b" },
+      { default: false },
+    ]) {
+      expect(() => parseTable(table(fields)), JSON.stringify(fields)).not.toThrow();
+    }
   });
 });

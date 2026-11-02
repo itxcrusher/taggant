@@ -1,11 +1,14 @@
 {
   "name": "@taggant/resolver",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "bin": { "taggant-resolver": "./dist/cli.js" },
+  "bin": {
+    "taggant-resolver": "./dist/cli.js"
+  },
   "files": ["dist"],
   "scripts": {
     "build": "tsup src/index.ts src/cli.ts --format esm --dts --clean",

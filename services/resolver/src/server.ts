@@ -1,12 +1,24 @@
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
 import { DigitalLinkError, SUPPORTED_PRIMARY_KEYS, parseDigitalLink } from "./digital-link.js";
 import { Counters, type EventSink, jsonLines } from "./events.js";
-import { type LinkTable, candidatesFor, chooseLink } from "./links.js";
+import {
+  GS1_VOCAB,
+  type LinkTable,
+  candidatesFor,
+  chooseLink,
+  expandLinkType,
+  languageChoices,
+  languageMatch,
+  parseAcceptLanguage,
+  sameLinkType,
+} from "./links.js";
 import { CONTEXT, buildLinkset } from "./linkset.js";
+import { GS1_LINK_TYPES } from "./vocabulary.js";
 
 export interface ResolverOptions {
   /**
-   * The link table, or a way of asking for the current one.
+   * The link table, or a way of asking for the current one, checked by `parseTable` or
+   * `parseTableText`; a table that was not is answered from unchecked.
    *
    * A function, because the table is mounted from outside the process and the operator is
    * told to edit it. Read once at startup, editing it did nothing and readiness went on
@@ -20,11 +32,35 @@ export interface ResolverOptions {
   staleReason?: () => string | null;
   /**
    * The origin this resolver is reached at, used as the subject of the facts it presents.
-   * Taken from the Host header when it is not given, which is right for development and
-   * wrong behind a proxy, so a deployment should set it.
+   * When it is not given, the subject is `http://localhost`, never anything a request says,
+   * so a deployment sets it.
    */
   origin?: string;
 }
+
+/**
+ * The base the request target is parsed against, and nothing more.
+ *
+ * A name that cannot resolve, on a reserved top-level domain, so that anything which
+ * escaped into a response would be unmistakable rather than plausible. Only the path and
+ * the query are ever read from the result.
+ */
+const PARSE_BASE = "http://request.invalid";
+
+/**
+ * The origin used when a deployment configured none.
+ *
+ * It was the `Host` header, guarded by a pattern that admitted any plain host name, so
+ * `Host: evil.example` published that host as the subject of every answer: the linkset
+ * anchor, all three `Link` references including `owl:sameAs`, and `resolverRoot` in the
+ * description file. The guard's own comment named that case and did not stop it, and the
+ * test written for it could not fail, because `fetch` silently replaces a caller-set
+ * `host`. So no header decides this now. A resolver that does not know its own name
+ * publishes an obviously local one, and the command line refuses to start without being
+ * told; an operator behind a proxy sets the origin rather than the resolver reading
+ * `X-Forwarded-*`, which would hand the decision back to whoever sends the request.
+ */
+const LOCAL_ORIGIN = "http://localhost";
 
 const LINKSET_TYPE = "application/linkset+json";
 const CONTEXT_PATH = "/.well-known/gs1resolver-context.jsonld";
@@ -55,17 +91,107 @@ export function createResolver(options: ResolverOptions): Server {
       // Nothing below is expected to throw, so reaching here is this resolver's fault.
       // What went wrong goes to the log, not to whoever asked: an internal error message in
       // a response body tells a stranger about the inside of the process, and this one was
-      // reachable from a crafted path.
-      sink({
+      // reachable from a crafted path. And it is counted, as a fault of the resolver's own:
+      // written to the log alone, every scan could fail while `/metrics` said nothing had.
+      emit({
         type: "problem",
         at: new Date().toISOString(),
         reason: `unhandled: ${error instanceof Error ? error.message : String(error)}`,
-        path: request.url ?? "",
+        ...problemPath(request.url),
         status: 500,
       });
       send(response, 500, { "content-type": "text/plain" }, "the resolver could not answer that\n");
     }
   });
+}
+
+/**
+ * The request target as a problem event may carry it: without its query, its fragment, or the
+ * user name and password a target in absolute form can hold, or one that only reads as if it
+ * held them.
+ *
+ * Each is whatever the caller wrote, and a printed code can carry anything in one, an email
+ * address or a password included, so none of it goes in the log, as none of it goes in a scan.
+ * A URL parser reads an authority after two or more slashes or backslashes at the start of a
+ * reference, and, for http and https, after the scheme followed by any number of them, none
+ * included, so `//`, `///`, `/\/` and `http:///` before `alice%40example.com:secret@` each name
+ * a user and a password. What comes before an `@` in the first segment is cut in every one of
+ * those places, and after any scheme, so the cut errs towards cutting: `mailto:alice@example.com`
+ * is logged as `mailto:example.com`.
+ */
+export function loggable(target: string | undefined): string {
+  const raw = target ?? "";
+  const cut = raw.search(/[?#]/);
+  const kept = cut === -1 ? raw : raw.slice(0, cut);
+  return kept.replace(/^([A-Za-z][A-Za-z0-9+.-]*:[/\\]*|[/\\]{2,})[^/\\]*@/, "$1");
+}
+
+/**
+ * The most of a path a problem line carries: the longest path the Digital Link parser reads, so
+ * a code printed wrong is there whole. Beyond it the parser refuses a path for its length alone,
+ * and the line holds its first characters and how many more there were. The parser escapes what
+ * an address cannot hold, three characters for each of those, so a line holding every path whole
+ * was three times the length of the request that made it.
+ */
+const LOGGED_PATH_LIMIT = 512;
+
+/**
+ * The path a problem line records for a request target: the path the URL parser reads in it,
+ * where it reads one, so every problem line names a path the same way, cut as `loggable` cuts,
+ * and no longer than `LOGGED_PATH_LIMIT`.
+ */
+function problemPath(target: string | undefined): { path: string; omitted?: number } {
+  let path: string;
+  try {
+    path = loggable(requestUrl(target ?? "/").pathname);
+  } catch {
+    path = loggable(target);
+  }
+  if (path.length <= LOGGED_PATH_LIMIT) return { path };
+  const end = betweenCharacters(path, LOGGED_PATH_LIMIT);
+  return { path: path.slice(0, end), omitted: path.length - end };
+}
+
+/**
+ * Where to cut a path at or before `limit` so that the part kept names whole characters: never
+ * inside an escape, where `%7B` cut to `%7` names none, and never inside a character the parser
+ * escapes as several bytes, where `%F0%9F%98%80` cut to `%F0%9F` is half of one.
+ */
+function betweenCharacters(path: string, limit: number): number {
+  let end = limit;
+  const percent = path.lastIndexOf("%", end - 1);
+  if (percent !== -1 && percent > end - 3) end = percent;
+  // Back over whole escapes of continuation bytes, 0x80 to 0xBF, to the byte that starts them.
+  let start = end;
+  while (start >= 3 && path[start - 3] === "%" && /^[89ab][0-9a-f]$/i.test(path.slice(start - 2, start))) {
+    start -= 3;
+  }
+  if (start >= 3 && path[start - 3] === "%") {
+    const first = Number.parseInt(path.slice(start - 2, start), 16);
+    const length = first >= 0xf0 ? 4 : first >= 0xe0 ? 3 : first >= 0xc0 ? 2 : 1;
+    if (length > 1 && (end - start) / 3 < length - 1) end = start - 3;
+  }
+  return end;
+}
+
+/**
+ * The request target as a URL, a path read as a path.
+ *
+ * Resolved against the base, a target starting with two slashes, or a slash and a backslash, is a
+ * reference whose first segment is a host. A code printed with its slash doubled, which a browser
+ * sends as `//01/09520123456788`, had its `01` taken for a host and was refused as a path with no
+ * primary key, while the same identifier under any other prefix was answered. A target in origin
+ * form is a path, so it is appended to the base rather than resolved against it; one in absolute
+ * form, which a proxy sends, is parsed as the URL it is.
+ */
+function requestUrl(target: string): URL {
+  return target.startsWith("/") ? new URL(`${PARSE_BASE}${target}`) : new URL(target, PARSE_BASE);
+}
+
+/** A link type of the GS1 Web vocabulary, written either way, and nothing else. */
+function isVocabularyTerm(linkType: string): boolean {
+  const expanded = expandLinkType(linkType);
+  return expanded.startsWith(GS1_VOCAB) && GS1_LINK_TYPES.has(expanded.slice(GS1_VOCAB.length));
 }
 
 function currentTable(options: ResolverOptions): LinkTable {
@@ -82,8 +208,7 @@ function handle(
   const started = performance.now();
   const table = currentTable(options);
   const method = request.method ?? "GET";
-  const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
-  const origin = options.origin ?? `http://${safeHost(request.headers.host)}`;
+  const origin = options.origin ?? LOCAL_ORIGIN;
 
   // Every response carries these. A resolver that cannot be read from a browser page is
   // not much use to the browsers that scan the codes.
@@ -93,6 +218,29 @@ function handle(
     "access-control-allow-headers": "Accept, Accept-Language",
     "access-control-expose-headers": "Link, Location",
   };
+
+  // A fixed base, because the only things read from this are the path and the query.
+  // It was `http://${request.headers.host}`, which put a caller's header into the
+  // subject of every fact below and answered 500 for any Host that is not a URL
+  // authority, since parsing threw before anything was validated. A target in absolute
+  // form, which HTTP/1.1 allows and a proxy sends, does not use the base at all, so a
+  // malformed one still threw here into a 500 that no counter recorded. It is a request
+  // that could not be read, and is answered and counted as one.
+  let url: URL;
+  try {
+    url = requestUrl(request.url ?? "/");
+  } catch {
+    const message = "the request target could not be read as a URL";
+    emit({
+      type: "problem",
+      at: new Date().toISOString(),
+      reason: message,
+      ...problemPath(request.url),
+      status: 400,
+    });
+    send(response, 400, { ...cors, "content-type": "text/plain" }, `${message}\n`);
+    return;
+  }
 
   if (method === "OPTIONS") {
     send(response, 204, { ...cors, allow: "GET, HEAD, OPTIONS" }, "");
@@ -160,13 +308,25 @@ function handle(
     const message = error instanceof DigitalLinkError ? error.message : "the request could not be read";
     // Not a scan: nothing was identified, so there is nothing to count it against. It is
     // still worth recording, because it is usually a code printed wrong.
-    emit({ type: "problem", at: new Date().toISOString(), reason: message, path: url.pathname, status: 400 });
+    emit({
+      type: "problem",
+      at: new Date().toISOString(),
+      reason: message,
+      ...problemPath(request.url),
+      status: 400,
+    });
     send(response, 400, { ...cors, "content-type": "text/plain" }, `${message}\n`);
     return;
   }
 
   const candidates = candidatesFor(table, link);
-  const subject = `${origin}${link.stem}${link.canonicalPath}`;
+  // The subject is the origin and the identifier, and nothing else. It used to carry
+  // `link.stem`, the part of the path the caller wrote in front of the identifier, so a
+  // request for `/anything/i/like/01/09520123456788` published
+  // `<origin>/anything/i/like/01/09520123456788` as that product's identity under
+  // `owl:sameAs`, with `--origin` set and doing nothing about it. A resolver hosted
+  // under a path prefix puts the prefix in its origin, where the operator writes it.
+  const subject = `${origin}${link.canonicalPath}`;
   const linksetUrl = `${subject}?linkType=linkset`;
   const headers: Record<string, string> = {
     ...cors,
@@ -182,9 +342,24 @@ function handle(
     url.searchParams.get("linkType") === "linkset" || accepts(request.headers.accept, LINKSET_TYPE);
   const took = (): number => Math.round((performance.now() - started) * 10) / 10;
   const language = request.headers["accept-language"];
+  // The tags the header actually asks for, ranked, with `q=0` dropped: the same list the
+  // choice is made from, so what is recorded cannot disagree with what decided.
+  const acceptedTags = parseAcceptLanguage(language).map((tag) => tag.toLowerCase());
+
+  const requested = url.searchParams.get("linkType") ?? undefined;
+  // In the events, the type asked for only when this identifier's links have it or it is a link
+  // type of the GS1 vocabulary. Anything else is a caller's text and can be anything: an email
+  // address went into the log as the type asked for, and fifteen kilobytes of it became one line.
+  // Recorded on every scan that asked for one, a linkset and a code with nothing linked included.
+  const recorded =
+    requested !== undefined &&
+    (isVocabularyTerm(requested) ||
+      candidates.some((candidate) => sameLinkType(candidate.linkType, requested)))
+      ? { requested }
+      : {};
 
   if (wantsLinkset) {
-    const body = JSON.stringify(buildLinkset(candidates, `${origin}${link.stem}`), null, 2);
+    const body = JSON.stringify(buildLinkset(candidates, origin), null, 2);
     emit({
       type: "scan",
       at: new Date().toISOString(),
@@ -193,6 +368,7 @@ function handle(
       // is the same fact as an unresolved redirect and belongs in the same count. Recording
       // it as a linkset contradicted the definition this file's events are written to.
       outcome: candidates.length === 0 ? "unresolved" : "linkset",
+      ...recorded,
       tookMs: took(),
     });
     send(response, 200, { ...headers, "content-type": LINKSET_TYPE }, body, method === "HEAD");
@@ -207,6 +383,7 @@ function handle(
       at: new Date().toISOString(),
       identifier: link.canonicalPath,
       outcome: "unresolved",
+      ...recorded,
       tookMs: took(),
     });
     send(
@@ -218,18 +395,15 @@ function handle(
     return;
   }
 
-  const requested = url.searchParams.get("linkType") ?? undefined;
-  const chosen = chooseLink(candidates, {
-    linkType: requested,
-    acceptLanguage: request.headers["accept-language"],
-  });
+  const choice = { linkType: requested, acceptLanguage: request.headers["accept-language"] };
+  const chosen = chooseLink(candidates, choice);
   if (!chosen) {
     emit({
       type: "scan",
       at: new Date().toISOString(),
       identifier: link.canonicalPath,
       outcome: "unresolved",
-      ...(requested === undefined ? {} : { requested }),
+      ...recorded,
       tookMs: took(),
     });
     const reason = requested
@@ -239,21 +413,37 @@ function handle(
     return;
   }
 
-  // Whether the language actually chose: it did if there was more than one link it could
-  // have gone to.
-  const sameType = candidates.filter((candidate) => candidate.linkType === chosen.linkType);
-  const decidedByLanguage = sameType.length > 1;
+  // The tag that chose, if one did. This was the raw `Accept-Language` header, recorded
+  // whenever more than one link of the type existed, without ever asking whether the header
+  // matched: `Accept-Language: de` against an English default and a French alternative
+  // recorded `language: "de"` on a redirect to the English link, so a report attributed an
+  // English scan to a German speaker. `fr;q=0, de` was recorded as a language although
+  // `q=0` means "not acceptable", `*` was recorded as a language, and a four kilobyte
+  // header became a four kilobyte field on that line of the operator's log. What is
+  // recorded now is the matched tag off the chosen link, which is the only thing that can
+  // have decided anything, and nothing is recorded when the choice was not the language's: when
+  // the links the languages chose among were fewer than two. Counted as every link of the chosen
+  // type at every level, a request for `gs1:defaultLink`, which no language changes, recorded one,
+  // and so did a scan of a lot whose own default was the only link at its level.
+  const decided = acceptedTags.reduce<string | undefined>(
+    (found, wanted) => found ?? languageMatch(chosen.hreflang, wanted),
+    undefined,
+  );
+  const among = languageChoices(candidates, choice);
+  // The table's own href, not the target. The target carries the caller's query string
+  // through, which is what the standard asks for and is also whatever a stranger wrote:
+  // `?email=alice@example.com&uid=99123` went verbatim into the event, in a log the
+  // documents promise holds nothing about whoever scanned. Where a scan was sent, as a
+  // report needs it, is the link the table chose.
   const target = withPassedThroughQuery(chosen.href, url);
   emit({
     type: "scan",
     at: new Date().toISOString(),
     identifier: link.canonicalPath,
     outcome: "redirect",
-    ...(requested === undefined ? {} : { requested }),
-    target,
-    // Recorded only when it chose between links, because a language that decided nothing
-    // in a report of why a redirect went where it did is noise that reads as a reason.
-    ...(language !== undefined && decidedByLanguage ? { language } : {}),
+    ...recorded,
+    target: chosen.href,
+    ...(decided !== undefined && among.length > 1 ? { language: decided } : {}),
     tookMs: took(),
   });
   send(response, 307, { ...headers, location: target }, "", method === "HEAD");
@@ -265,14 +455,37 @@ function handle(
  * The standard requires it, and it is what makes a printed code able to carry a campaign
  * parameter without the resolver having to know anything about it. `linkType` is the one
  * thing dropped, because it was an instruction to the resolver rather than to the target.
+ *
+ * The request's pairs go after the href's own query as the request wrote them, and the href's
+ * own query is left as it is, so the Location is the published address with the request's
+ * query added: after an `&` where the href's query ends with one, rather than a second. Appended as a form would encode them, they rewrote the href's query as well:
+ * `a=1;b=2` became `a=1%3Bb%3D2`, a different address, and `%20` became `+`.
  */
 export function withPassedThroughQuery(href: string, url: URL): string {
   const target = new URL(href);
-  for (const [key, value] of url.searchParams) {
-    if (key === "linkType") continue;
-    target.searchParams.append(key, value);
-  }
-  return target.toString();
+  const passed = url.search
+    .slice(1)
+    .split("&")
+    .filter((pair) => pair !== "" && nameOf(pair) !== "linkType");
+  // Nothing of the request's own to carry, so the published address as it is: a query left
+  // empty, `?` and nothing after it, is part of that address.
+  if (passed.length === 0) return target.href;
+  const own = target.search.slice(1);
+  const query = own === "" || own.endsWith("&") ? `${own}${passed.join("&")}` : [own, ...passed].join("&");
+  // The setter drops one `?` in front of what it is given, which took the `?` off a pair such as
+  // `?linkType` written first; given one of its own to drop, it keeps the pairs as written.
+  target.search = `?${query}`;
+  return target.href;
+}
+
+/**
+ * The name of one pair of a query, read as the URL parser reads the query it is part of. A pair
+ * read alone loses a `?` in front of it, which the parser keeps in a name after the first: the
+ * pair of `??linkType=gs1:pip` was taken for `linkType`, and left out, where the resolver itself
+ * reads `?linkType` and chose nothing by it.
+ */
+function nameOf(pair: string): string | undefined {
+  return [...new URLSearchParams(`&${pair}`).keys()][0];
 }
 
 function describe(origin: string): Record<string, unknown> {
@@ -304,19 +517,6 @@ function send(
 }
 
 /**
- * A Host header, if it looks like one, and localhost otherwise.
- *
- * The origin is the subject of every fact this resolver presents, and with none configured
- * it comes from a header the caller sets. `Host: evil.example` anchored a whole linkset
- * there. A deployment should pass `--origin`; this is what stops the default being worse
- * than useless, by refusing anything that is not a plain host and port.
- */
-function safeHost(host: string | undefined): string {
-  if (host && /^[A-Za-z0-9.-]{1,253}(:\d{1,5})?$/.test(host)) return host;
-  return "localhost";
-}
-
-/**
  * Whether an Accept header actually asks for a media type.
  *
  * Matched by substring before, which meant `application/linkset+json;q=0`, whose whole
@@ -328,7 +528,8 @@ export function accepts(header: string | undefined, type: string): boolean {
   for (const part of header.split(",")) {
     const [name = "", ...parameters] = part.trim().split(";");
     if (name.trim().toLowerCase() !== type) continue;
-    const quality = parameters.find((parameter) => parameter.trim().startsWith("q="));
+    // `q` in any case, as HTTP spells its parameter names: `Q=0` was read as no weight at all.
+    const quality = parameters.find((parameter) => /^q=/i.test(parameter.trim()));
     return quality === undefined || Number(quality.trim().slice(2)) > 0;
   }
   return false;

@@ -7,25 +7,40 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { bundle, realWithin } from "@taggant/bundler";
 import {
+  ArtworkError,
   type Report,
+  SCAN_DISTANCE_MM,
   carriesItsDistance,
   compileTarget,
+  describesTarget,
   distanceBehind,
+  isCurrentReport,
   toTargetJson,
 } from "@taggant/compiler";
 import {
   type LinkTable,
   type StoredLink,
+  emptyTable,
   parseDigitalLink,
   parseTable,
+  readTableText,
   sameLinkType,
 } from "@taggant/resolver";
 import { fromTargetFile } from "@taggant/vision";
-import { type Experience, type Workspace, WorkspaceError, publishable } from "./workspace.js";
+import { canonical, inTurn, queueKey } from "./in-turn.js";
+import {
+  type Experience,
+  TargetNotReadError,
+  type Workspace,
+  WorkspaceError,
+  inPlaceOf,
+  publishable,
+  replaceFile,
+} from "./workspace.js";
 
 /**
  * Distance a person is expected to hold the camera from the print, in millimetres.
@@ -66,19 +81,81 @@ export async function compile(
   if (!target) {
     throw new WorkspaceError(`${experience.id} has no target called ${targetId}`);
   }
-  if (!Number.isFinite(scanDistanceMm) || scanDistanceMm < 50 || scanDistanceMm > 5000) {
+  checkDistance(scanDistanceMm);
+  // One compile of a target at a time, in the order they were asked for. The recogniser hands
+  // the event loop back between looks, so two compiles of one target interleave, and the one
+  // that finished last was the one stored: a compile at 5000 mm sent after one at 190 needs
+  // fewer looks, finished first, and was overwritten, so the operator's last choice was undone
+  // with nothing saying so, and it did in five tries out of five.
+  return await inTurn(compileQueues, compileKey(experience, targetId), () =>
+    compileNow(workspace, experience, target, scanDistanceMm),
+  );
+}
+
+/**
+ * The compiler's range, not one of this console's own. It was 5000 here and 10000 on the
+ * command line, so a target compiled at six metres could not be published from here: the
+ * publish found it needed compiling again and this refused the distance it was compiled at.
+ */
+function checkDistance(scanDistanceMm: number): void {
+  const { nearest, furthest } = SCAN_DISTANCE_MM;
+  if (!Number.isFinite(scanDistanceMm) || scanDistanceMm < nearest || scanDistanceMm > furthest) {
     throw new WorkspaceError(
-      `a scan distance of ${scanDistanceMm} mm is not one a person could hold: 50 to 5000`,
+      `a scan distance of ${scanDistanceMm} mm is not one a person could hold: ${nearest} to ${furthest}`,
     );
   }
+}
+
+/** Compiled targets being written, one queue per target, so the last asked for is the last kept. */
+const compileQueues = new Map<string, Promise<void>>();
+
+/** The queue a target's compiles, and a publish's reading of it, take their turn in. */
+function compileKey(experience: Experience, targetId: string): string {
+  return `${queueKey(experience.directory)}\u0000${targetId}`;
+}
+
+async function compileNow(
+  workspace: Workspace,
+  experience: Experience,
+  target: { id: string; source: string },
+  scanDistanceMm: number,
+): Promise<CompileOutcome> {
+  const targetId = target.id;
   // Resolved the way the bundler resolves it, so artwork that compiles here is artwork
   // that publishes. `realWithin` refuses a path that leaves the experience even through
   // a link.
-  const artworkPath = await realWithin(experience.directory, target.source);
-  const compiled = await compileTarget(await readFile(artworkPath), {
-    id: targetId,
-    scanDistanceMm,
-  });
+  // The artwork can be gone: renamed, tidied away, or on a drive that is not mounted.
+  // Both `realWithin` and `readFile` report that as an errno with a path in it, and the
+  // server turns anything that is not a `WorkspaceError` into a 500 with a stack trace in
+  // the log. Publishing already wrapped its own rebuild in a sentence, so the same moved
+  // file was a sentence on one route and a crash on the other, which is the worse of the
+  // two for the person who moved it.
+  let artwork: Buffer;
+  try {
+    artwork = await readFile(await realWithin(experience.directory, target.source));
+  } catch (error) {
+    throw new WorkspaceError(
+      `${targetId} points at ${target.source} and it could not be read: ${
+        error instanceof Error ? error.message : String(error)
+      }. Upload the artwork again, or put the file back where the manifest says it is.`,
+    );
+  }
+  // And the compile itself, which is where a file that is not an image is found out: the
+  // decoder's own error reached the operator as a 500 with a stack trace, from a form whose
+  // upload had been accepted a moment before. Only the artwork's own faults become a sentence,
+  // told apart by the compiler's type for them rather than by the decoder's wording, which has
+  // more forms than a pattern here knew. Anything else is a fault and goes to the log.
+  let compiled: Awaited<ReturnType<typeof compileTarget>>;
+  try {
+    compiled = await compileTarget(artwork, { id: targetId, scanDistanceMm });
+  } catch (error) {
+    if (!(error instanceof ArtworkError)) throw error;
+    throw new WorkspaceError(
+      error.kind === "unreadable"
+        ? `${targetId} points at ${target.source}, which is not an image the compiler can read. Upload the artwork again as a PNG, JPEG or WebP file.`
+        : `${targetId} could not be compiled from ${target.source}: ${error.message}`,
+    );
+  }
   const path = await workspace.writeTarget(experience.id, targetId, toTargetJson(compiled));
   return { targetId, report: compiled.report, path };
 }
@@ -91,28 +168,72 @@ export interface PublishOutcome {
 }
 
 /**
+ * One queue per destination, so two publishes of one experience happen one after the other.
+ *
+ * The bundler builds each publish in its own staging directory and swaps it in with a
+ * rename, and that is not enough on its own: the swap removes the destination and renames
+ * over it, so two publishes doing that at once collide there instead. Measured over
+ * fourteen pairs each way, publishing into a destination that already held a bundle:
+ *
+ *   one staging path for all publishes, no queue      8 of 14 pairs failed
+ *   a staging path per publish, no queue             14 of 14 pairs failed
+ *   a staging path per publish and this queue         0 of 14
+ *
+ * The failures are a raw ENOENT or EPERM naming a path that is ours, reaching an operator
+ * who was told how many files had been written; one run of the middle row left the
+ * destination empty with nothing published at all. So serialising is what makes the
+ * sentence true, and the unique staging path is what makes the loser's work discarded
+ * whole rather than half of it surviving.
+ *
+ * Keyed on the destination rather than the experience id, because that is the thing being
+ * written and two ids cannot share it, and through `queueKey` for the same reason the
+ * table's queue is.
+ *
+ * This orders one console's publishes. Two consoles sharing a publish folder is a legitimate
+ * arrangement, one per workspace, and when both publish one experience at once the bundler's
+ * swap decides it: one version ends up live and whole, and the other operator is told theirs
+ * was not published.
+ */
+const publishQueues = new Map<string, Promise<void>>();
+
+function inTurnForPublish<T>(outDir: string, work: () => Promise<T>): Promise<T> {
+  return inTurn(publishQueues, queueKey(outDir), work);
+}
+
+export interface PublishOptions {
+  runtimeDir?: string;
+  scanDistanceMm?: number;
+  /**
+   * Called as each target is rebuilt, before anything is published.
+   *
+   * A rebuild writes to the workspace, and the publish can still fail afterwards at the
+   * bundler, so what was rebuilt has to be reportable on the failure path too. Reading it
+   * off the returned outcome only worked when there was a returned outcome.
+   */
+  onRebuild?: (targetId: string, atDistanceMm: number) => void;
+}
+
+/**
  * Publish an experience as a static folder.
  *
  * Anything not compiled yet is compiled first, because publishing an experience whose
  * artwork was changed after its last compile would ship a bundle that recognises the old
  * artwork, and nothing downstream could tell.
  */
-export async function publish(
+export function publish(
   workspace: Workspace,
   experience: Experience,
   outDir: string,
-  options: {
-    runtimeDir?: string;
-    scanDistanceMm?: number;
-    /**
-     * Called as each target is rebuilt, before anything is published.
-     *
-     * A rebuild writes to the workspace, and the publish can still fail afterwards at the
-     * bundler, so what was rebuilt has to be reportable on the failure path too. Reading it
-     * off the returned outcome only worked when there was a returned outcome.
-     */
-    onRebuild?: (targetId: string, atDistanceMm: number) => void;
-  } = {},
+  options: PublishOptions = {},
+): Promise<PublishOutcome> {
+  return inTurnForPublish(outDir, () => publishOnce(workspace, experience, outDir, options));
+}
+
+async function publishOnce(
+  workspace: Workspace,
+  experience: Experience,
+  outDir: string,
+  options: PublishOptions,
 ): Promise<PublishOutcome> {
   // Refused here rather than half way through writing a folder. `publishable` is where
   // the schema stops being advice and becomes a gate: a bundle is what the world sees, and
@@ -120,7 +241,8 @@ export async function publish(
   const manifest = publishable(experience);
   const compiled: CompileOutcome[] = [];
   const targets: Record<string, unknown> = {};
-  for (const target of manifest.targets) {
+
+  async function usableTarget(target: { id: string; source: string }): Promise<unknown> {
     // Usable, not merely present. A target file can exist and still be one the runtime
     // cannot read: compiled before the descriptor's sampling pattern changed, half
     // written, or edited by hand. The workspace holds the artwork it was built from, so
@@ -130,6 +252,16 @@ export async function publish(
     // The distance to rebuild at, when a rebuild turns out to be needed. Undefined means
     // nothing better than the default is known.
     let rebuildAt = options.scanDistanceMm;
+    // Set when the target was compiled with a report and the report gives back no distance it
+    // could have been compiled for: refused at an older build, edited by hand, or worked back past
+    // anything a person could hold. Rebuilt at the default, a piece compiled for 2000 mm and
+    // refused there was compiled again at 150, passed, and was published.
+    let distanceLost = false;
+    // Set when the file does not parse at all, or cannot be read, which says nothing, not even
+    // whether it carried a report: a trailing comma or a file cut short left the report whole and
+    // unread, and the target was compiled again at 150, passed there and was published. `cause` is
+    // the system's reason when the file could not be read.
+    let unread: { cause?: string } | undefined;
     if (await workspace.hasTarget(experience.id, target.id)) {
       try {
         stored = await workspace.readTarget(experience.id, target.id);
@@ -139,23 +271,78 @@ export async function publish(
         // model that divided by the sensor's pixels instead of the recogniser's, and the
         // bundler compares the declared print width against exactly that number. Left
         // alone it publishes with a gate that is four times too lenient.
+        // A target with no report at all counts too. It was published as it stood, which skipped
+        // every readiness check the bundler makes, while this console's own page called it not
+        // compiled yet; it is compiled first, as anything not compiled yet is.
         const report = (stored as { report?: unknown }).report;
-        if (report !== undefined && !carriesItsDistance(report)) {
+        if (!isCurrentReport(report)) {
           stored = undefined;
           // Rebuilt at the distance that report was computed for, which the old model's
           // own arithmetic gives back exactly. Falling back to the default instead was
           // silently moving an operator who chose 350 mm to 150, where the same artwork
           // needs less than half the width, so a piece the gate had to refuse published
           // clean and the choice they made was gone from disk with it.
-          rebuildAt = distanceBehind(report) ?? options.scanDistanceMm;
+          //
+          // A report that carries its own distance was computed for that distance, and only
+          // its verdict is in doubt, so it is rebuilt there; the arithmetic below is for the
+          // older build that did not carry one.
+          const behind = carriesItsDistance(report) ? report.scanDistanceMm : distanceBehind(report);
+          if (behind !== null) rebuildAt = behind;
+          else distanceLost = report !== undefined;
+        } else if (!describesTarget(stored)) {
+          // A report this build wrote that does not describe this target file: written for another
+          // target, or for this one before the file was changed. Its verdict and width are not
+          // this file's, and the gate would refuse it, so the target is rebuilt from its own
+          // artwork, at the report's distance, the only one on record for it. Rebuilt at the
+          // default instead, a piece compiled for 600 mm and refused there was rebuilt at 150,
+          // where it passed, and published.
+          stored = undefined;
+          rebuildAt = report.scanDistanceMm;
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof TargetNotReadError && error.gone) {
+          // Gone when read, and gone when read once more, as when another program is replacing it
+          // and has not put it back yet. Compiled at the default as anything not compiled yet is,
+          // the compile was written over the file put back, and a piece refused at its own
+          // distance was published.
+          throw new WorkspaceError(
+            `${target.id}'s compiled file was there when it was looked for and gone when it was read, as when another program is replacing it, so it is not compiled again at a guess over what comes back. Publish again once it is in place, or compile it from its card.`,
+          );
+        }
+        if (stored === undefined) {
+          unread = error instanceof TargetNotReadError ? { cause: error.reason } : {};
+          distanceLost = true;
+        } else {
+          // One the runtime cannot read can still carry its report, and the report the distance
+          // it was compiled for: a file damaged in its features, or written in a format this
+          // build does not read, kept the report and was rebuilt at the default, so the 600 mm
+          // chosen was gone from disk and a piece refused there was published at 150.
+          const report =
+            typeof stored === "object" && stored !== null
+              ? (stored as { report?: unknown }).report
+              : undefined;
+          const behind = distanceBehind(report);
+          if (behind !== null) rebuildAt = behind;
+          else distanceLost = report !== undefined;
+        }
         stored = undefined;
       }
     }
     if (stored === undefined) {
+      if (distanceLost && rebuildAt === undefined) {
+        throw new WorkspaceError(
+          unread?.cause !== undefined
+            ? `${target.id}'s compiled file could not be read (${unread.cause}), so nothing says the reading distance it was compiled for, and it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish; if what is in its place cannot be replaced, the compile says so.`
+            : unread !== undefined
+              ? `${target.id}'s compiled file does not parse, so nothing says the reading distance it was compiled for, and it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish.`
+              : `${target.id} was compiled for a reading distance its print readiness report no longer gives, so it is not compiled again at a guess. Compile it from its card at the distance it will be read from, then publish.`,
+        );
+      }
       try {
-        const outcome = await compile(workspace, experience, target.id, rebuildAt);
+        // In the target's turn already, so compiled here rather than queued behind itself.
+        const at = rebuildAt ?? DEFAULT_SCAN_DISTANCE_MM;
+        checkDistance(at);
+        const outcome = await compileNow(workspace, experience, target, at);
         compiled.push(outcome);
         options.onRebuild?.(target.id, outcome.report.scanDistanceMm);
       } catch (error) {
@@ -173,7 +360,20 @@ export async function publish(
       }
       stored = await workspace.readTarget(experience.id, target.id);
     }
-    targets[target.id] = stored;
+    return stored;
+  }
+
+  for (const target of manifest.targets) {
+    // Read, judged and rebuilt in the target's own compile queue, so a compile of it asked for
+    // before the publish reached it lands first and is the one read, and one asked for after waits
+    // for the publish to have read. Read outside the queue, a publish sent while a compile at
+    // 600 mm was running read the file as it stood before it. Carrying a report that no longer
+    // described it, the file was rebuilt at that report's 190 mm, after the 600 compile and over
+    // it, and published at 190, in ten tries of ten; carrying its own, it was published as it
+    // stood, at 190, while the file on disk said 600, in six of six.
+    targets[target.id] = await inTurn(compileQueues, compileKey(experience, target.id), () =>
+      usableTarget(target),
+    );
   }
   if (Object.keys(targets).length === 0) {
     throw new WorkspaceError(`${experience.id} has no targets, so there is nothing to recognise`);
@@ -203,6 +403,28 @@ export async function publish(
 }
 
 /**
+ * One queue per link table, so a read and the write that follows it are not separated.
+ *
+ * Registering a code is read, change, write. Two registrations at the same moment both
+ * read the table before either wrote, so the second write was built on the table as it was
+ * before the first: measured, two codes registered together left one identifier in the
+ * table, and both operators were told theirs "points here". A printed code that points at
+ * nothing, and a person who was told it does not, which is the worst pairing available in
+ * this system.
+ *
+ * The workspace has the same queue for the same reason, keyed per experience, and it does
+ * not cover this: the link table is one shared file and this function never went through
+ * the workspace. Keyed through `queueKey`, so two spellings of one file share a queue.
+ * Like the workspace's, this is an in-process queue and not a lock file, so it orders
+ * this console's writes and knows nothing about another console's. That arrangement is
+ * one console per link table: `claim` in `one-console.ts` takes a lock beside the table
+ * at startup and refuses to open a table another live console holds, and the README says
+ * so in the words an operator would use. Until that check existed this comment cited a
+ * document that said nothing of the kind.
+ */
+const tableQueues = new Map<string, Promise<void>>();
+
+/**
  * Point a printed code at a published bundle, by writing the resolver's own table.
  *
  * The console does not talk to the resolver and the resolver does not know the console
@@ -213,7 +435,27 @@ export async function publish(
 export async function registerCode(
   tablePath: string,
   entry: { path: string; href: string; title: string; linkType?: string; language?: string },
-): Promise<{ path: string; replaced: number; kept: number }> {
+  options: { holds?: () => string | null } = {},
+): Promise<{ path: string; replaced: number; kept: number; unmarked: number; stillRefused?: string }> {
+  // Written under the name the filesystem uses, not the one given, and that name is asked for
+  // inside the turn, when the table the turn before wrote exists to be asked about. Given a
+  // short name, the rename that puts a new table in place renamed the table itself, so the
+  // file the resolver reads was gone and a table nobody reads held every code.
+  return await inTurn(tableQueues, queueKey(tablePath), () =>
+    writeCode(canonical(tablePath), entry, options, tablePath),
+  );
+}
+
+async function writeCode(
+  tablePath: string,
+  entry: { path: string; href: string; title: string; linkType?: string; language?: string },
+  options: { holds?: () => string | null },
+  given: string = tablePath,
+): Promise<{ path: string; replaced: number; kept: number; unmarked: number; stillRefused?: string }> {
+  // Asked first, inside the turn, so a console whose lock on the table was taken over writes
+  // nothing: two consoles that both believed they held one table kept twenty codes of forty.
+  const refusal = options.holds?.() ?? null;
+  if (refusal !== null) throw new WorkspaceError(refusal);
   // The path is the key the resolver looks scans up by, so it is canonicalised here by
   // the resolver's own parser rather than taken as typed. A code written as an EAN-13
   // and a code written as a GTIN-14 are the same code, and a table holding both under
@@ -232,15 +474,39 @@ export async function registerCode(
   }
 
   let current: LinkTable;
+  // Set when the table on disk is one the resolver refuses. Registering a code may repair it: a
+  // table holding two defaults under one code is one the resolver refuses to start on, and
+  // registering that code takes the mark off the other. So the table is read as the resolver reads
+  // its text, changed, and the result checked; refused here instead, no code could be registered
+  // and the only repair would be the JSON by hand.
+  let refusedAsItStands: string | undefined;
   try {
-    current = parseTable(JSON.parse(await readFile(tablePath, "utf8")));
+    const value = readTableText(await readFile(tablePath, "utf8"));
+    try {
+      current = parseTable(value);
+    } catch (refused) {
+      refusedAsItStands = refused instanceof Error ? refused.message : String(refused);
+      const { version, entries } = (value ?? {}) as { version?: unknown; entries?: unknown };
+      if (typeof entries !== "object" || entries === null || Array.isArray(entries)) throw refused;
+      current = { version, entries } as LinkTable;
+    }
   } catch (error) {
-    // A table that is not there yet is the ordinary case for a first code. A table that
-    // is there and unreadable is not, and overwriting it would lose every other code.
+    // A table that is not there yet is the ordinary case for a first code. A table that is there
+    // and cannot be read as one is not, and writing over it would lose every other code.
+    // A folder or a link where the table goes is said to be one: taken for a table that could not
+    // be read, it was said to hold codes writing over it would lose, and to be nothing else. A link
+    // is named as the console was given it, where the folder it leads to was named instead.
+    const linked = await inPlaceOf(given, error);
+    const what = linked ?? (await inPlaceOf(tablePath, error));
+    if (what !== undefined) {
+      throw new WorkspaceError(
+        `${linked === undefined ? tablePath : given} is ${what}, which the link table cannot be: move it aside, then register the code.`,
+      );
+    }
     const missing = (error as NodeJS.ErrnoException)?.code === "ENOENT";
     if (!missing) {
       throw new WorkspaceError(
-        `${tablePath} could not be read, and writing over it would lose the codes already in it: ${error instanceof Error ? error.message : String(error)}`,
+        `${tablePath} could not be read as a link table, and writing over it would lose the codes already in it: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
     current = { version: 1, entries: {} };
@@ -257,6 +523,67 @@ export async function registerCode(
     default: true,
     ...(entry.language === undefined ? {} : { hreflang: [entry.language] }),
   };
+  // The link being registered is checked on its own before anything the table holds, so a refusal
+  // of it gives its own reason: checked after, it was given the reason of a link kept under the
+  // code, or of an entry there the registration could not sort.
+  try {
+    parseTable({ ...emptyTable(), entries: { [canonical]: [link] } });
+  } catch (error) {
+    throw new WorkspaceError(
+      `that would have written a table the resolver refuses, so nothing was written: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  // In a table refused as it stands, the codes refused each on its own, and whether this code's own
+  // entry is one a registration can change at all: one that is not a list of links, each with a
+  // link type, cannot be sorted into links kept and links replaced, and was a 500.
+  const refusedCodes = new Set<string>();
+  if (refusedAsItStands !== undefined) {
+    const refusalOf = (entries: Record<string, unknown>): string | undefined => {
+      try {
+        parseTable({ version: current.version, entries });
+        return undefined;
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    };
+    const whole = refusalOf({});
+    if (whole !== undefined) {
+      throw new WorkspaceError(
+        `${tablePath} is refused by the resolver for something registering this code does not change, so nothing was written: ${whole}`,
+      );
+    }
+    // A key that is this code in a spelling the resolver refuses is not another code: taken for one,
+    // the code was written beside it, and the resolver's advice, to write that key in its canonical
+    // form, then wrote the code twice.
+    const spellsThisCode = (key: string): boolean => {
+      try {
+        return parseDigitalLink(key).canonicalPath === canonical;
+      } catch {
+        return false;
+      }
+    };
+    for (const [key, links] of Object.entries(current.entries)) {
+      if (key === canonical || spellsThisCode(key)) continue;
+      if (refusalOf({ [key]: links }) !== undefined) refusedCodes.add(key);
+    }
+    const own: unknown = current.entries[canonical];
+    const sortable =
+      own === undefined ||
+      (Array.isArray(own) &&
+        own.every(
+          (link) =>
+            typeof link === "object" &&
+            link !== null &&
+            !Array.isArray(link) &&
+            typeof (link as { linkType?: unknown }).linkType === "string",
+        ));
+    if (!sortable) {
+      throw new WorkspaceError(
+        `${tablePath} holds an entry under ${canonical} that registering this code cannot change, so nothing was written: ${refusalOf({ [canonical]: own }) ?? "it is not a list of links"}; correct it by hand, then register the code`,
+      );
+    }
+  }
 
   /**
    * A code carries several links, and this replaces the ones it is about.
@@ -274,8 +601,18 @@ export async function registerCode(
    * address while the console reported that the code now points somewhere else.
    */
   const existing = current.entries[canonical] ?? [];
-  const adjusted = existing.filter((other) => !sameLinkType(other.linkType, linkType));
-  const replaced = existing.length - adjusted.length;
+  const others = existing.filter((other) => !sameLinkType(other.linkType, linkType));
+  const replaced = existing.length - others.length;
+  // One default per code, as the resolver requires: the link registered here is the one a plain
+  // scan follows, so another link of the code marked as the default keeps its place and loses the
+  // mark. Left marked, the table would hold two defaults, which the resolver refuses.
+  let unmarked = 0;
+  const adjusted = others.map((other) => {
+    if (other.default !== true) return other;
+    unmarked += 1;
+    const { default: _wasDefault, ...rest } = other;
+    return rest;
+  });
   // Exactly the two fields the format has, rather than a spread of whatever was on disk.
   // Spreading carried unknown top-level keys forward, `__proto__` among them, so a table
   // this console rewrote kept junk that neither it nor the resolver understands.
@@ -283,26 +620,60 @@ export async function registerCode(
     version: current.version,
     entries: { ...current.entries, [canonical]: [...adjusted, link] },
   };
-  // Validated before it is written, so a table this console produced is one the resolver
-  // will accept. Writing a table the resolver then refuses would take every other code
-  // down with it.
+  // Validated before it is written, so a table this console produced from one the resolver
+  // accepts is one the resolver will accept. Writing a table the resolver then refuses would take
+  // every other code down with it.
+  let stillRefused: string | undefined;
   try {
     parseTable(next);
   } catch (error) {
-    throw new WorkspaceError(
-      `that would have written a table the resolver refuses, so nothing was written: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const reason = error instanceof Error ? error.message : String(error);
+    if (refusedAsItStands === undefined) {
+      throw new WorkspaceError(
+        `that would have written a table the resolver refuses, so nothing was written: ${reason}`,
+      );
+    }
+    // From a table refused as it stands, written when everything still refused is under other
+    // codes that were refused on their own before: of two codes that each held two defaults,
+    // refusing to repair one because of the other left each refusal naming the other and no
+    // registration that could repair either.
+    const rest = Object.fromEntries(Object.entries(next.entries).filter(([key]) => !refusedCodes.has(key)));
+    try {
+      parseTable({ version: next.version, entries: rest });
+    } catch (left) {
+      // The link being registered was checked on its own above, so what is left is what was there.
+      throw new WorkspaceError(
+        `${tablePath} holds an entry the resolver refuses, which registering this code does not change, so nothing was written: ${left instanceof Error ? left.message : String(left)}`,
+      );
+    }
+    stillRefused = reason;
   }
 
   const staging = `${tablePath}.writing-${randomBytes(4).toString("hex")}`;
   try {
+    // The folder the table lives in need not exist yet. The console is told where to put
+    // the table and nothing creates that folder on the way, so on a fresh checkout the
+    // first code anyone registered came back as an ENOENT naming an internal staging
+    // path: a 500, a stack trace in the log, and nothing said about the folder.
+    await mkdir(dirname(tablePath), { recursive: true });
     await writeFile(staging, `${JSON.stringify(next, null, 2)}\n`);
-    await rename(staging, tablePath);
+    // Waiting out a reader, which the resolver is: it reads this table whenever it changes.
+    await replaceFile(staging, tablePath);
   } catch (error) {
-    await rm(staging, { force: true });
-    throw error;
+    await rm(staging, { force: true }).catch(() => undefined);
+    throw new WorkspaceError(
+      `the link table at ${tablePath} could not be written, so the code was not registered: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
-  return { path: canonical, replaced, kept: adjusted.length };
+  return {
+    path: canonical,
+    replaced,
+    kept: adjusted.length - unmarked,
+    unmarked,
+    ...(stillRefused === undefined ? {} : { stillRefused }),
+  };
 }
 
 /** Where an experience publishes to, under the folder the static host serves. */

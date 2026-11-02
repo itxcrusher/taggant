@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { RECOGNISED_PIXELS_ACROSS_FRAME } from "@taggant/compiler";
+import { RECOGNISED_PIXELS_ACROSS_FRAME, WIDEST_DECLARABLE_MM } from "@taggant/compiler";
 import { DEFAULT_PROCESS_WIDTH } from "@taggant/runtime";
 import { describe, expect, it } from "vitest";
 
@@ -13,8 +13,9 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
  * The compiler turns a print width into a count of pixels across the mark by assuming the
  * frame is a fixed width; the runtime reduces every frame to that width before recognising.
  * If they disagree, every printed width is wrong by the ratio, which is the exact shape of
- * the defect this whole round was about. They live in packages that do not depend on each
- * other and were kept together by a comment saying to keep them together.
+ * the defect that once made every printed width about four times too small. They live in
+ * packages that do not depend on each other and were kept together by a comment saying to
+ * keep them together.
  *
  * The bundler is the natural place for the check: it is where a compiled target and the
  * runtime that will read it are put in the same folder.
@@ -25,6 +26,21 @@ describe("the width a frame is recognised at", () => {
       DEFAULT_PROCESS_WIDTH,
       "the runtime recognises at a different width than the compiler computes print widths for, so every width the compiler prints is wrong by the ratio between them",
     ).toBe(RECOGNISED_PIXELS_ACROSS_FRAME);
+  });
+
+  it("caps the print width at the widest a manifest can declare", async () => {
+    // The compiler refuses to name a width wider than a manifest could carry, and it holds
+    // that limit as its own constant rather than depending on the manifest package for one
+    // number. So the two are compared here, in the package that sees both.
+    const schema = JSON.parse(
+      await readFile(join(ROOT, "packages/manifest/schema/manifest-1.0.0.json"), "utf8"),
+    );
+    const declared = schema?.$defs?.target?.properties?.physicalWidthMm?.maximum;
+    expect(declared, "the schema no longer caps physicalWidthMm").toBeTypeOf("number");
+    expect(
+      WIDEST_DECLARABLE_MM,
+      "the compiler's ceiling and the widest width a manifest can declare have drifted apart",
+    ).toBe(declared);
   });
 
   it("is the same number on the page that measures a camera", async () => {

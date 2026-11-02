@@ -1,5 +1,6 @@
 {
   "name": "taggant",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "engines": {

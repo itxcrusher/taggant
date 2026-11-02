@@ -1,7 +1,9 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, open, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 import { afterEach, describe, expect, it } from "vitest";
+import { canonical, queueKey } from "../src/in-turn.js";
 import {
   ID_PATTERN,
   ID_PATTERN_ATTRIBUTE,
@@ -26,8 +28,12 @@ async function workspace() {
   return createWorkspace(root);
 }
 
-afterEach(() => {
-  made.length = 0;
+afterEach(async () => {
+  // Every folder a test made goes with it, or each run leaves a folder per test in the temp
+  // directory. Best effort: a folder Windows has not let go of yet is not a test failure.
+  for (const root of made.splice(0)) {
+    await rm(root, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+  }
 });
 
 describe("what an id may be", () => {
@@ -154,6 +160,17 @@ describe("a draft is not yet a manifest, and that is allowed", () => {
     expect(onDisk.targets[0].content[0]).toEqual({ type: "video", src: "media/a.mp4" });
   });
 
+  it("reads a manifest saved with a byte-order mark as though it had none", async () => {
+    const store = await workspace();
+    await store.create("pack", "Pack");
+    const path = join(store.root, "pack", "manifest.json");
+    const draft = JSON.parse(await readFile(path, "utf8"));
+    await writeFile(path, `${String.fromCharCode(0xfeff)}${JSON.stringify({ ...draft, title: "Marked" })}`);
+    expect((await store.read("pack")).manifest.title).toBe("Marked");
+    const listed = await store.list();
+    expect(listed.find((entry) => entry.id === "pack")?.ok).toBe(true);
+  });
+
   it("refuses to save a manifest under an id that is not its own", async () => {
     const store = await workspace();
     await store.create("pack", "Pack");
@@ -229,6 +246,90 @@ describe("writing", () => {
     expect(stored.sort()).toEqual(["logo-2.png", "logo.png"]);
   });
 
+  it("gives a new upload its own name when the manifest holds that name in escaped form", async () => {
+    // The bundler decodes a manifest's paths before it reads them, so `artwork/logo%2Epng` is
+    // `artwork/logo.png` to it. Compared undecoded, an upload was stored as `logo.png` while a
+    // target named it escaped, and the bundler gave that target the new upload.
+    const store = await workspace();
+    await store.create("pack", "Pack");
+    await store.save("pack", {
+      schemaVersion: "1.0.0",
+      id: "pack",
+      targets: [{ id: "front", source: "artwork/logo%2Epng", physicalWidthMm: 120, content: [] }],
+    });
+    const stored = await store.storeFile("pack", "artwork", "logo.png", new Uint8Array([1]));
+    expect(stored).toBe("artwork/logo-2.png");
+  });
+
+  it("waits out a reader holding the manifest open, rather than failing the write", async () => {
+    // On Windows a rename onto a file another handle holds is refused, even when the holder is
+    // only reading it, and a page view reads the manifest: a write made while one was being
+    // viewed was a 500 with an EPERM stack. Elsewhere this cannot fail, and passes there.
+    const store = await workspace();
+    await store.create("pack", "Pack");
+    const reader = await open(join(store.root, "pack", "manifest.json"), "r");
+    const letGo = setTimeout(() => void reader.close(), 150);
+    try {
+      await store.update("pack", (manifest) => ({ ...manifest, title: "Changed" }));
+    } finally {
+      clearTimeout(letGo);
+      await reader.close().catch(() => undefined);
+    }
+    expect(JSON.parse(await readFile(join(store.root, "pack", "manifest.json"), "utf8")).title).toBe(
+      "Changed",
+    );
+  });
+
+  it("says so in a sentence when a reader holds it open for longer than it waits", async (context) => {
+    // Only Windows refuses the rename, so only there is there anything to wait out.
+    if (process.platform !== "win32") {
+      context.skip();
+      return;
+    }
+    const store = await workspace();
+    await store.create("pack", "Pack");
+    const reader = await open(join(store.root, "pack", "manifest.json"), "r");
+    try {
+      await expect(store.update("pack", (manifest) => ({ ...manifest, title: "Changed" }))).rejects.toThrow(
+        WorkspaceError,
+      );
+      await expect(store.update("pack", (manifest) => ({ ...manifest, title: "Changed" }))).rejects.toThrow(
+        /held it open for over a second/,
+      );
+    } finally {
+      await reader.close();
+    }
+    const left = await readdir(join(store.root, "pack"));
+    expect(left.filter((name) => name.includes(".writing-"))).toEqual([]);
+  });
+
+  it("says a read-only file in the place of one it writes is read-only, not held open", async (context) => {
+    // Only Windows refuses to rename over a read-only file, with the code a reader holding it causes,
+    // and it was said to be held open for over a second, which trying again never changed.
+    if (process.platform !== "win32") {
+      context.skip();
+      return;
+    }
+    const store = await workspace();
+    await store.create("pack", "Pack");
+    const path = join(store.root, "pack", "manifest.json");
+    await chmod(path, 0o444);
+    try {
+      const refused = await store
+        .update("pack", (manifest) => ({ ...manifest, title: "Changed" }))
+        .then(
+          () => null,
+          (error: Error) => error.message,
+        );
+      expect(refused).toMatch(/manifest\.json is read-only, which a write cannot replace: make it writable/);
+      expect(refused).not.toContain("held it open");
+    } finally {
+      await chmod(path, 0o644);
+    }
+    const left = await readdir(join(store.root, "pack"));
+    expect(left.filter((name) => name.includes(".writing-"))).toEqual([]);
+  });
+
   it("leaves nothing behind when a write fails", async () => {
     const store = await workspace();
     await store.create("pack", "Pack");
@@ -236,15 +337,68 @@ describe("writing", () => {
     // The staging file it built beside it must not survive that.
     await rm(join(store.root, "pack", "manifest.json"));
     await mkdir(join(store.root, "pack", "manifest.json"), { recursive: true });
-    await expect(store.save("pack", { schemaVersion: "1.0.0", id: "pack", targets: [] })).rejects.toThrow();
+    const refused = await store.save("pack", { schemaVersion: "1.0.0", id: "pack", targets: [] }).then(
+      () => null,
+      (error: Error) => error.message,
+    );
+    expect(refused, "a write onto a folder succeeded").not.toBeNull();
+    // A folder where the file goes is not another program holding it, however the refusal reads
+    // on Windows, where it is the same code a reader causes; waiting would not change it.
+    expect(refused).not.toContain("held it open");
     const left = await readdir(join(store.root, "pack"));
     expect(left.filter((name) => name.includes(".writing-"))).toEqual([]);
+  });
+
+  it("says a folder or a link in a manifest's place is one, to be moved aside", async () => {
+    // The read named neither: "illegal operation on a directory" for a folder or a link to one,
+    // and "no such file" for a link to nothing, which called the link missing.
+    const store = await workspace();
+    await store.create("pack", "Pack");
+    const path = join(store.root, "pack", "manifest.json");
+    await rm(path);
+    await mkdir(path);
+    await expect(store.read("pack")).rejects.toThrow(
+      /manifest\.json is a folder, which a manifest cannot be: move it aside/,
+    );
+    // And the index lists it with that, where it was dropped from the list without a word.
+    expect((await store.list()).find((entry) => entry.id === "pack")).toMatchObject({
+      ok: false,
+      reason: expect.stringMatching(/manifest\.json is a folder, which a manifest cannot be/),
+    });
+    await rm(path, { recursive: true });
+    await symlink(join(store.root, "nowhere"), path, "junction");
+    await expect(store.read("pack")).rejects.toThrow(
+      /manifest\.json is a link to nothing, which a manifest cannot be/,
+    );
+    await rm(path, { recursive: true });
+    await mkdir(join(store.root, "elsewhere"));
+    await symlink(join(store.root, "elsewhere"), path, "junction");
+    await expect(store.read("pack")).rejects.toThrow(
+      /manifest\.json is a link to a folder, which a manifest cannot be/,
+    );
+  });
+
+  it("names a file that does not exist yet as Windows will store it", async (context) => {
+    // Windows drops trailing dots and spaces from a name it creates, so `links.json.` is written
+    // to `links.json`, and before it existed its lock was taken under the name as typed: a
+    // console given each spelling opened the same table with a lock each.
+    if (process.platform !== "win32") {
+      context.skip();
+      return;
+    }
+    const folder = await mkdtemp(join(tmpdir(), "taggant-names-"));
+    made.push(folder);
+    const plain = canonical(join(folder, "links.json"));
+    expect(canonical(join(folder, "links.json."))).toBe(plain);
+    expect(canonical(join(folder, "links.json. ."))).toBe(plain);
+    expect(queueKey(join(folder, "links.json."))).toBe(queueKey(join(folder, "links.json")));
   });
 
   it("refuses to write through a link that leaves the workspace", async () => {
     const store = await workspace();
     await store.create("pack", "Pack");
     const outside = await mkdtemp(join(tmpdir(), "taggant-outside-"));
+    made.push(outside);
     let linked = true;
     try {
       // A junction on Windows needs no elevation; a symlink to a directory may.

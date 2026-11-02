@@ -1,9 +1,10 @@
 #!/usr/bin/env node
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import process, { argv, stderr, stdout } from "node:process";
-import { pathToFileURL } from "node:url";
-import { bundle } from "./bundle.js";
+import { fileURLToPath } from "node:url";
+import { bundle, printable } from "./bundle.js";
 
 /** Exit codes, so a publish script can read the outcome instead of parsing stderr. */
 export const EXIT = { ok: 0, usage: 1, cannotRead: 3, cannotWrite: 4 } as const;
@@ -34,22 +35,34 @@ export function parseArguments(args: string[]): { arguments: Arguments } | { err
     if (arg === undefined) continue;
     if (arg === "--target" || arg === "--out") {
       const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) return { error: `${arg} needs a value` };
+      // An empty value names nothing: an empty file read as nothing and was said to be unreadable
+      // with no name, and an empty folder built the whole bundle in the working folder first.
+      if (value === undefined || value === "" || value.startsWith("--"))
+        return { error: `${arg} needs a value` };
       i++;
       if (arg === "--out") {
         if (out !== undefined) return { error: "--out was given more than once" };
         out = value;
         continue;
       }
+      // What was given is written by its code points, as every message here is, and before the
+      // message is split into lines: a line feed in it printed a line of its own.
       const split = value.indexOf("=");
-      if (split < 1) return { error: `--target must be written as <id>=<file>, and this is ${value}` };
+      if (split < 1 || split === value.length - 1) {
+        return { error: `--target must be written as <id>=<file>, and this is ${printable(value)}` };
+      }
       const id = value.slice(0, split);
-      if (targets.some(([existing]) => existing === id)) return { error: `--target ${id} was given twice` };
+      if (targets.some(([existing]) => existing === id)) {
+        return { error: `--target ${printable(id)} was given twice` };
+      }
       targets.push([id, value.slice(split + 1)]);
       continue;
     }
-    if (arg.startsWith("--")) return { error: `unknown option ${arg}` };
-    if (manifest !== undefined) return { error: `only one manifest can be bundled, and ${arg} is a second` };
+    if (arg.startsWith("--")) return { error: `unknown option ${printable(arg)}` };
+    if (arg === "") return { error: "an empty argument was given where a manifest's path goes" };
+    if (manifest !== undefined) {
+      return { error: `only one manifest can be bundled, and ${printable(arg)} is a second` };
+    }
     manifest = arg;
   }
 
@@ -67,7 +80,7 @@ export async function main(args: string[]): Promise<number> {
 
   const parsed = parseArguments(args);
   if ("error" in parsed) {
-    stderr.write(`${parsed.error}\n${USAGE}`);
+    stderr.write(`${said(parsed.error)}\n${USAGE}`);
     return EXIT.usage;
   }
 
@@ -75,10 +88,10 @@ export async function main(args: string[]): Promise<number> {
   let manifest: unknown;
   const compiled: Record<string, unknown> = {};
   try {
-    manifest = JSON.parse(await readFile(manifestPath, "utf8"));
-    for (const [id, file] of targets) compiled[id] = JSON.parse(await readFile(file, "utf8"));
+    manifest = await readJsonFile(manifestPath);
+    for (const [id, file] of targets) compiled[id] = await readJsonFile(file);
   } catch (error) {
-    stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    stderr.write(`${said(error instanceof Error ? error.message : String(error))}\n`);
     return EXIT.cannotRead;
   }
 
@@ -91,22 +104,82 @@ export async function main(args: string[]): Promise<number> {
       sourceDir: dirname(resolve(manifestPath)),
       outDir: out,
     });
-    stdout.write(`\n  ${result.files.length} files written to ${result.outDir}\n`);
+    // The folder and the files as given are written by their code points here too.
+    stdout.write(`\n  ${result.files.length} files written to ${printable(result.outDir)}\n`);
     for (const asset of result.assets) {
-      stdout.write(`  ${asset.from} -> ${asset.to} (${asset.bytes} bytes)\n`);
+      stdout.write(`  ${printable(asset.from)} -> ${asset.to} (${asset.bytes} bytes)\n`);
     }
     stdout.write("\n  Serve that folder over HTTPS or from localhost. It needs nothing else.\n\n");
     return EXIT.ok;
   } catch (error) {
-    stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    stderr.write(`${said(error instanceof Error ? error.message : String(error))}\n`);
     return EXIT.cannotWrite;
   }
 }
 
-const invokedDirectly = argv[1] !== undefined && import.meta.url === pathToFileURL(argv[1]).href;
-if (invokedDirectly) {
+/**
+ * Whether this file is the program that was run, compared as the files the two paths name. As
+ * text, a command line reached through a link did nothing at all and exited 0.
+ */
+function invokedDirectly(): boolean {
+  if (argv[1] === undefined) return false;
+  const self = realpathSync.native(fileURLToPath(import.meta.url));
+  // Node runs a name given without its extension as the `.js` file, so both spellings are tried:
+  // named `cli`, the program ran, did nothing and exited 0.
+  for (const named of [argv[1], `${argv[1]}.js`]) {
+    try {
+      if (realpathSync.native(named) === self) return true;
+    } catch {
+      // Nothing by that name.
+    }
+  }
+  return false;
+}
+if (invokedDirectly()) {
   main(argv.slice(2)).then((code) => {
     // Set rather than called, so anything still buffered on stdout is written first.
     process.exitCode = code;
   });
+}
+
+/**
+ * A message as the terminal shows it, each line by `printable`: a file that does not parse is
+ * quoted in the parser's own message, a byte-order mark it holds among it, and one shown as it is
+ * names a character nobody can see.
+ */
+function said(message: string): string {
+  return message.split("\n").map(printable).join("\n");
+}
+
+/**
+ * A JSON file's text read as though a byte-order mark in front were not there, which RFC 8259 lets
+ * a reader drop: a manifest or a target an editor saved with one was refused, the message naming a
+ * character nobody can see.
+ */
+function readJson(text: string): unknown {
+  return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+}
+
+/**
+ * A file given on the command line, read and parsed, any failure naming it: with two targets given,
+ * "EISDIR: illegal operation on a directory, read" did not say which of the three files was a
+ * folder, and a parser's message names no file at all. For a file that could not be read, the name
+ * and the system's reason, which names it again, are written by their code points before `said`
+ * splits the message into lines: a line feed in the name printed a line of its own.
+ */
+async function readJsonFile(path: string): Promise<unknown> {
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code === "EISDIR") throw new Error(`${path} is a folder, not a file.`);
+    const reason = printable(error instanceof Error ? error.message : String(error));
+    throw new Error(`${printable(path)} could not be read: ${reason}`);
+  }
+  try {
+    return readJson(text);
+  } catch (error) {
+    throw new Error(`${path} does not parse: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }

@@ -12,16 +12,22 @@
  *   one, because both are a client getting an answer about an identifier.
  * - A request that could not be read as a Digital Link is not a scan. It never named an
  *   identifier, so there is nothing to count it against.
- * - A request for an identifier nothing is linked to is a scan, recorded as unresolved. It
- *   is a real person pointing a camera at a real printed thing, and it is the most useful
- *   number in the system: it is how a code that was printed but never assigned is found.
+ * - A request the table has no link to answer with is a scan, recorded as unresolved: an
+ *   identifier nothing is linked to, a link type its links do not have, or no default when
+ *   no type was asked for. Of those, an identifier with nothing linked to it or further up
+ *   its hierarchy is how a code that was printed but never assigned is found. The count is of
+ *   requests, which anyone can send, so it says which codes to look at rather than how many
+ *   people looked.
  * - The description file and the context file are not scans. They are about the resolver.
  * - A HEAD is a scan, because clients use it to follow a link without fetching it, and
  *   excluding it undercounts silently.
  *
- * What is deliberately not here: anything identifying a person. No address, no user agent
- * string, no cookie. The language is kept because it decided which link was chosen and a
- * report that cannot explain its own redirects is not much of a report.
+ * What is deliberately not here: anything about whoever scanned. No address, no user agent
+ * string, no cookie. The identifier is the code's own, and a code can name a person: a
+ * service relation number names the recipient of a service, and a serial number or a lot
+ * holds whatever was printed in it, so a log of these events holds whatever its codes name.
+ * The language is kept because it decided which link was chosen and a report that cannot
+ * explain its own redirects is not much of a report.
  */
 export interface ScanEvent {
   type: "scan";
@@ -31,9 +37,16 @@ export interface ScanEvent {
   identifier: string;
   /** What the client got. */
   outcome: "redirect" | "linkset" | "unresolved";
-  /** The link type asked for, if the request named one. */
+  /**
+   * The link type asked for, if the request named one that the identifier's links have or one
+   * of the link types of the GS1 vocabulary. Anything else is left out, being a caller's own
+   * text, and a term of the vocabulary that is not a link type, such as `gs1:Product`, with it.
+   */
   requested?: string;
-  /** Where the client was sent, for a redirect. */
+  /**
+   * The link the table chose, for a redirect: where the client was sent, without the query string
+   * the redirect carried on to it from the request.
+   */
   target?: string;
   /** The language that decided the choice, when one did. */
   language?: string;
@@ -46,8 +59,16 @@ export interface ProblemEvent {
   at: string;
   /** Why the request could not be answered. */
   reason: string;
-  /** The path as asked for, which is the thing that needs fixing. */
+  /**
+   * The path asked for, which is the thing that needs fixing: the path the URL parser reads in the
+   * request's target, without its query and escaped as that parser escapes it, or, for a target it
+   * cannot read, the target as sent up to its query or fragment, credentials cut from either. At
+   * most its first 512 characters, the longest path the resolver reads as a Digital Link, cut
+   * between characters.
+   */
   path: string;
+  /** How many characters of the path were left out of `path`, when it was longer than that. */
+  omitted?: number;
   status: number;
 }
 
@@ -69,18 +90,20 @@ export function jsonLines(write: (line: string) => void = (line) => process.stdo
 /** Counters, in the text format Prometheus and everything that imitates it reads. */
 export class Counters {
   private readonly scans = new Map<string, number>();
-  private problems = 0;
+  private badRequests = 0;
+  private serverErrors = 0;
   private totalMs = 0;
-  private answered = 0;
 
   record(event: Event): void {
     if (event.type === "problem") {
-      this.problems++;
+      // A request that could not be read is the caller's mistake, and one this resolver failed
+      // to answer is its own. Only the second is worth waking somebody for, so they are apart.
+      if (event.status >= 500) this.serverErrors++;
+      else this.badRequests++;
       return;
     }
     this.scans.set(event.outcome, (this.scans.get(event.outcome) ?? 0) + 1);
     this.totalMs += event.tookMs;
-    this.answered++;
   }
 
   render(): string {
@@ -92,15 +115,22 @@ export class Counters {
       lines.push(`taggant_scans_total{outcome="${outcome}"} ${this.scans.get(outcome) ?? 0}`);
     }
     lines.push(
-      "# HELP taggant_bad_requests_total Requests that could not be read as a Digital Link.",
+      "# HELP taggant_bad_requests_total Requests the resolver could not read as a Digital Link. One the HTTP parser refuses is answered before it reaches the resolver, and is not counted.",
       "# TYPE taggant_bad_requests_total counter",
-      `taggant_bad_requests_total ${this.problems}`,
-      "# HELP taggant_resolve_seconds_total Time spent resolving, in seconds.",
+      `taggant_bad_requests_total ${this.badRequests}`,
+      // There was a `taggant_answered_total` here as the denominator for the line above,
+      // and it is gone. It counted one per scan, so it was exactly the sum of the scan
+      // counter under a name that claimed more: the resolver answers health checks,
+      // readiness checks, metrics scrapes and bad requests as well, and none of those were
+      // in it, so a dashboard reading it as a request rate read low by however often an
+      // orchestrator polls. Two numbers that must stay equal are two numbers that can
+      // drift, and the sum is one expression away.
+      "# HELP taggant_server_errors_total Requests this resolver failed to answer, through a fault of its own.",
+      "# TYPE taggant_server_errors_total counter",
+      `taggant_server_errors_total ${this.serverErrors}`,
+      "# HELP taggant_resolve_seconds_total Time spent resolving, in seconds. Divide by sum(taggant_scans_total) for the mean.",
       "# TYPE taggant_resolve_seconds_total counter",
       `taggant_resolve_seconds_total ${(this.totalMs / 1000).toFixed(6)}`,
-      "# HELP taggant_answered_total Answers given, for averaging the line above.",
-      "# TYPE taggant_answered_total counter",
-      `taggant_answered_total ${this.answered}`,
     );
     return `${lines.join("\n")}\n`;
   }

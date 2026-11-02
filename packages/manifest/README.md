@@ -46,8 +46,7 @@ A manifest must name at least one target, and a target must show at least one th
         }
       ]
     }
-  ],
-  "fallback": "https://example.com/postcard"
+  ]
 }
 ```
 
@@ -59,7 +58,7 @@ A manifest must name at least one target, and a target must show at least one th
 | `id` | required | Identifies the experience. It becomes the name of the folder a published bundle is written to, and so part of the address that folder is served from. Once a code carrying that address has been printed, the id is fixed. Lower case letters, digits and hyphens, three to sixty four characters. |
 | `title` | | A name for people. Nothing renders it; it is what makes a list of manifests readable. |
 | `subject` | | What physical thing the experience belongs to: `kind` is one of `product`, `print`, `artwork`, `other`, and `reference` is whatever the thing is called wherever it is already catalogued. **Nothing in this project reads it.** It is here so a manifest carries its own answer to what it is for, without a database alongside it to ask. |
-| `targets` | required | The artwork a camera recognises. At least one. |
+| `targets` | required | The artwork a camera recognises. At least one, and at most 64: every target is compiled, published and then held in the browser at once. |
 | `fallback` | | Where a scan goes when the experience cannot be shown at all, such as a browser that will not open a camera. Held to `http` and `https`: a manifest is authored data and must not be able to carry script into a browser. |
 
 ### A target
@@ -68,8 +67,8 @@ A manifest must name at least one target, and a target must show at least one th
 |---|---|---|
 | `id` | required | Identifies the target within the experience. A compiled target file is matched to it by this name, so it is the one thing the compiler's output and this manifest have to agree on. Same shape as the experience id. |
 | `source` | required | Path to the artwork this target was compiled from, relative to the manifest. Carried so the target can be built again from the thing it was made from, rather than from whoever remembers which file it was. |
-| `physicalWidthMm` | required | How wide the artwork is on the finished piece, in millimetres. **This is the number the print readiness report is measured against.** The compiler says the smallest width the artwork can still be read at from a stated distance; a piece printed narrower than that will not be recognised, whatever else is right about it. |
-| `content` | required | What is shown when the target is found. At least one. |
+| `physicalWidthMm` | required | How wide the artwork is on the finished piece, in millimetres, measured left to right as its file is oriented: the edge the compiler's minimum print width is for, which is not the long edge of the piece when the file is turned. **This is the number the print readiness report is measured against.** The compiler says the smallest width the artwork can still be read at from a stated distance; a piece printed narrower than that will not be recognised, whatever else is right about it. |
+| `content` | required | What is shown when the target is found. At least one, and at most 32: each piece is fetched and placed when the target is found, and every SVG among them costs a render when the bundle is published. |
 
 ### A piece of content
 
@@ -121,3 +120,5 @@ Two things about that call. **Defaults are applied to the value it returns**, so
 ## Versions
 
 `schemaVersion` is a value, not a range. A file says which version it was written to, and a reader that does not know that version refuses it. When there is a second version there will be a migration path between them and this document will describe it. There is one version today, so there is nothing to migrate.
+
+While that stays true, `1.0.0` is still moving, and this is where such a move is recorded. On 2026-09-15 it gained the two ceilings above, at 64 targets and 32 pieces of content, so a document that validated as `1.0.0` the day before and sits past one of them does not now. Nothing published regresses: the widest manifest anywhere in this repository holds one target and two pieces of content. The project states plainly that nothing is tagged and interfaces change without notice, and this is one of those changes; once a version is tagged, a narrowing like this one takes a new version number instead.

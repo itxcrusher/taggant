@@ -66,4 +66,30 @@ describe("the target file", () => {
     expect(() => fromTargetFile("target")).toThrow(/must be an object/i);
     expect(() => fromTargetFile({ formatVersion: 2 })).toThrow(/missing an id/i);
   });
+
+  it("refuses an empty id, which every published bundle uses as a file name", () => {
+    expect(() => fromTargetFile({ ...toTargetFile(built), id: "" })).toThrow(/missing an id/);
+  });
+
+  it("refuses a feature outside the artwork it declares", () => {
+    // The width and height were validated and then bound nothing, so a feature at x 1e308
+    // read as part of a 320 pixel artwork and a pose was fitted to it.
+    const file = toTargetFile(built);
+    const first = file.features[0];
+    if (!first) throw new Error("the fixture has no features");
+    for (const [label, moved] of [
+      ["far to the right", { ...first, x: 1e308 }],
+      ["to the left of it", { ...first, x: -1 }],
+      ["below it", { ...first, y: built.height + 5 }],
+    ] as const) {
+      expect(() => fromTargetFile({ ...file, features: [moved, ...file.features.slice(1)] }), label).toThrow(
+        /outside the/,
+      );
+    }
+  });
+
+  it("says which version it was given, in a way that cannot read as the version it wants", () => {
+    // The string "2" read "format 2 is not supported, expected 2".
+    expect(() => fromTargetFile({ ...toTargetFile(built), formatVersion: "2" })).toThrow(/format "2" is not/);
+  });
 });

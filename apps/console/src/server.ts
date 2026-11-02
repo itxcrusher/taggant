@@ -1,9 +1,9 @@
 /**
  * The console's HTTP server.
  *
- * A plain `node:http` server rendering HTML, the same shape as `services/resolver`, for
- * the reasons in D-018. Everything that matters happens on this side of the wire anyway:
- * the compiler is a native module and publishing is filesystem work.
+ * A plain `node:http` server rendering HTML, the same shape as `services/resolver`, so it
+ * costs nothing new to learn or to ship. Everything that matters happens on this side of the
+ * wire anyway: the compiler is a native module and publishing is filesystem work.
  *
  * This server has no authentication and is not meant to be reachable from anywhere. It
  * binds to the loopback address unless told otherwise and says so loudly when it is told
@@ -12,11 +12,35 @@
 
 import { randomUUID } from "node:crypto";
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http";
-import { carriesItsDistance } from "@taggant/compiler";
+import { MIMEType } from "node:util";
+import {
+  type Report,
+  describesTarget,
+  distanceBehind,
+  isCurrentReport,
+  widthFromThisModel,
+} from "@taggant/compiler";
+import { manifestSchema } from "@taggant/manifest";
+import { fromTargetFile } from "@taggant/vision";
 import { DEFAULT_SCAN_DISTANCE_MM, bundleDirFor, compile, publish, registerCode } from "./operations.js";
 import { STYLESHEET } from "./style.js";
-import { type Notice, type TargetView, errorPage, experiencePage, indexPage, page } from "./views.js";
-import { type Experience, type Workspace, WorkspaceError, assertId, assertTargetId } from "./workspace.js";
+import {
+  type Notice,
+  type TargetView,
+  describeProblem,
+  errorPage,
+  experiencePage,
+  indexPage,
+  page,
+} from "./views.js";
+import {
+  type Experience,
+  TargetNotReadError,
+  type Workspace,
+  WorkspaceError,
+  assertId,
+  assertTargetId,
+} from "./workspace.js";
 
 /**
  * Largest request this will read.
@@ -26,6 +50,17 @@ import { type Experience, type Workspace, WorkspaceError, assertId, assertTarget
  * memory the process uses.
  */
 const MAX_BODY_BYTES = 256 * 1024 * 1024;
+
+/**
+ * How many targets an experience may hold, and how many pieces of content a target may,
+ * read out of the manifest schema rather than written here as well.
+ *
+ * The schema refuses more than this at the next save, which is correct and arrives as a
+ * validation error naming a JSON path. An operator adding artwork through a form should
+ * meet a sentence instead, before the upload is stored.
+ */
+const MOST_TARGETS = manifestSchema.properties.targets.maxItems;
+const MOST_CONTENT = manifestSchema.$defs.target.properties.content.maxItems;
 
 /**
  * The bound on a form that carries no file.
@@ -47,6 +82,60 @@ export interface ConsoleOptions {
   runtimeDir?: string;
   /** Any further host names it should accept, when it is behind something. */
   hosts?: readonly string[];
+  /**
+   * Asked before the link table is written: null to go ahead, or the sentence the write is
+   * refused with. The command line answers it from its lock on the table; the workspace it is
+   * handed asks its own.
+   */
+  holdsTable?: () => string | null;
+}
+
+/**
+ * How many unread notices are held at once.
+ *
+ * One per operator action that redirects, held for five minutes or until the redirect is
+ * followed. A thousand is far more than a person generates.
+ */
+const MOST_NOTICES = 1000;
+
+/**
+ * The longest a notice's message or detail is kept, in characters.
+ *
+ * The count alone bounded nothing, because a notice can echo what was posted: a refused
+ * width repeats the field it refused, and one 100 MB field became a 100 MB notice and then a
+ * 100 MB page. Five such posts took the console from 67 to 694 MB. Cut here, so every notice
+ * is small whatever put it there, and a thousand of them are a few megabytes at most.
+ *
+ * The middle is what goes, not the end. A refusal names the value first and says what is
+ * wrong with it last, so keeping only the start kept a screenful of the value and dropped the
+ * sentence.
+ */
+const LONGEST_NOTICE = 2000;
+
+function shortened(text: string): string {
+  if (text.length <= LONGEST_NOTICE) return copied(text);
+  let head = LONGEST_NOTICE / 2;
+  let tail = text.length - LONGEST_NOTICE / 2;
+  // Never between the two halves of a character written as a pair, which shows as a mark that
+  // stands for nothing.
+  if (isFirstHalf(text.charCodeAt(head - 1))) head--;
+  if (isSecondHalf(text.charCodeAt(tail))) tail++;
+  return copied(`${text.slice(0, head)} [${tail - head} characters not shown] ${text.slice(tail)}`);
+}
+
+const isFirstHalf = (code: number): boolean => code >= 0xd800 && code <= 0xdbff;
+const isSecondHalf = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
+
+/**
+ * A copy of the text that holds nothing else.
+ *
+ * A slice can be a view of the string it was cut from, and a view keeps all of that string alive:
+ * the cut above kept 2000 characters on screen and the whole posted value in memory, so five
+ * refused 100 MB fields took the heap from 10 to 509 MB, which is what the cut was for. Encoding
+ * and decoding makes a string of its own.
+ */
+function copied(text: string): string {
+  return Buffer.from(text, "utf16le").toString("utf16le");
 }
 
 /**
@@ -63,11 +152,28 @@ class Notices {
   put(notice: Notice): string {
     this.sweep();
     const token = randomUUID();
-    this.held.set(token, { notice, at: Date.now() });
+    const kept: Notice = { tone: notice.tone, message: shortened(notice.message) };
+    if (notice.detail !== undefined) kept.detail = shortened(notice.detail);
+    this.held.set(token, { notice: kept, at: Date.now() });
+    // A ceiling, because this was the one quantity in this file without one while every
+    // other bound here is commented. A notice is held until its redirect is followed or
+    // five minutes pass, and a client that never follows its redirects holds every one:
+    // measured at about 1.4 KB per refusal, 4000 of them took the heap from 9.8 to 15.2
+    // MB. Small, and only reachable from the same origin, which is local. Dropped oldest
+    // first, which is insertion order for a Map, so the notice most likely to still be
+    // wanted is the one kept.
+    while (this.held.size > MOST_NOTICES) {
+      const oldest = this.held.keys().next();
+      if (oldest.done) break;
+      this.held.delete(oldest.value);
+    }
     return token;
   }
 
   take(token: string | null): Notice | undefined {
+    // Swept here as well, so expired notices go when pages are read and not only when another
+    // notice is made.
+    this.sweep();
     if (!token) return undefined;
     const found = this.held.get(token);
     this.held.delete(token);
@@ -146,13 +252,33 @@ async function readBody(request: IncomingMessage, limit: number): Promise<Buffer
   }
   const chunks: Buffer[] = [];
   let total = 0;
-  for await (const chunk of request) {
-    const buffer = chunk as Buffer;
-    total += buffer.length;
-    if (total > limit) {
-      throw new WorkspaceError(`that is larger than the ${describeSize(limit)} limit`);
+  try {
+    for await (const chunk of request) {
+      const buffer = chunk as Buffer;
+      total += buffer.length;
+      if (total > limit) {
+        throw new WorkspaceError(`that is larger than the ${describeSize(limit)} limit`);
+      }
+      chunks.push(buffer);
     }
-    chunks.push(buffer);
+  } catch (error) {
+    if (error instanceof WorkspaceError) throw error;
+    // A browser that navigated away, a cancelled upload, a laptop that closed. Anything
+    // raised while reading a body is the client's circumstance rather than a fault, and
+    // arrived as five lines of Node stack in the operator's terminal because it is not a
+    // `WorkspaceError` and took the outer path. Nothing can be answered either way, since
+    // there is nobody on the socket; what this changes is what gets written down.
+    //
+    // Unverified, and said so rather than counted. On Node 22 here a client that destroys
+    // its socket leaves a request stream that simply ends, so nothing raises and the
+    // sentence an operator sees comes from the multipart parser instead. Three shapes were
+    // tried and none reached this branch, so it is a net under a path that exists in
+    // somebody else's measurement and not in mine.
+    throw new WorkspaceError(
+      `that upload stopped before it finished, after ${describeSize(total)}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
   return Buffer.concat(chunks);
 }
@@ -168,11 +294,28 @@ function describeSize(bytes: number): string {
  * attack surface here and the platform's parser is a better one than any written for the
  * occasion.
  */
-async function readForm(request: IncomingMessage): Promise<FormData> {
+async function readForm(
+  request: IncomingMessage,
+  carries: "fields" | "a file" = "fields",
+): Promise<FormData> {
   const type = request.headers["content-type"] ?? "";
   const multipart = type.startsWith("multipart/form-data");
-  const body = await readBody(request, multipart ? MAX_BODY_BYTES : MAX_FORM_BYTES);
+  // The limit comes from the route, not from the request. It used to be picked by the
+  // client's own Content-Type: anything that declared multipart was allowed 256 MB, so a
+  // request to create an experience, which has two short fields in it, could hand this
+  // process a quarter of a gigabyte to hold in memory by saying multipart and sending
+  // form fields. Two routes take a file and say so; every other route is 64 KB whatever
+  // the request calls itself. Multipart is still parsed either way, because a form with
+  // no file in it may legally be posted that way.
+  //
+  // And the large limit needs both: a route that takes a file, and a body that can carry
+  // one. Given to the route alone, it went to whatever was posted there, and a body that is
+  // not multipart is parsed below as a form in one synchronous step: 250 MB of urlencoded
+  // text to the targets route held every other request for three to five seconds, where it
+  // had been refused at 64 KB in a tenth of one.
+  const body = await readBody(request, carries === "a file" && multipart ? MAX_BODY_BYTES : MAX_FORM_BYTES);
   if (multipart) {
+    checkMultipart(body, type);
     try {
       return await new Request("http://console.invalid/", {
         method: "POST",
@@ -191,6 +334,97 @@ async function readForm(request: IncomingMessage): Promise<FormData> {
   const form = new FormData();
   for (const [key, value] of new URLSearchParams(body.toString("utf8"))) form.append(key, value);
   return form;
+}
+
+/** The most parts a multipart form may have. Every form here sends four at most. */
+const MOST_PARTS = 16;
+
+/** The longest a part's headers may run, in bytes; a browser's are a few hundred. */
+const MOST_HEADER_BYTES = 16 * 1024;
+
+/**
+ * Refuse a multipart body shaped to hold the console up, before the parser sees it.
+ *
+ * `Request.formData()` parses a whole body in one synchronous step, and the large limit went to
+ * any multipart body on a route that takes a file. Urlencoded text had been stopped there and the
+ * same text sent as multipart went through: 250 MB as five million tiny parts held every other
+ * request for 29.7 s, long enough for a second console to take this one's lock as abandoned, and
+ * as a single field for 4.0 s. So the parts are counted, and a part with no file in it is held to
+ * the limit a form without a file has, in one pass over the body. A file part is what the large
+ * limit is for and keeps it.
+ */
+function checkMultipart(body: Buffer, contentType: string): void {
+  // Read by the WHATWG rules for MIME types rather than by a pattern search, which took a
+  // parameter whose name only ended in "boundary" for the boundary, counted nothing, and let
+  // every part through.
+  let boundary: string | null = null;
+  try {
+    boundary = new MIMEType(contentType).params.get("boundary");
+  } catch {
+    boundary = null;
+  }
+  if (boundary === null || boundary === "") {
+    throw new WorkspaceError("that form does not say where its parts begin and end, so it was not read");
+  }
+  const delimiter = Buffer.from(`--${boundary}`, "latin1");
+  let at = body.indexOf(delimiter);
+  let parts = 0;
+  while (at !== -1) {
+    const next = body.indexOf(delimiter, at + delimiter.length);
+    if (next === -1) break;
+    parts++;
+    if (parts > MOST_PARTS) {
+      throw new WorkspaceError(
+        `that form has more than ${MOST_PARTS} parts, and no form here sends more than four`,
+      );
+    }
+    // Searched within this part only, so a part with no end to its headers costs its own length.
+    const part = body.subarray(at, next);
+    const headersEnd = part.indexOf("\r\n\r\n");
+    // A part's headers are a few hundred bytes from any browser. Read as text whatever their
+    // length, a part whose headers ran to the end of a 250 MB body became one 250 MB string.
+    if (headersEnd > MOST_HEADER_BYTES) {
+      throw new WorkspaceError(
+        `that form has a part whose headers run to ${describeSize(headersEnd)}, where a browser sends a few hundred bytes`,
+      );
+    }
+    if (headersEnd !== -1) {
+      const carriesFile = /filename\*?=/i.test(part.subarray(0, headersEnd).toString("latin1"));
+      // The two bytes before the next delimiter end the part rather than belonging to it.
+      const length = part.length - (headersEnd + 4) - 2;
+      if (!carriesFile && length > MAX_FORM_BYTES) {
+        throw new WorkspaceError(
+          `a field of ${describeSize(length)} was sent where a few words are expected; a field without a file is limited to ${describeSize(MAX_FORM_BYTES)}`,
+        );
+      }
+    }
+    at = next;
+  }
+  // Every form here has at least one field. None counted means the boundary named is not the one
+  // the parts are divided by, and anything that read them some other way would read them unchecked.
+  if (parts === 0) {
+    throw new WorkspaceError(
+      "that form's parts could not be found by the boundary it names, so it was not read",
+    );
+  }
+}
+
+/**
+ * Whether a stored target file is one the runtime can read at all, by the same parser the runtime
+ * and the publish gate read it with. Taken only as "an object", an empty object or one from a
+ * later format read as not compiled yet, and one whose features were missing or a string showed its
+ * report's verdict, ready for press. A target that reads and holds no features is not called
+ * unreadable: a compile of artwork with nothing to track writes one, with its own refusal, which is
+ * the sentence the operator needs, and one carrying any other report is not this target's
+ * (`describesTarget`).
+ */
+function readableTarget(value: unknown): boolean {
+  try {
+    fromTargetFile(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -252,22 +486,67 @@ export function createConsole(options: ConsoleOptions): Server {
         contentCount: target.content.length,
       };
       if (await workspace.hasTarget(experience.id, target.id)) {
-        const compiled = (await workspace.readTarget(experience.id, target.id)) as {
-          report?: TargetView["report"];
-          scanDistanceMm?: number;
-        };
-        // Shown only when this build produced it. An older one holds a width about four
-        // times too small, and the page presents that width as the instruction a printer
-        // follows, so displaying it is worse than displaying nothing.
-        if (compiled.report && !carriesItsDistance(compiled.report)) {
-          view.staleReport = true;
-        } else if (compiled.report) {
-          view.report = compiled.report;
-          const needed = compiled.report.minimumWidthMm;
-          if (compiled.report.pass && needed !== null && target.physicalWidthMm < needed) {
+        // A target file that cannot be read is said so on its own card, rather than taking the
+        // whole page with it.
+        // Set when the file does not parse.
+        let unread = false;
+        // The system's reason, when the file could not be read at all: a folder or a link in its
+        // place, reading denied, or another program holding it.
+        let notRead: string | undefined;
+        // Gone since it was looked for, as when another program is replacing it.
+        let gone = false;
+        const compiled = await workspace.readTarget(experience.id, target.id).catch((error) => {
+          if (!(error instanceof TargetNotReadError)) unread = true;
+          else if (error.gone) gone = true;
+          else notRead = error.reason;
+          return null;
+        });
+        const isObject = (value: unknown): value is Record<string, unknown> =>
+          typeof value === "object" && value !== null && !Array.isArray(value);
+        const report = isObject(compiled) ? compiled.report : undefined;
+        // Shown only when this build would stand behind it. An older one holds a width about
+        // four times too small, or a readiness inferred from a figure that called a sheet of
+        // identical labels ready for press, and the page presents both as the instruction a
+        // printer follows, so displaying it is worse than displaying nothing.
+        //
+        // Said by what is wrong with it, and decided by whether the key is there rather than by
+        // whether its value is truthy: `null`, `0`, `false` and `""` read as not compiled yet,
+        // and a string read as a width too small to trust. No report at all is not compiled by
+        // anything this build stands behind, and publishing compiles it first, as the page says.
+        if (gone) {
+          // Nothing in its place: the card says what a card with no compiled file says.
+        } else if (!isObject(compiled) || !readableTarget(compiled)) {
+          view.staleReport = "unreadable";
+        } else if (report !== undefined && !isCurrentReport(report)) {
+          // The older build's only when nothing in it says this model wrote it: one of this model's
+          // that lost its distance was called the older build's, with a width too small to trust.
+          view.staleReport = !isObject(report) ? "broken" : widthFromThisModel(report) ? "verdict" : "width";
+        } else if (report !== undefined && !describesTarget(compiled)) {
+          // A report this build wrote that does not describe this target file: the publish gate
+          // refuses it, and its verdict and width are not this artwork's, so none of it is shown.
+          view.staleReport = "another";
+        } else if (report !== undefined) {
+          view.report = report as Report;
+          const needed = view.report.minimumWidthMm;
+          if (view.report.pass && needed !== null && target.physicalWidthMm < needed) {
             // The one thing a person can get wrong here that a press run makes permanent.
             view.tooSmall = `This target is set to print ${target.physicalWidthMm} mm wide and the compile says it needs at least ${needed} mm at that reading distance. Printed as it stands it will not be recognised.`;
           }
+        }
+        if (view.staleReport !== undefined) {
+          // Compiling again from the card starts at the distance a publish would rebuild at: the
+          // report's own, or the one an older report's figures give back. Offered the default, a
+          // piece compiled for 600 mm was compiled again at 150, and the distance chosen was gone.
+          // A file the runtime cannot read is no exception when its report survived: the publish
+          // rebuilds it at that report's distance, and the card offered 150 beside it.
+          view.scanDistanceMm = distanceBehind(report) ?? undefined;
+          // None to give back, from a report that is there or from a file that does not parse and
+          // so says nothing: the field is left for the operator to fill, as the publish asks them
+          // to, rather than holding a default nobody chose.
+          view.distanceLost =
+            view.scanDistanceMm === undefined && (report !== undefined || unread || notRead !== undefined);
+          if (unread) view.unread = true;
+          if (notRead !== undefined) view.notRead = notRead;
         }
       }
       views.push(view);
@@ -333,7 +612,7 @@ export function createConsole(options: ConsoleOptions): Server {
     if (added?.[1]) {
       const id = assertId(decode(added[1], "that experience"));
       const experience = await workspace.read(id);
-      const form = await readForm(request);
+      const form = await readForm(request, "a file");
       const targetId = assertTargetId(field(form, "targetId"));
       const width = Number(field(form, "physicalWidthMm"));
       // A floor of one millimetre rather than of zero. 0.001 was accepted, and a printed
@@ -351,18 +630,41 @@ export function createConsole(options: ConsoleOptions): Server {
         file.name,
         new Uint8Array(await file.arrayBuffer()),
       );
-      // Read, change and write in one turn. Read and save as separate calls lost three of
-      // four targets added at the same moment, because each request had read the manifest
-      // before any of the others wrote theirs.
-      await workspace.update(id, (manifest) => {
-        if (manifest.targets.some((target) => target.id === targetId)) {
-          throw new WorkspaceError(`${id} already has a target called ${targetId}`);
-        }
-        return {
-          ...manifest,
-          targets: [...manifest.targets, { id: targetId, source, physicalWidthMm: width, content: [] }],
-        };
-      });
+      // Everything from here either names the upload in the manifest or takes it away
+      // again. A refusal inside the write is the case this exists for: two forms submitted
+      // at the same moment both read a manifest with room, and the one that loses had
+      // already stored its file. It left `artwork/<name>.png` named by nothing, while the
+      // operator was told the ceiling had been reached, which is the opposite of the
+      // property this handler claims. The duplicate-target-id refusal below had the same
+      // hole and it is the older of the two.
+      try {
+        // Read, change and write in one turn. Read and save as separate calls lost three of
+        // four targets added at the same moment, because each request had read the manifest
+        // before any of the others wrote theirs.
+        await workspace.update(id, (manifest) => {
+          if (manifest.targets.some((target) => target.id === targetId)) {
+            throw new WorkspaceError(`${id} already has a target called ${targetId}`);
+          }
+          // Inside the turn that writes, which is the only place a count can be trusted:
+          // two forms submitted at the same moment both read a manifest with room, and
+          // only this runs with the write. There was a second check before the upload was
+          // stored, refusing the same thing a moment earlier, and it is gone: it made the
+          // two indistinguishable to a test, and the cleanup around this is what actually
+          // keeps the promise that a refusal leaves nothing on disk.
+          if (manifest.targets.length >= MOST_TARGETS) {
+            throw new WorkspaceError(
+              `${id} already has ${manifest.targets.length} targets, which is as many as the manifest format allows`,
+            );
+          }
+          return {
+            ...manifest,
+            targets: [...manifest.targets, { id: targetId, source, physicalWidthMm: width, content: [] }],
+          };
+        });
+      } catch (error) {
+        await workspace.forgetFile(id, source);
+        throw error;
+      }
       redirect(response, `/e/${encodeURIComponent(id)}`, {
         tone: "good",
         message: `${targetId} added. Compile it to find out whether it will track at ${width} mm.`,
@@ -375,7 +677,23 @@ export function createConsole(options: ConsoleOptions): Server {
       const id = assertId(decode(compiling[1], "that experience"));
       const targetId = decode(compiling[2], "that target");
       const form = await readForm(request);
-      const distance = Number(field(form, "scanDistanceMm") || DEFAULT_SCAN_DISTANCE_MM);
+      // Asked for rather than defaulted: a form sent with the field empty, from a page loaded before
+      // the field asked for a value or by hand, was compiled at 150 mm and called ready for press.
+      const given = field(form, "scanDistanceMm");
+      if (given === "") {
+        throw new WorkspaceError(
+          `say how far away ${targetId} will be read from, in millimetres, to compile it`,
+        );
+      }
+      // A number as a form's number field writes one, which HTML calls a valid floating-point
+      // number: `Number` also read `0x96` as 150 and compiled there, and answered letters with a
+      // scan distance of "NaN mm".
+      if (!/^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(given)) {
+        throw new WorkspaceError(
+          `say how far away ${targetId} will be read from as a number of millimetres, such as 600, to compile it`,
+        );
+      }
+      const distance = Number(given);
       const experience = await workspace.read(id);
       const outcome = await compile(workspace, experience, targetId, distance);
       redirect(response, `/e/${encodeURIComponent(id)}`, {
@@ -395,7 +713,7 @@ export function createConsole(options: ConsoleOptions): Server {
       if (!experience.manifest.targets.some((target) => target.id === targetId)) {
         throw new WorkspaceError(`${id} has no target called ${targetId}`);
       }
-      const form = await readForm(request);
+      const form = await readForm(request, "a file");
       const type = field(form, "type");
       if (!["image", "video", "model", "audio"].includes(type)) {
         throw new WorkspaceError(`${type} is not a content type the manifest allows`);
@@ -403,14 +721,37 @@ export function createConsole(options: ConsoleOptions): Server {
       const file = form.get("file");
       if (!(file instanceof File) || file.size === 0) throw new WorkspaceError("no file was uploaded");
       const src = await workspace.storeFile(id, "media", file.name, new Uint8Array(await file.arrayBuffer()));
-      await workspace.update(id, (manifest) => ({
-        ...manifest,
-        targets: manifest.targets.map((target) =>
-          target.id === targetId
-            ? { ...target, content: [...target.content, { type: type as "image", src }] }
-            : target,
-        ),
-      }));
+      try {
+        await workspace.update(id, (manifest) => {
+          // Inside the turn that writes, which is the only place a count can be trusted:
+          // two forms submitted at the same moment both read a manifest with room, and
+          // only this runs with the write. The refusal takes the upload back below.
+          const holding = manifest.targets.find((candidate) => candidate.id === targetId);
+          if (holding === undefined) {
+            // The target existed when the request was checked and does not now. Saying so
+            // is the point: the same manifest was rewritten by something else in between,
+            // and the alternative, which this had, was to rewrite the manifest unchanged
+            // and tell the operator their file was added.
+            throw new WorkspaceError(`${id} no longer has a target called ${targetId}`);
+          }
+          if (holding.content.length >= MOST_CONTENT) {
+            throw new WorkspaceError(
+              `${targetId} already shows ${holding.content.length} pieces of content, which is as many as the manifest format allows`,
+            );
+          }
+          return {
+            ...manifest,
+            targets: manifest.targets.map((target) =>
+              target.id === targetId
+                ? { ...target, content: [...target.content, { type: type as "image", src }] }
+                : target,
+            ),
+          };
+        });
+      } catch (error) {
+        await workspace.forgetFile(id, src);
+        throw error;
+      }
       redirect(response, `/e/${encodeURIComponent(id)}`, {
         tone: "good",
         message: `${file.name} added to ${targetId}.`,
@@ -422,6 +763,16 @@ export function createConsole(options: ConsoleOptions): Server {
     if (publishing?.[1]) {
       const id = assertId(decode(publishing[1], "that experience"));
       const experience = await workspace.read(id);
+      // Said the way the page says it, rather than as the validator's JSON pointers.
+      // `publishable` in the workspace refuses with the raw wording, which is right for a
+      // caller that is not a browser, and this is the browser.
+      if (experience.problems.length > 0) {
+        throw new WorkspaceError(
+          `${id} cannot be published yet: ${experience.problems
+            .map((problem) => describeProblem(problem, experience.manifest))
+            .join(" ")}`,
+        );
+      }
       const outDir = bundleDirFor(publishRoot, id);
       // Which targets the publish rebuilt, filled in as it goes, because a publish that
       // fails at the bundler has already written any rebuild it did and the operator is
@@ -438,7 +789,9 @@ export function createConsole(options: ConsoleOptions): Server {
         // the operator did not type, and nothing was published, so the two facts have to
         // arrive together or the workspace has quietly changed under them.
         if (rebuilt.length === 0) throw error;
-        const why = error instanceof Error ? error.message : String(error);
+        // Without its closing stop, which the sentence after it supplies: a message that ended in
+        // one was printed with two.
+        const why = (error instanceof Error ? error.message : String(error)).replace(/\.+$/, "");
         throw new WorkspaceError(`${why}. On the way there, ${rebuilt.join(", ")} was compiled again.`);
       }
       // A publish can rebuild a target on the way past: one the runtime cannot read, or one
@@ -469,21 +822,37 @@ export function createConsole(options: ConsoleOptions): Server {
       if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
         throw new WorkspaceError(`a code can only point at http or https, and this is ${parsed.protocol}`);
       }
-      const written = await registerCode(linkTablePath, {
-        path: field(form, "path"),
-        href,
-        title: `Experience ${id}`,
-      });
+      const written = await registerCode(
+        linkTablePath,
+        {
+          path: field(form, "path"),
+          href,
+          title: `Experience ${id}`,
+        },
+        options.holdsTable === undefined ? {} : { holds: options.holdsTable },
+      );
       redirect(response, `/e/${encodeURIComponent(id)}`, {
-        tone: "good",
+        tone: written.stillRefused === undefined ? "good" : "warn",
         message: [
-          `${written.path} points here.`,
+          written.stillRefused === undefined
+            ? `${written.path} points here.`
+            : `${written.path} points here in the link table.`,
           written.replaced > 0
             ? `${written.replaced} product ${written.replaced === 1 ? "link" : "links"} of that kind ${written.replaced === 1 ? "was" : "were"} replaced.`
+            : "",
+          written.unmarked > 0
+            ? "The link a plain scan of it followed before keeps its place and is no longer the default."
             : "",
           written.kept > 0
             ? `${written.kept} other ${written.kept === 1 ? "link" : "links"} on that code ${written.kept === 1 ? "was" : "were"} left alone.`
             : "",
+          // Last, so the sentences before it are read as about the code registered here, where they
+          // followed the other code's reason. That reason may end in a full stop of its own, and
+          // registering that code from this page would point it here, so the notice says where to
+          // register it from and what that leaves, all of its links of the kind registered replaced.
+          written.stillRefused === undefined
+            ? ""
+            : `The resolver still refuses the table, for another code: ${written.stillRefused.replace(/\.$/, "")}. If that code holds two defaults, registering it from the experience it should point at leaves it one, the link to that experience; otherwise correct it by hand.`,
         ]
           .filter(Boolean)
           .join(" "),
@@ -577,7 +946,7 @@ export function createConsole(options: ConsoleOptions): Server {
   return createServer((request, response) => {
     handle(request, response).catch((error) => {
       // Whatever went wrong goes to the log, not to the browser. A stack trace in a page
-      // is how the resolver leaked its internals before an adversarial pass caught it.
+      // is how the resolver once leaked its internals.
       process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
       if (response.headersSent) {
         response.end();

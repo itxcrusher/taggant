@@ -154,4 +154,13 @@ describe("describeCorners on patches with no direction", () => {
       1,
     );
   });
+
+  it("has no distance between descriptors of different lengths", () => {
+    // It read the first argument's length only, so a truncated descriptor was identical to
+    // everything one way round and as far as possible from it the other.
+    const whole = new Uint32Array(8).fill(0xffff_ffff);
+    expect(() => hamming(whole.subarray(0, 0), whole)).toThrow(RangeError);
+    expect(() => hamming(whole, whole.subarray(0, 2))).toThrow(RangeError);
+    expect(hamming(whole, new Uint32Array(8))).toBe(hamming(new Uint32Array(8), whole));
+  });
 });

@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { describeProblem, esc } from "../src/views.js";
+import {
+  describeProblem,
+  errorPage,
+  esc,
+  experiencePage,
+  indexPage,
+  page,
+  shown,
+  verdict,
+} from "../src/views.js";
 
 /**
  * The wording a person is shown when they cannot publish, and the escaping everything
@@ -46,5 +55,231 @@ describe("what a person is told is missing", () => {
 describe("escaping", () => {
   it("escapes every character that could end an attribute or open a tag", () => {
     expect(esc(`<a href="x" onclick='y'>&`)).toBe("&lt;a href=&quot;x&quot; onclick=&#39;y&#39;&gt;&amp;");
+  });
+
+  it("shows a direction or isolation control in a name as its code point, wherever the name is written", () => {
+    // A right-to-left override holds to the end of its paragraph unless something closes it, so one
+    // in a file name ran on over the count written after the name; isolated, the character that
+    // ends an isolate in front of it closed the isolation early and let it run on all the same; and
+    // in a notice or the list of problems, it laid the whole sentence out backwards.
+    const pdi = String.fromCharCode(0x2069);
+    const rlo = String.fromCharCode(0x202e);
+    const raw = new RegExp(`[${pdi}${rlo}]`);
+    const card = experiencePage({
+      id: "botanica-500",
+      manifest: { ...MANIFEST, targets: [{ ...MANIFEST.targets[0], id: `front${rlo}` }] } as never,
+      problems: [{ path: "/targets/0/content", message: "must NOT have fewer than 1 items" }],
+      targets: [
+        { id: `front${rlo}`, source: `artwork/${pdi}${rlo}gnp.front`, physicalWidthMm: 62, contentCount: 0 },
+      ],
+    });
+    expect(card).toContain("<bdi>artwork/\\u{2069}\\u{202e}gnp.front</bdi> &middot; 0 content items");
+    expect(card).toContain('<h3 class="flush">front\\u{202e}</h3>');
+    expect(card).toContain("<li>front\\u{202e} has nothing to show. Add content to it.</li>");
+    expect(card).not.toMatch(raw);
+    const notice = page({
+      title: "t",
+      workspaceRoot: "w",
+      notice: { tone: "bad", message: `the artwork ${rlo}gnp.front`, detail: `x${pdi}` },
+      body: "",
+    });
+    expect(notice).toContain("the artwork \\u{202e}gnp.front");
+    expect(notice).toContain("x\\u{2069}");
+    expect(notice).not.toMatch(raw);
+    expect(errorPage(404, `${rlo}missing`)).toContain("\\u{202e}missing");
+    // An experience's title is a name its manifest gives too: in the tab, the heading and the
+    // index it laid itself out backwards, written as its author wrote it.
+    const titled = experiencePage({
+      id: "botanica-500",
+      manifest: { ...MANIFEST, title: `${rlo}Botanica` } as never,
+      problems: [],
+      targets: [],
+    });
+    expect(titled).toContain("<h2>\\u{202e}Botanica</h2>");
+    expect(titled).not.toMatch(raw);
+    const tab = page({ title: `${rlo}Botanica - taggant console`, workspaceRoot: "w", body: "" });
+    expect(tab).toContain("<title>\\u{202e}Botanica - taggant console</title>");
+    // The workspace's folder in the header is a name the operator gave, and was written as given.
+    const rooted = page({ title: "t", workspaceRoot: `ws${rlo}txt.exe`, body: "" });
+    expect(rooted).toContain('<span class="path mono">ws\\u{202e}txt.exe</span>');
+    expect(rooted).not.toMatch(raw);
+    const index = indexPage([
+      {
+        ok: true,
+        id: "botanica-500",
+        directory: "d",
+        manifest: { ...MANIFEST, title: `${rlo}Botanica` },
+        problems: [],
+      } as never,
+    ]);
+    expect(index).toContain('<span class="name">\\u{202e}Botanica</span>');
+    expect(index).not.toMatch(raw);
+  });
+
+  it("writes every kind of character that steers or breaks a line as its code point", () => {
+    // A bell, a next-line, a soft hyphen, the line and paragraph separators and a lone surrogate:
+    // a control, a format character, the two separators and a surrogate, one of each class.
+    for (const code of [0x07, 0x85, 0xad, 0x2028, 0x2029, 0xd800]) {
+      expect(shown(`a${String.fromCharCode(code)}b`), code.toString(16)).toBe(`a\\u{${code.toString(16)}}b`);
+    }
+  });
+
+  it("keeps the experience page when a target id holds a lone surrogate", () => {
+    // A manifest saved by hand can hold one, and the form's address threw, taking the page with it.
+    const lone = String.fromCharCode(0xd800);
+    const card = experiencePage({
+      id: "botanica-500",
+      manifest: { ...MANIFEST, targets: [{ ...MANIFEST.targets[0], id: `front${lone}` }] } as never,
+      problems: [],
+      targets: [{ id: `front${lone}`, source: "artwork/front.png", physicalWidthMm: 62, contentCount: 0 }],
+    });
+    expect(card).toContain('<h3 class="flush">front\\u{d800}</h3>');
+    expect(card).toContain('action="/e/botanica-500/targets/front%EF%BF%BD/compile"');
+    expect(card).toContain('action="/e/botanica-500/targets/front%EF%BF%BD/content"');
+  });
+});
+
+describe("what a stored report is said to be", () => {
+  const page = (staleReport: "unreadable" | "broken" | "width" | "verdict") =>
+    experiencePage({
+      id: "botanica-500",
+      manifest: MANIFEST as never,
+      problems: [],
+      targets: [
+        { id: "front-panel", source: "artwork/front.png", physicalWidthMm: 62, contentCount: 0, staleReport },
+      ],
+    });
+
+  it("blames the width only for a report whose width was the problem", () => {
+    // Every stale report was called too small to trust, including one whose width was right
+    // and whose verdict came from a check since replaced.
+    expect(page("width")).toContain("too small to trust");
+    expect(page("verdict")).not.toContain("too small to trust");
+    // And without claiming the width was sound, which a report with a corrupt width and a valid
+    // distance also lands here with.
+    expect(page("verdict")).toContain("this build does not stand behind its verdict");
+    // A report that is not an object at all is said to be that, not "not compiled yet", which
+    // `null`, `0`, `false` and `""` read as, nor a width too small to trust, which a string did.
+    expect(page("broken")).toContain("not one at all");
+    expect(page("broken")).not.toContain("Not compiled yet");
+    expect(page("broken")).not.toContain("too small to trust");
+    // A target file that is not a target at all is said to be that, not a broken report.
+    expect(page("unreadable")).toContain("cannot be read as a target");
+    expect(page("unreadable")).not.toContain("not one at all");
+  });
+
+  it("offers a distance its field will send, whatever distance the report was compiled at", () => {
+    // The card offers to compile again at the report's own distance, and that can be 195 or 735. A
+    // field in steps of ten held either as a value the browser would not send, and the button did
+    // nothing at all.
+    for (const offered of [195, 735, 192.5, 10_000]) {
+      const html = experiencePage({
+        id: "botanica-500",
+        manifest: MANIFEST as never,
+        problems: [],
+        targets: [
+          {
+            id: "front-panel",
+            source: "artwork/front.png",
+            physicalWidthMm: 62,
+            contentCount: 0,
+            staleReport: "another",
+            scanDistanceMm: offered,
+          },
+        ],
+      });
+      const field = html.match(/<input[^>]*name="scanDistanceMm"[^>]*>/)?.[0] ?? "";
+      const attribute = (name: string) => field.match(new RegExp(` ${name}="([^"]*)"`))?.[1];
+      expect(attribute("value"), String(offered)).toBe(String(offered));
+      // What a browser asks of a number field before it sends the form: a value within its range,
+      // and a whole number of steps from its minimum unless its step is "any".
+      const value = Number(attribute("value"));
+      expect(value).toBeGreaterThanOrEqual(Number(attribute("min")));
+      expect(value).toBeLessThanOrEqual(Number(attribute("max")));
+      const step = attribute("step");
+      const steps = step === "any" ? 0 : (value - Number(attribute("min"))) / Number(step);
+      expect(Number.isInteger(steps), `${offered} is not a whole number of steps of ${step}`).toBe(true);
+      // And a value is asked for before the form is sent: emptied, the field was sent as nothing,
+      // and the server compiled at its default distance without a word.
+      expect(field, `${offered}: the field can be sent empty`).toMatch(/\srequired[\s>]/);
+    }
+  });
+
+  it("offers no printable size for artwork that is not ready at any size", () => {
+    // A refusal still carries what the corners said, and the record read "50% of that" beside a
+    // recogniser that found nothing anywhere.
+    const refused = verdict({
+      score: 0,
+      pass: false,
+      featureCount: 300,
+      areasWithFeatures: 16,
+      areas: 16,
+      repetition: null,
+      analysisWidth: 640,
+      smallestUsableScale: 0.5,
+      minimumWidthMm: null,
+      targetDigest: "0000000000000000000000000000000000000000000000000000000000000000",
+      scanDistanceMm: 190,
+      recognition: {
+        pixelsAcross: 320,
+        widths: 5,
+        widthsAgreed: 0,
+        views: 12,
+        misplaced: 0,
+        found: false,
+        inliers: 0,
+        needed: 20,
+      },
+      reasons: ["the recogniser did not find it"],
+    });
+    expect(refused).toContain("none, for the reasons above");
+    // The recognition row describes the size that came closest, and a reason can name a look in
+    // the wrong place at another size, so "none in the wrong place" says which size it means.
+    expect(refused).toContain("none in the wrong place at that size");
+    expect(refused).not.toContain("50% of that");
+    // Nor that the artwork must change, which is not true of a refusal for distance.
+    expect(refused).not.toContain("The artwork has to change");
+    expect(refused).toContain("Not printable until it passes");
+  });
+
+  it("describes the size the recogniser confirmed when looks pointed at a copy refuse it", () => {
+    // Those looks come after a size is confirmed, and the row called five widths of five agreeing
+    // "the size that came closest".
+    const refused = verdict({
+      score: 59,
+      pass: false,
+      featureCount: 198,
+      areasWithFeatures: 16,
+      areas: 16,
+      repetition: {
+        places: 55,
+        of: 454,
+        move: { across: -0.72, down: 0, turnDegrees: 0, scale: 1.67 },
+        ends: { from: { x: 512, y: 136 }, to: { x: 147, y: 139 } },
+        beyond: null,
+        aimed: { moves: 1, sizes: 1, views: 8, misplaced: 4 },
+      },
+      analysisWidth: 640,
+      smallestUsableScale: 0.5,
+      minimumWidthMm: null,
+      targetDigest: "0000000000000000000000000000000000000000000000000000000000000000",
+      scanDistanceMm: 190,
+      recognition: {
+        pixelsAcross: 320,
+        widths: 5,
+        widthsAgreed: 5,
+        views: 20,
+        misplaced: 0,
+        found: true,
+        inliers: 41,
+        needed: 20,
+      },
+      reasons: ["pointed at the part of the artwork 80 per cent across and 49 per cent down"],
+    });
+    expect(refused).not.toContain("came closest");
+    expect(refused).toContain(
+      "every turn found it with 20 or more points agreeing at 5 of 5 widths at the smallest size it was confirmed at, no look centred on it in the wrong place",
+    );
+    expect(refused).toContain("none, for the reasons above");
   });
 });

@@ -10,7 +10,10 @@ export interface LoadOptions {
    * design exported at two sizes would produce two different targets and two different
    * minimum print widths. It did, and the swing was three to one, which rewarded exporting
    * small: send a smaller file, be told you may print smaller, and get a worse target for
-   * it. A design is a design whatever the export dialogue was set to.
+   * it. Some movement is left, because the raster is the same size and its pixels are not:
+   * one generated design, exported at fifteen widths from 300 to 1000 pixels across, came out
+   * 92 mm wide at eight of them, 145 at six and 116 at one, the wider ones scattered among the
+   * narrower, so in that design neither small nor large exports were favoured.
    *
    * The value is set by what a camera can deliver, not by what a file might hold. The
    * runtime recognises against a frame reduced to 480 px wide, and the smallest size in a
@@ -46,21 +49,28 @@ export async function loadGrayscale(input: Buffer, options: LoadOptions = {}): P
   // shown turned by every viewer and every RIP, and a target compiled in the unrotated
   // raster is a quarter turn away from the print.
   const pipeline = sharp(input).rotate();
-  const meta = await sharp(input).metadata();
+  const meta = await sharp(input)
+    .metadata()
+    .catch((error: unknown) => {
+      throw unreadable(error);
+    });
   // Orientations five to eight put the image on its side, so the displayed size is the
   // stored size transposed.
   const turned = (meta.orientation ?? 1) >= 5;
   const sourceWidth = (turned ? meta.height : meta.width) ?? 0;
   const sourceHeight = (turned ? meta.width : meta.height) ?? 0;
-  if (sourceWidth < 1 || sourceHeight < 1) throw new Error("artwork has no readable dimensions");
+  if (sourceWidth < 1 || sourceHeight < 1) {
+    throw new ArtworkError("artwork has no readable dimensions", "unreadable");
+  }
 
   // Two gates, and both are needed. The first is on the file, because that is where the
   // detail either exists or does not, and scaling a small file up to the working size does
   // not put any into it.
   const shortestEdge = Math.min(sourceWidth, sourceHeight);
   if (shortestEdge < minEdge) {
-    throw new Error(
+    throw new ArtworkError(
       `artwork must be at least ${minEdge} px on its shortest edge, and this is ${shortestEdge} px`,
+      "unsuitable",
     );
   }
 
@@ -71,8 +81,9 @@ export async function loadGrayscale(input: Buffer, options: LoadOptions = {}): P
     (Math.min(sourceWidth, sourceHeight) * workingEdge) / Math.max(sourceWidth, sourceHeight),
   );
   if (analysedShortEdge < minEdge) {
-    throw new Error(
+    throw new ArtworkError(
       `artwork this long and thin cannot be analysed usefully: at a working size of ${workingEdge} px it is ${analysedShortEdge} px on its shortest edge, and ${minEdge} is the minimum`,
+      "unsuitable",
     );
   }
 
@@ -83,6 +94,38 @@ export async function loadGrayscale(input: Buffer, options: LoadOptions = {}): P
   // Up as well as down, so the analysis raster is the same for every piece of artwork.
   pipeline.resize({ width: workingEdge, height: workingEdge, fit: "inside", withoutEnlargement: false });
 
-  const { data, info } = await pipeline.raw().toBuffer({ resolveWithObject: true });
+  // A file whose header reads and whose body is cut short fails here rather than above.
+  const { data, info } = await pipeline
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+    .catch((error: unknown) => {
+      throw unreadable(error);
+    });
   return { width: info.width, height: info.height, data: new Uint8Array(data) };
+}
+
+/**
+ * The artwork is what is wrong: not an image the decoder can read, or one too small or too long
+ * and thin to describe. Kept apart from everything else a compile can throw, so a caller can tell
+ * the person to upload it again and treat anything else as a fault worth logging.
+ *
+ * Told apart by type, not by wording. The console matched the decoder's messages, and libvips
+ * words a cut-short PNG as "end of stream" or "libspng read error", neither of which it knew; and
+ * every other error a compile threw became the same kind of sentence, so a fault in the compiler
+ * reached the operator as its internal message with no stack anywhere.
+ */
+export class ArtworkError extends Error {
+  constructor(
+    message: string,
+    /** `unreadable`: not an image the decoder can read. `unsuitable`: an image, of the wrong shape. */
+    readonly kind: "unreadable" | "unsuitable",
+  ) {
+    super(message);
+    this.name = "ArtworkError";
+  }
+}
+
+function unreadable(error: unknown): ArtworkError {
+  const said = error instanceof Error ? error.message : String(error);
+  return new ArtworkError(`the artwork is not an image the compiler can read: ${said}`, "unreadable");
 }

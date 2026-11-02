@@ -81,4 +81,61 @@ describe("matchDescriptors", () => {
     });
     expect(matches).toEqual([]);
   });
+
+  it("refuses a descriptor of the wrong length rather than padding it", () => {
+    // A short descriptor was copied as far as it went and the rest left zero, which is a real
+    // descriptor the matcher then compared in good faith.
+    const whole = descriptor(7);
+    expect(() => matchDescriptors([whole.subarray(0, 3)], [whole])).toThrow(RangeError);
+    expect(() => matchDescriptors([whole], [whole.subarray(0, 3)])).toThrow(RangeError);
+  });
+
+  it("gives the same matches when the same target arrays come back frame after frame", () => {
+    const targets = [descriptor(1), descriptor(2), descriptor(3), descriptor(4)];
+    const positions = [
+      { x: 0, y: 0 },
+      { x: 2, y: 1 },
+      { x: 90, y: 40 },
+      { x: 200, y: 150 },
+    ];
+    const queries = [nudge(targets[0] ?? descriptor(1), 3), nudge(targets[2] ?? descriptor(3), 4)];
+    const first = matchDescriptors(queries, targets, { targetPositions: positions });
+    const second = matchDescriptors(queries, targets, { targetPositions: positions });
+    const fresh = matchDescriptors(queries, [...targets], { targetPositions: [...positions] });
+    expect(second).toEqual(first);
+    expect(fresh).toEqual(first);
+  });
+
+  it("matches what an array holds now, when it is refilled or edited between calls", () => {
+    // The packed target was kept per array, so an array refilled with another target's
+    // descriptors, or a descriptor edited in place, was answered as what it used to hold.
+    const targets = [descriptor(1), descriptor(2), descriptor(3), descriptor(4)];
+    const queries = [nudge(descriptor(5), 3)];
+    expect(matchDescriptors(queries, targets)).toEqual([]);
+
+    targets[2] = descriptor(5);
+    expect(matchDescriptors(queries, targets).map((match) => match.target)).toEqual([2]);
+
+    (targets[2] as Uint32Array).set(descriptor(6));
+    expect(matchDescriptors(queries, targets)).toEqual([]);
+  });
+
+  it("works out which features share a spot from where they are now, not where they were", () => {
+    // Two copies of one corner a pixel apart are not each other's rival; two features far
+    // apart are, and a near-tie between them is refused. Kept per array and not checked, the
+    // table went on saying "far apart" after one was moved onto the other's spot, and a match
+    // with its own copy as the runner-up was refused.
+    const original = descriptor(7);
+    const targets = [original, nudge(original, 2), descriptor(8)];
+    const positions = [
+      { x: 10, y: 10 },
+      { x: 250, y: 120 },
+      { x: 300, y: 200 },
+    ];
+    const queries = [nudge(original, 1)];
+    expect(matchDescriptors(queries, targets, { targetPositions: positions })).toEqual([]);
+
+    positions[1] = { x: 11, y: 10 };
+    expect(matchDescriptors(queries, targets, { targetPositions: positions }).length).toBe(1);
+  });
 });

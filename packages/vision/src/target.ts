@@ -1,6 +1,7 @@
 import { type DescribedCorner, describeCorners } from "./describe.js";
 import { detectCorners } from "./features.js";
 import { type GrayscaleImage, resample, smooth } from "./image.js";
+import { PATCH_RADIUS } from "./pattern.js";
 
 /**
  * Scales the artwork is described at.
@@ -37,6 +38,11 @@ export function buildTrackingFeatures(image: GrayscaleImage, options: BuildOptio
   const perScale = options.perScale ?? 300;
   const features: TargetFeature[] = [];
   for (const scale of scales) {
+    // A level too small to hold one patch cannot describe anything, and one under a pixel
+    // could not even be made: a 1 by 1 image threw from the resample where it had returned no
+    // features, so a caller handing over a degenerate frame got an exception instead of an
+    // answer. Skipped, it is the same empty result it always was.
+    if (scale * Math.min(image.width, image.height) < 2 * PATCH_RADIUS + 1) continue;
     const level = smooth(resample(image, scale));
     const described = describeCorners(level, detectCorners(level, { maxCorners: perScale }));
     for (const corner of described) {

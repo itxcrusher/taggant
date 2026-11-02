@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-import { loadGrayscale } from "../src/load.js";
+import { ArtworkError, loadGrayscale } from "../src/load.js";
 
 async function makeCheckerboard(width: number, height: number): Promise<Buffer> {
   const pixels = Buffer.alloc(width * height);
@@ -78,5 +78,28 @@ describe("loadGrayscale against the files print actually arrives as", () => {
   it("refuses artwork too long and thin to analyse, whatever its file size says", async () => {
     const strip = await makeCheckerboard(4000, 300);
     await expect(loadGrayscale(strip)).rejects.toThrow(/long and thin/);
+  });
+
+  it("says by its type when the artwork is what is wrong, and which way", async () => {
+    // A caller told the artwork's faults from everything else by matching the decoder's words,
+    // which have more forms than any pattern knew: a PNG cut short is "end of stream" one way
+    // and "libspng read error" another. The type says it, so a caller can tell the person to
+    // upload again and treat anything else as a fault.
+    const png = await makeCheckerboard(640, 480);
+    const cases: Array<[string, Buffer, "unreadable" | "unsuitable"]> = [
+      ["text", Buffer.from("this is not an image"), "unreadable"],
+      ["a PNG cut to 100 bytes", png.subarray(0, 100), "unreadable"],
+      ["a PNG cut in half", png.subarray(0, Math.floor(png.length / 2)), "unreadable"],
+      ["too small", await makeCheckerboard(100, 100), "unsuitable"],
+      ["too long and thin", await makeCheckerboard(4000, 300), "unsuitable"],
+    ];
+    for (const [name, bytes, kind] of cases) {
+      const thrown = await loadGrayscale(bytes).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(thrown, name).toBeInstanceOf(ArtworkError);
+      expect((thrown as ArtworkError).kind, name).toBe(kind);
+    }
   });
 });

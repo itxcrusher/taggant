@@ -31,6 +31,13 @@ import { basename, dirname } from "node:path";
 export const DEFAULT_POLL_MS = 2000;
 
 export interface TableSourceOptions {
+  /**
+   * The stamp of the file as it was before the caller read it, from `stampFor`.
+   *
+   * Pass it whenever the caller has already read the file, so that a save in between is
+   * noticed rather than adopted as the starting point.
+   */
+  since?: string | null;
   pollMs?: number;
   /** Called whenever the file on disk is not the one last seen. */
   onChange: () => void | Promise<void>;
@@ -41,7 +48,11 @@ export interface TableSourceOptions {
 export interface TableSource {
   /** Check now rather than waiting for the timer, and say whether it had changed. */
   check(): Promise<boolean>;
-  stop(): void;
+  /**
+   * Stop checking. A check already under way, and the change it finds, are finished before this
+   * resolves, and no check begins once it has been called.
+   */
+  stop(): Promise<void>;
   /**
    * Drop the fast path and leave the timer alone.
    *
@@ -59,6 +70,10 @@ export interface TableSource {
  * to land on the same size and timestamp, which a rename can. Absent is a state too: a
  * table that is deleted and put back is a change.
  */
+export async function stampFor(path: string): Promise<string | null> {
+  return stampOf(path);
+}
+
 async function stampOf(path: string): Promise<string | null> {
   try {
     const found = await stat(path);
@@ -73,22 +88,30 @@ async function stampOf(path: string): Promise<string | null> {
 }
 
 export async function watchTable(path: string, options: TableSourceOptions): Promise<TableSource> {
-  let stamp = await stampOf(path);
+  // The stamp the caller took before it read the file, when it passes one. Without it the
+  // first stamp is taken here, after the caller's own read, and a save landing between the
+  // two is invisible for good: the resolver serves the older table, the stamp matches the
+  // newer file, readiness says ready, and a forced check reports no change. That window is
+  // small and it is a window in the one mechanism this module exists to close.
+  let stamp = options.since ?? (await stampOf(path));
   let stopped = false;
-  let running = false;
+  let running: Promise<boolean> | null = null;
 
-  const check = async (): Promise<boolean> => {
-    if (stopped || running) return false;
-    running = true;
-    try {
-      const now = await stampOf(path);
-      if (now === stamp) return false;
-      stamp = now;
-      await options.onChange();
-      return true;
-    } finally {
-      running = false;
-    }
+  const check = (): Promise<boolean> => {
+    if (stopped || running !== null) return Promise.resolve(false);
+    const checking = (async () => {
+      try {
+        const now = await stampOf(path);
+        if (now === stamp) return false;
+        stamp = now;
+        await options.onChange();
+        return true;
+      } finally {
+        running = null;
+      }
+    })();
+    running = checking;
+    return checking;
   };
 
   // `check` is called from a timer and from a watcher, so a rejecting `onChange` has
@@ -128,10 +151,14 @@ export async function watchTable(path: string, options: TableSourceOptions): Pro
       watcher?.close();
       watcher = undefined;
     },
-    stop() {
+    async stop() {
       stopped = true;
       clearInterval(timer);
       watcher?.close();
+      // A reload in flight when the stop came went on after it: against a large table the command
+      // line read the file and said it had reloaded it after the stop it hands a caller had
+      // resolved, in twenty runs of twenty. Its failure is the caller's `onError`, not the stop's.
+      await running?.catch(() => false);
     },
   };
 }

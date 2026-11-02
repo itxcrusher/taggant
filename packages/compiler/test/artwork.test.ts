@@ -1,6 +1,10 @@
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { compileTarget } from "../src/compile.js";
+
+const EXAMPLE_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../../examples/postcard");
 
 /**
  * Generated artwork, so the property under test is the only thing that changes.
@@ -14,34 +18,40 @@ async function artwork(options: {
   blobs: number;
   radius: number;
   size?: number;
+  width?: number;
+  height?: number;
 }): Promise<Buffer> {
-  const size = options.size ?? 600;
-  const pixels = Buffer.alloc(size * size).fill(238);
+  const width = options.width ?? options.size ?? 600;
+  const height = options.height ?? options.size ?? 600;
+  const pixels = Buffer.alloc(width * height).fill(238);
   let seed = 4242;
   for (let i = 0; i < options.blobs; i++) {
     seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
-    const cx = seed % size;
+    const cx = seed % width;
     seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
-    const cy = seed % size;
+    const cy = seed % height;
     seed = (seed * 1103515245 + 12345) & 0x7fff_ffff;
     const value = seed % 2 === 0 ? 28 : 140;
     const r = options.radius;
-    for (let y = Math.max(0, cy - r); y < Math.min(size, cy + r); y++) {
-      for (let x = Math.max(0, cx - r); x < Math.min(size, cx + r); x++) {
+    for (let y = Math.max(0, cy - r); y < Math.min(height, cy + r); y++) {
+      for (let x = Math.max(0, cx - r); x < Math.min(width, cx + r); x++) {
         // Half moons rather than discs, so the shapes have corners rather than only edges.
-        if ((x - cx) ** 2 + (y - cy) ** 2 <= r * r && x >= cx - r / 2) pixels[y * size + x] = value;
+        if ((x - cx) ** 2 + (y - cy) ** 2 <= r * r && x >= cx - r / 2) pixels[y * width + x] = value;
       }
     }
   }
-  return sharp(pixels, { raw: { width: size, height: size, channels: 1 } })
+  return sharp(pixels, { raw: { width, height, channels: 1 } })
     .png()
     .toBuffer();
 }
 
 // These compile real images at several sizes, which takes seconds rather than
 // milliseconds. Stated here rather than left to the default, where they pass alone and
-// time out in a full run, which is the worst way for a test to fail.
-describe("the report against real artwork", { timeout: 30_000 }, () => {
+// time out in a full run, which is the worst way for a test to fail. Two minutes, because a
+// compile shows the recogniser twenty looks at the size it confirms and more at the sizes it
+// refuses, tens of milliseconds each and more beside the rest of the suite, and a sheet it
+// refuses everywhere is the dearest.
+describe("the report against real artwork", { timeout: 120_000 }, () => {
   it("does not give bold artwork a bigger minimum print than fine artwork", async () => {
     const bold = await compileTarget(await artwork({ blobs: 40, radius: 40 }), {
       id: "bold",
@@ -53,9 +63,15 @@ describe("the report against real artwork", { timeout: 30_000 }, () => {
     });
     expect(bold.report.pass).toBe(true);
     expect(fine.report.pass).toBe(true);
-    // Both are the same raster and both hold up all the way down, so they should agree.
-    // The failure this guards against is the number moving with something that is not a
-    // resolution property at all, in either direction.
+    // Both are the same raster and both hold up all the way down, so the corners give them the
+    // same width; the failure this guards against is the number moving with something that is
+    // not a resolution property, which one earlier formula did, backwards.
+    //
+    // The width is now the smallest the recogniser confirms, and for these two that is still
+    // the first size: the fine artwork with 97 points in its worst turn and the bold with 24,
+    // against a line of 20. Forty identical marks give the recogniser less to agree on, so the
+    // bold margin is four points. If it ever loses them, its width moving up a size is the
+    // recogniser saying so, and the line is not the thing to move.
     expect(bold.report.minimumWidthMm).toBe(fine.report.minimumWidthMm);
   });
 
@@ -103,11 +119,11 @@ describe("the report against real artwork", { timeout: 30_000 }, () => {
     expect(after.report.featureCount).toBeGreaterThan(before.report.featureCount * 0.7);
   });
 
-  it("refuses artwork that repeats, because a pose can land on the wrong copy", async () => {
+  it("refuses a design printed twice, from its features, where the single design passes", async () => {
     const once = await artwork({ blobs: 200, radius: 18, size: 600 });
     const raw = await sharp(once).grayscale().raw().toBuffer({ resolveWithObject: true });
     const { width, height } = raw.info;
-    // The same design printed twice side by side, which is what a sheet of labels is.
+    // The same design printed twice side by side.
     const tiled = Buffer.alloc(width * 2 * height);
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
@@ -123,16 +139,257 @@ describe("the report against real artwork", { timeout: 30_000 }, () => {
     const single = await compileTarget(once, { id: "once", scanDistanceMm: 350 });
     const repeated = await compileTarget(twice, { id: "twice", scanDistanceMm: 350 });
 
-    // The single piece is fine and has to stay fine: a gate that fails everything is not a
-    // gate. The repeated one has plenty of features, spread over the whole piece, and no
-    // way to tell which copy is being looked at.
+    // This asserted the opposite, that a design printed twice is confirmed a size up, because
+    // the poses its looks were measured on landed on the right copy. They mostly do, and a few
+    // in a thousand do not, which twenty looks see or miss by chance. What the looks were
+    // sampling is read off the features now, and it is not close: the design maps onto itself
+    // at about a hundred places, where the single design manages a handful.
     expect(single.report.pass).toBe(true);
-    expect(repeated.report.featureCount).toBeGreaterThan(60);
-    expect(repeated.report.areasWithFeatures).toBeGreaterThan(8);
+    expect(single.report.repetition?.places ?? 99).toBeLessThan(15);
     expect(repeated.report.pass).toBe(false);
-    expect(repeated.report.reasons).toContain(
-      "the artwork repeats itself, so content could be placed on the wrong copy",
-    );
-    expect(repeated.report.repetition ?? 0).toBeGreaterThan(single.report.repetition ?? 0);
+    expect(repeated.report.repetition?.places ?? 0).toBeGreaterThanOrEqual(60);
+    expect(repeated.report.reasons.join(" ")).toContain("it maps onto itself");
+    expect(repeated.report.reasons.join(" ")).toContain("shifting it 50 per cent of its width");
+    // Refused before the recogniser was asked anything.
+    expect(repeated.report.recognition).toBeNull();
   });
+
+  it("refuses the postcard printed twice at every export width, gutter and layout found ready", async () => {
+    // The looks decided this by whether one of twenty landed on the wrong copy, and that turned
+    // on the resampling: the postcard printed twice, one above the other, was refused exported
+    // 592 pixels wide and ready for press at 640, ready with an eight pixel gutter between the
+    // copies, and a sheet of four with a gutter was ready at 232 mm. Each is refused now, for
+    // what it is.
+    const stacked = await sheetOf(1, 2);
+    const cases: Array<[string, Buffer]> = [
+      ["exported 592 wide", stacked],
+      ["exported 640 wide", await sharp(stacked).resize({ width: 640 }).png().toBuffer()],
+      ["exported 1000 wide", await sharp(stacked).resize({ width: 1000 }).png().toBuffer()],
+      ["with an 8 px gutter", await sheetOf(1, 2, 8)],
+      ["four with an 8 px gutter", await sheetOf(2, 2, 8)],
+    ];
+    for (const [name, buffer] of cases) {
+      const compiled = await compileTarget(buffer, { id: "twice", scanDistanceMm: 190 });
+      expect(compiled.report.pass, name).toBe(false);
+      expect(compiled.report.reasons.join(" "), name).toContain("it maps onto itself");
+    }
+  }, 240_000);
+
+  it("refuses a design beside itself turned half way round, which a sheet laid out for cutting has", async () => {
+    const once = await artwork({ blobs: 200, radius: 18, size: 600 });
+    const turned = await sharp(once).rotate(180).png().toBuffer();
+    const pair = await sharp({ create: { width: 1200, height: 600, channels: 3, background: "#eeeeee" } })
+      .composite([
+        { input: once, left: 0, top: 0 },
+        { input: turned, left: 600, top: 0 },
+      ])
+      .png()
+      .toBuffer();
+    const compiled = await compileTarget(pair, { id: "pair", scanDistanceMm: 350 });
+    expect(compiled.report.pass).toBe(false);
+    expect(compiled.report.reasons.join(" ")).toContain("turning it 180 degrees");
+  });
+
+  it("refuses a sheet of identical labels at every size, which the old repetition gate passed", async () => {
+    // Sixteen copies of the example postcard. The figure that decided readiness read 0.31 for
+    // this, under its line of 0.6, because it fell as copies were added; the report said ready
+    // for press at 185 mm, and at 185 mm the recogniser does not find it.
+    const sheet = await sheetOf(4);
+    const compiled = await compileTarget(sheet, { id: "sheet", scanDistanceMm: 190 });
+    expect(compiled.report.featureCount).toBeGreaterThan(60);
+    expect(compiled.report.pass).toBe(false);
+    expect(compiled.report.minimumWidthMm).toBeNull();
+    expect(compiled.report.score).toBeLessThan(60);
+    expect(compiled.report.reasons.join(" ")).toContain("it maps onto itself");
+  });
+
+  it("refuses the postcard beside a copy of itself at another size, which the lines let through", async () => {
+    // At 60 per cent the move carries 61 of 458 places and at 35 per cent 14 of 505: no line
+    // refuses either, both were called ready for press, and a camera brought close to the small
+    // copy settles on the large one. The 35 per cent copy pairs only through the smaller sizes the
+    // compiler describes the artwork at for this, which the target does not hold.
+    for (const factor of [0.6, 0.35]) {
+      const compiled = await compileTarget(await besideItself(factor), { id: "pair", scanDistanceMm: 190 });
+      const name = `a copy at ${factor * 100} per cent`;
+      expect(compiled.report.pass, name).toBe(false);
+      expect(compiled.report.minimumWidthMm, name).toBeNull();
+      expect(compiled.report.reasons.join(" "), name).toContain("pointed at the part of the artwork");
+      expect(compiled.report.repetition?.aimed?.misplaced, name).toBeGreaterThan(0);
+    }
+  });
+
+  it("refuses a copy on the design, or beside it in a white margin, that the looks pointed at it settle on", async () => {
+    // Judged at the point alone, the pose that settled on each copy was off there by less than
+    // the line, because the copy sits near the middle of what it copies, and both were ready for
+    // press while the pose showed the copy's size and moved the rest of the frame by most of its
+    // width. A copy at 40 per cent laid on the postcard's middle, and one at 27 per cent beside it
+    // inside a margin of 200 px.
+    for (const [name, layout, factor] of [
+      ["a copy at 40 per cent on its middle", { on: [0.5, 0.5] as [number, number] }, 0.4],
+      ["a copy at 27 per cent beside it in a margin", { margin: 200 }, 0.27],
+    ] as const) {
+      const compiled = await compileTarget(await postcardWithCopy(factor, layout), {
+        id: "copy",
+        scanDistanceMm: 190,
+      });
+      expect(compiled.report.pass, name).toBe(false);
+      expect(compiled.report.reasons.join(" "), name).toContain("pointed at the part of the artwork");
+      expect(compiled.report.repetition?.aimed?.misplaced, name).toBeGreaterThan(0);
+    }
+  });
+
+  it("judges a look pointed at a design where it is pointed, not at corners far outside the frame", async () => {
+    // A design with no copy, whose move between two coincidences carries twelve places, is pointed
+    // at. Judged at its corners, hundreds of pixels outside the frame, a pose a few pixels out
+    // where the camera was pointed was a hundred out there, and the design was refused exported
+    // 400 and 500 pixels wide and ready at 450.
+    const tall = await artwork({ blobs: 40, radius: 40, width: 500, height: 800 });
+    for (const exported of [400, 500]) {
+      const buffer = await sharp(tall).resize({ width: exported }).png().toBuffer();
+      const compiled = await compileTarget(buffer, { id: "tall", scanDistanceMm: 190 });
+      const name = `exported ${exported} wide`;
+      expect(compiled.report.repetition?.aimed, name).not.toBeNull();
+      expect(compiled.report.pass, name).toBe(true);
+    }
+  });
+
+  it("passes the postcard with a part of it copied at its own size, after pointing at both copies", async () => {
+    // The rest of the artwork outvotes the copied part wherever the camera is pointed.
+    const one = await sharp(join(EXAMPLE_DIR, "artwork.png"))
+      .grayscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const { width, height } = one.info;
+    const data = Buffer.from(one.data);
+    const side = 180;
+    for (let y = 0; y < side; y++) {
+      one.data.copy(
+        data,
+        (height - side - 30 + y) * width + width - side - 30,
+        (30 + y) * width + 30,
+        (30 + y) * width + 30 + side,
+      );
+    }
+    const partly = await sharp(data, { raw: { width, height, channels: 1 } })
+      .png()
+      .toBuffer();
+    const compiled = await compileTarget(partly, { id: "part", scanDistanceMm: 190 });
+    expect(compiled.report.pass).toBe(true);
+    expect(compiled.report.repetition?.aimed).toEqual({ moves: 1, sizes: 4, views: 32, misplaced: 0 });
+  });
+
+  it("gives a sheet the same verdict whichever size it was exported at", async () => {
+    // The export dialogue decided this. Four copies of the postcard read ready for press when
+    // exported 4400 or 5300 pixels wide and not ready at 4700, 5000, 5600 and 9600, because the
+    // repetition figure moved by more than the gate's whole margin with the export size.
+    const sheet = await sheetOf(2);
+    for (const edge of [4400, 4700, 5300]) {
+      const exported = await sharp(sheet).resize({ width: edge }).png().toBuffer();
+      const compiled = await compileTarget(exported, { id: "sheet", scanDistanceMm: 190 });
+      expect(compiled.report.pass, `exported ${edge} pixels wide`).toBe(false);
+    }
+  }, 360_000);
 });
+
+/**
+ * The example postcard in grey with a copy of itself at `factor` of its size: laid on it, centred
+ * at (`cx`, `cy`) as shares of its size, or beside it on the right, 16 px away, inside a white
+ * margin of `margin` px round the whole sheet.
+ */
+async function postcardWithCopy(
+  factor: number,
+  layout: { on: [number, number] } | { margin: number },
+): Promise<Buffer> {
+  const read = async (pipeline: sharp.Sharp) => {
+    const { data, info } = await pipeline.raw().toBuffer({ resolveWithObject: true });
+    const one = Buffer.alloc(info.width * info.height);
+    for (let i = 0; i < one.length; i++) one[i] = data[i * info.channels] ?? 255;
+    return { width: info.width, height: info.height, data: one };
+  };
+  const card = await read(
+    sharp(join(EXAMPLE_DIR, "artwork.png")).flatten({ background: "#ffffff" }).grayscale(),
+  );
+  const copy = await read(
+    sharp(card.data, { raw: { width: card.width, height: card.height, channels: 1 } }).resize({
+      width: Math.round(card.width * factor),
+    }),
+  );
+  const margin = "margin" in layout ? layout.margin : 0;
+  const width = "margin" in layout ? card.width + 16 + copy.width + 2 * margin : card.width;
+  const height = "margin" in layout ? Math.max(card.height, copy.height) + 2 * margin : card.height;
+  const sheet = Buffer.alloc(width * height, 255);
+  const put = (piece: typeof card, left: number, top: number) => {
+    for (let y = 0; y < piece.height; y++)
+      for (let x = 0; x < piece.width; x++)
+        sheet[(top + y) * width + left + x] = piece.data[y * piece.width + x] ?? 255;
+  };
+  put(card, margin, margin);
+  if ("on" in layout) {
+    put(
+      copy,
+      Math.round(layout.on[0] * card.width - copy.width / 2),
+      Math.round(layout.on[1] * card.height - copy.height / 2),
+    );
+  } else {
+    put(copy, margin + card.width + 16, margin + Math.round(0.5 * (card.height - copy.height)));
+  }
+  return sharp(sheet, { raw: { width, height, channels: 1 } })
+    .png()
+    .toBuffer();
+}
+
+/** The example postcard and, 16 pixels to its right, a copy of it at `factor` of its size. */
+async function besideItself(factor: number): Promise<Buffer> {
+  const artwork = join(EXAMPLE_DIR, "artwork.png");
+  const { width, height } = await sharp(artwork).metadata();
+  const copy = await sharp(artwork)
+    .resize({ width: Math.round((width ?? 0) * factor) })
+    .png()
+    .toBuffer();
+  const copyHeight = (await sharp(copy).metadata()).height ?? 0;
+  return sharp({
+    create: {
+      width: (width ?? 0) + 16 + Math.round((width ?? 0) * factor),
+      height: height ?? 0,
+      channels: 3,
+      background: "#ffffff",
+    },
+  })
+    .composite([
+      { input: artwork, left: 0, top: 0 },
+      { input: copy, left: (width ?? 0) + 16, top: Math.round(((height ?? 0) - copyHeight) / 2) },
+    ])
+    .png()
+    .toBuffer();
+}
+
+/**
+ * Copies of the example postcard laid out edge to edge as a sheet of labels is: `across` by
+ * `down`, which is `across` by `across` when only one is given.
+ */
+async function sheetOf(across: number, down = across, gutter = 0): Promise<Buffer> {
+  const one = await sharp(join(EXAMPLE_DIR, "artwork.png"))
+    .grayscale()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const { width, height } = one.info;
+  // White paper between the copies, `gutter` pixels of it, as a sheet of labels has.
+  const sheetWidth = width * across + gutter * (across - 1);
+  const sheetHeight = height * down + gutter * (down - 1);
+  const out = Buffer.alloc(sheetWidth * sheetHeight, 255);
+  for (let ty = 0; ty < down; ty++) {
+    for (let tx = 0; tx < across; tx++) {
+      for (let y = 0; y < height; y++) {
+        one.data.copy(
+          out,
+          (ty * (height + gutter) + y) * sheetWidth + tx * (width + gutter),
+          y * width,
+          y * width + width,
+        );
+      }
+    }
+  }
+  return sharp(out, { raw: { width: sheetWidth, height: sheetHeight, channels: 1 } })
+    .png()
+    .toBuffer();
+}

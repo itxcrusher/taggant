@@ -4,17 +4,29 @@
  * Everything that reaches a page goes through `esc`. An experience title, a target id, a
  * filename and a compiler message are all written by someone, and this is a tool whose
  * whole job is to accept files and names from people. There is no template engine doing
- * this quietly in the background, so it is done here and it is done everywhere.
+ * this quietly in the background, so it is done here and it is done everywhere. A name, and
+ * a message that quotes one, goes through `shown` as well, which writes the characters that
+ * steer how text is laid out as their code points.
  */
 
-import type { Report } from "@taggant/compiler";
+import { printable } from "@taggant/bundler";
+import { type Report, SCAN_DISTANCE_MM, describeRepetition } from "@taggant/compiler";
+import { manifestSchema } from "@taggant/manifest";
 import { DEFAULT_SCAN_DISTANCE_MM } from "./operations.js";
+
 import {
   type DraftManifest,
   ID_PATTERN_ATTRIBUTE,
   type Listed,
   TARGET_ID_PATTERN_ATTRIBUTE,
 } from "./workspace.js";
+/**
+ * The ceilings the manifest format sets, read from the schema so that the pages, the
+ * request handlers and the schema itself cannot disagree. A form offered past its ceiling
+ * is a button whose only outcome is a refusal.
+ */
+const MOST_TARGETS = manifestSchema.properties.targets.maxItems;
+const MOST_CONTENT = manifestSchema.$defs.target.properties.content.maxItems;
 
 /** HTML escaping, for text and for attribute values alike. */
 export function esc(value: unknown): string {
@@ -24,6 +36,26 @@ export function esc(value: unknown): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/**
+ * Text from outside the console, a name a manifest gives or a message quoting one, as a page shows
+ * it: each control and format character written as its code point, as the bundler's messages write
+ * them, then escaped. A right-to-left override in a name laid a whole notice out backwards, and the
+ * character that ends an isolate in front of one let it run past the element meant to hold it.
+ */
+export function shown(value: unknown): string {
+  return esc(printable(String(value)));
+}
+
+/**
+ * A target id as a segment of a form's address. A lone surrogate, which a manifest saved by hand can
+ * hold, made `encodeURIComponent` throw and the whole experience page answer 404; written as the
+ * replacement character, the address names no target, the compile says so, and the card says what
+ * the id needs.
+ */
+function segment(value: string): string {
+  return encodeURIComponent(value.replace(/\p{Cs}/gu, String.fromCharCode(0xfffd)));
 }
 
 export interface Notice {
@@ -46,14 +78,14 @@ export function page({ title, workspaceRoot, notice, body }: Chrome): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="same-origin">
-<title>${esc(title)}</title>
+<title>${shown(title)}</title>
 <link rel="stylesheet" href="/console.css">
 </head>
 <body>
 <div class="shell">
   <header class="bench">
     <h1><a href="/" class="plain">taggant console</a></h1>
-    <span class="path mono">${esc(workspaceRoot)}</span>
+    <span class="path mono">${shown(workspaceRoot)}</span>
   </header>
   ${notice ? renderNotice(notice) : ""}
   ${body}
@@ -66,8 +98,8 @@ export function page({ title, workspaceRoot, notice, body }: Chrome): string {
 function renderNotice(notice: Notice): string {
   const tone = notice.tone === "good" ? "good" : notice.tone === "bad" ? "bad" : "";
   return `<div class="notice ${tone}" role="status">
-  <p>${esc(notice.message)}</p>
-  ${notice.detail ? `<p class="quiet mono detail">${esc(notice.detail)}</p>` : ""}
+  <p>${shown(notice.message)}</p>
+  ${notice.detail ? `<p class="quiet mono detail">${shown(notice.detail)}</p>` : ""}
 </div>`;
 }
 
@@ -78,13 +110,13 @@ export function indexPage(experiences: Listed[]): string {
       if (!entry.ok) {
         return `<div class="entry">
   <span class="name">${esc(entry.id)}</span>
-  <span class="meta broken">${esc(entry.reason)}</span>
+  <span class="meta broken">${shown(entry.reason)}</span>
 </div>`;
       }
       const targets = entry.manifest.targets.length;
       const content = entry.manifest.targets.reduce((total, target) => total + target.content.length, 0);
       return `<a class="entry plain" href="/e/${esc(entry.id)}">
-  <span class="name">${esc(entry.manifest.title ?? entry.id)}</span>
+  <span class="name">${shown(entry.manifest.title ?? entry.id)}</span>
   <span class="meta mono">${esc(entry.id)} &middot; ${targets} target${targets === 1 ? "" : "s"} &middot; ${content} content item${content === 1 ? "" : "s"}</span>
 </a>`;
     })
@@ -117,13 +149,42 @@ ${
 </form>`;
 }
 
+/**
+ * What the recogniser made of the artwork, at the size the report gives. A refused report names
+ * the size that came closest, unless a size was confirmed and the looks pointed at a copy, which
+ * come after, refused it: the row called five widths of five agreeing the size that came closest.
+ */
+function describeRecognition(report: Report): string {
+  const seen = report.recognition;
+  if (seen === null) return "not asked, for the reasons above";
+  const agreed = `every turn found it with ${seen.needed} or more points agreeing at ${seen.widthsAgreed} of ${seen.widths} widths`;
+  if (report.pass)
+    return `${agreed}, ${seen.misplaced === 0 ? "none in the wrong place" : `${seen.misplaced} looks in the wrong place`}`;
+  if (seen.found)
+    return `${agreed} at the smallest size it was confirmed at, no look centred on it in the wrong place`;
+  return `${agreed} at the size that came closest, ${seen.misplaced === 0 ? "none in the wrong place" : `${seen.misplaced} looks in the wrong place`} at that size`;
+}
+
 function reportRecord(report: Report): string {
   const rows: [string, string][] = [
     ["features", String(report.featureCount)],
     ["areas reached", `${report.areasWithFeatures} of ${report.areas}`],
     ["analysed at", `${report.analysisWidth} px across`],
-    ["smallest usable size", `${Math.round(report.smallestUsableScale * 100)}% of that`],
-    ["repetition", report.repetition === null ? "not measured" : report.repetition.toFixed(2)],
+    // Only for artwork that passed. A refused report still carries what the corners said, and it
+    // read "50% of that" beside a recogniser that found nothing at any size. Said without a
+    // cause, which is in the reasons: "not ready at any size" sat beside "Read it from closer"
+    // for a postcard that is ready from closer.
+    [
+      "smallest usable size",
+      report.pass
+        ? `${Math.round(report.smallestUsableScale * 100)}% of that`
+        : "none, for the reasons above",
+    ],
+    ["maps onto itself", describeRepetition(report)],
+    // What decided the verdict, in place of the figure that used to sit here: it fell as a
+    // design repeated, so it was a measurement of the wrong thing beside the sentence it did
+    // not decide.
+    ["recognised", describeRecognition(report)],
     ["score", `${report.score} of 100, passing at 60`],
   ];
   return `<details class="record">
@@ -146,13 +207,15 @@ function reportRecord(report: Report): string {
 export function verdict(report: Report): string {
   // Two different sentences rather than one with a hole in it. Artwork that does not pass
   // has no width, and the hole was filled with a phrase that read, in full, "Print it at
-  // least no width, because no width would fix it."
+  // least no width, because no width would fix it." Not "the artwork has to change", which it
+  // said: a distance past the widest piece a manifest can declare is refused too, and the fix
+  // there is to read it from closer.
   const line =
     report.minimumWidthMm === null
-      ? "No print width would fix this. The artwork has to change."
+      ? "Not printable until it passes. The reasons are below."
       : `Print it at least ${report.minimumWidthMm} mm wide to be read from ${
           report.scanDistanceMm
-        } mm away, being ${Math.round(report.smallestUsableScale * report.analysisWidth)} px across the artwork.`;
+        } mm away, being ${Math.round(report.smallestUsableScale * report.analysisWidth)} px across the artwork from left to right.`;
   return `<div class="verdict ${report.pass ? "pass" : "fail"}">
   <span class="state">${report.pass ? "Ready for press" : "Not ready"}</span>
   <span class="score mono">${esc(report.score)} / 100</span>
@@ -172,9 +235,39 @@ export interface TargetView {
   physicalWidthMm: number;
   contentCount: number;
   report?: Report | undefined;
+  /**
+   * The distance the card offers to compile again at. Its field takes any number in range, since
+   * the one offered can be a report's own, 195 or 735, and a field in steps of ten would not send
+   * either: the browser refused the form and the button did nothing. And it takes no empty value:
+   * emptied, the field was sent as nothing, which the server reads as the default, so a piece the
+   * operator meant for 600 mm was compiled at 150 and called ready for press.
+   */
   scanDistanceMm?: number | undefined;
-  /** Set when a compiled target exists but was written by a build whose widths were wrong. */
-  staleReport?: boolean | undefined;
+  /**
+   * Set when a compiled target exists and its report is not one this build stands behind:
+   * `unreadable` when the target file is not a target at all; `broken` when its report is not an
+   * object; `width` when it was written before the width carried its distance, and was about four
+   * times too small; `verdict` for anything else, an earlier build's or a hand-edited report, whose
+   * verdict this build does not stand behind. It said the width was sound there, which a corrupt
+   * width made false. `another` when the report is one this build would write and it does not
+   * describe the file beside it: written for another target, for this one before the file was
+   * changed, or edited by hand.
+   */
+  staleReport?: "unreadable" | "broken" | "width" | "verdict" | "another" | undefined;
+  /**
+   * Set when that report gives back no distance it could have been compiled for, or the file holding
+   * it does not parse, so the card offers none and says why, and the publish refuses to compile it
+   * again at a guess.
+   */
+  distanceLost?: boolean | undefined;
+  /** Set when the compiled target file does not parse, so nothing in it can be read. */
+  unread?: boolean | undefined;
+  /**
+   * The system's reason when the compiled target file could not be read at all: a folder or a link
+   * in its place, reading denied, or another program holding it. Compiling replaces it where what
+   * is in its place can be replaced, and says so where it cannot.
+   */
+  notRead?: string | undefined;
   /** Set when the compiled target asks for more width than the manifest says it is printed at. */
   tooSmall?: string | undefined;
 }
@@ -194,23 +287,34 @@ export function experiencePage(view: ExperienceView): string {
     .map(
       (target) => `<section class="card">
   <div class="row spread">
-    <h3 class="flush">${esc(target.id)}</h3>
+    <h3 class="flush">${shown(target.id)}</h3>
     <span class="label">${esc(target.physicalWidthMm)} mm wide in print</span>
   </div>
-  <p class="quiet mono source-line">${esc(target.source)} &middot; ${target.contentCount} content item${target.contentCount === 1 ? "" : "s"}</p>
+  <p class="quiet mono source-line"><bdi>${shown(target.source)}</bdi> &middot; ${target.contentCount} content item${target.contentCount === 1 ? "" : "s"}</p>
   ${
     target.report
       ? verdict(target.report)
-      : target.staleReport
-        ? `<div class="notice gap-md"><p>Compiled by an older build, whose minimum print width was too small to trust. Compile it again to see what this artwork needs.</p></div>`
-        : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
+      : target.staleReport === "unreadable"
+        ? target.notRead !== undefined
+          ? `<div class="notice gap-md"><p>The compiled target file could not be read (${shown(target.notRead)}). Compile it again to replace it; if what is in its place cannot be replaced, the compile says so.</p></div>`
+          : `<div class="notice gap-md"><p>The compiled target file cannot be read as a target. Compile it again to replace it.</p></div>`
+        : target.staleReport === "broken"
+          ? `<div class="notice gap-md"><p>The compiled target carries a print readiness report that is not one at all. Compile it again to see what this artwork needs.</p></div>`
+          : target.staleReport === "width"
+            ? `<div class="notice gap-md"><p>Compiled by an older build, whose minimum print width was too small to trust. Compile it again to see what this artwork needs.</p></div>`
+            : target.staleReport === "verdict"
+              ? `<div class="notice gap-md"><p>Compiled by an earlier build, or changed since, and this build does not stand behind its verdict. Compile it again to see what this artwork needs.</p></div>`
+              : target.staleReport === "another"
+                ? `<div class="notice gap-md"><p>The compiled target carries a print readiness report that does not describe it: one written for another target, or for this one before the file was changed. Its verdict and width are not this artwork's. Compile it again to see what this artwork needs.</p></div>`
+                : `<p class="quiet small">Not compiled yet, so nothing is known about whether it will track.</p>`
   }
+  ${target.distanceLost ? `<p class="quiet small gap-md">${target.notRead !== undefined ? "Its compiled file could not be read, so nothing in it says" : target.unread ? "Its compiled file does not parse, so nothing in it says" : "Its report does not say"} how far away it was meant to be read from. Give that distance to compile it again; publishing will not guess it.</p>` : ""}
   ${target.tooSmall ? `<div class="notice bad gap-md"><p>${esc(target.tooSmall)}</p></div>` : ""}
-  <form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/compile" class="gap-md">
+  <form method="post" action="/e/${esc(view.id)}/targets/${segment(target.id)}/compile" class="gap-md">
     <div class="row bottom">
       <div class="field narrow">
-        <label for="d-${esc(target.id)}">Read from, mm</label>
-        <input id="d-${esc(target.id)}" name="scanDistanceMm" type="number" min="50" max="5000" step="10" value="${esc(target.scanDistanceMm ?? target.report?.scanDistanceMm ?? DEFAULT_SCAN_DISTANCE_MM)}">
+        <label for="d-${shown(target.id)}">Read from, mm</label>
+        <input id="d-${shown(target.id)}" name="scanDistanceMm" type="number" min="${SCAN_DISTANCE_MM.nearest}" max="${SCAN_DISTANCE_MM.furthest}" step="any" required value="${target.distanceLost ? "" : esc(target.scanDistanceMm ?? target.report?.scanDistanceMm ?? DEFAULT_SCAN_DISTANCE_MM)}">
       </div>
       <button type="submit">${target.report || target.staleReport ? "Compile again" : "Compile"}</button>
     </div>
@@ -218,11 +322,14 @@ export function experiencePage(view: ExperienceView): string {
 
   <details class="record">
     <summary>Add content to this target</summary>
-    <form method="post" action="/e/${esc(view.id)}/targets/${encodeURIComponent(target.id)}/content" enctype="multipart/form-data" class="gap-md">
+    ${
+      target.contentCount >= MOST_CONTENT
+        ? `<p class="quiet">This target shows ${MOST_CONTENT} pieces of content, which is as many as the manifest format allows.</p>`
+        : `<form method="post" action="/e/${esc(view.id)}/targets/${segment(target.id)}/content" enctype="multipart/form-data" class="gap-md">
       <div class="row bottom">
         <div class="field narrow">
-          <label for="ct-${esc(target.id)}">Type</label>
-          <select id="ct-${esc(target.id)}" name="type">
+          <label for="ct-${shown(target.id)}">Type</label>
+          <select id="ct-${shown(target.id)}" name="type">
             <option value="video">video</option>
             <option value="image">image</option>
             <option value="model">model</option>
@@ -230,18 +337,19 @@ export function experiencePage(view: ExperienceView): string {
           </select>
         </div>
         <div class="field">
-          <label for="cf-${esc(target.id)}">File</label>
-          <input id="cf-${esc(target.id)}" name="file" type="file" required>
+          <label for="cf-${shown(target.id)}">File</label>
+          <input id="cf-${shown(target.id)}" name="file" type="file" required>
         </div>
         <button type="submit">Add</button>
       </div>
-    </form>
+    </form>`
+    }
   </details>
 </section>`,
     )
     .join("\n");
 
-  return `<h2>${esc(view.manifest.title ?? view.id)}</h2>
+  return `<h2>${shown(view.manifest.title ?? view.id)}</h2>
 <p class="lede mono small">${esc(view.id)}</p>
 
 <h3>Targets</h3>
@@ -254,7 +362,10 @@ ${
 }
 
 <h3>Add a target</h3>
-<form method="post" action="/e/${esc(view.id)}/targets" enctype="multipart/form-data" class="card gap-md">
+${
+  view.targets.length >= MOST_TARGETS
+    ? `<div class="empty">This experience holds ${MOST_TARGETS} targets, which is as many as the manifest format allows. Every one is compiled, published and held in the browser at once.</div>`
+    : `<form method="post" action="/e/${esc(view.id)}/targets" enctype="multipart/form-data" class="card gap-md">
   <div class="row bottom">
     <div class="field narrow">
       <label for="t-id">Target id</label>
@@ -271,7 +382,8 @@ ${
     <button class="primary" type="submit">Add</button>
   </div>
   <p class="quiet note">Printed width is what the artwork actually measures on the finished piece. The compiler compares it against the width the artwork needs and says so if the print would be too small to read.</p>
-</form>
+</form>`
+}
 
 <h3>Publish</h3>
 <p class="quiet small">Writes a folder that runs on its own: the entry page, the manifest, the compiled targets, the assets, and the runtime carried in. It does not call back here, so this console can be switched off afterwards.</p>
@@ -279,7 +391,7 @@ ${
   view.problems.length > 0
     ? `<div class="notice gap-md">
   <p>Not ready to publish yet. A published bundle is the one thing that has to be valid, so the manifest is held to the format until it is:</p>
-  <ul class="reasons">${view.problems.map((problem) => `<li>${esc(describeProblem(problem, view.manifest))}</li>`).join("")}</ul>
+  <ul class="reasons">${view.problems.map((problem) => `<li>${shown(describeProblem(problem, view.manifest))}</li>`).join("")}</ul>
 </div>`
     : ""
 }
@@ -317,7 +429,7 @@ ${
 }
 
 export function errorPage(status: number, message: string): string {
-  return `<h2>${status}</h2><p>${esc(message)}</p><p><a href="/">Back to every experience</a></p>`;
+  return `<h2>${status}</h2><p>${shown(message)}</p><p><a href="/">Back to every experience</a></p>`;
 }
 
 /**
@@ -337,6 +449,18 @@ export function describeProblem(problem: { path: string; message: string }, mani
   const named = index === undefined ? undefined : manifest.targets[index]?.id;
   if (named !== undefined && problem.path.endsWith("/content") && problem.message.includes("fewer than 1")) {
     return `${named} has nothing to show. Add content to it.`;
+  }
+  // The ceilings. A manifest can be past one without any form having been used: hand
+  // edited in the store, copied in from elsewhere, or written by a console built before
+  // the ceilings existed. Without these the operator reads "must NOT have more than 64
+  // items" against a JSON pointer, which is the form the console's own checks exist to
+  // avoid, so leaving it here would have meant refusing politely at the door and rudely
+  // through the window.
+  if (problem.path === "/targets" && problem.message.includes("more than")) {
+    return `There are more than ${MOST_TARGETS} targets, which is as many as the manifest format allows. Remove some, or split the experience in two.`;
+  }
+  if (problem.path.endsWith("/content") && problem.message.includes("more than")) {
+    return `${named ?? "a target"} shows more than ${MOST_CONTENT} pieces of content, which is as many as the manifest format allows. Remove some.`;
   }
   return named === undefined
     ? `${problem.path} ${problem.message}`

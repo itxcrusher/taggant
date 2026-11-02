@@ -28,7 +28,16 @@ export interface MatchOptions {
   targetPositions?: Position[];
   /** Positions of the query descriptors, for the same reason on the other side. */
   queryPositions?: Position[];
-  /** How far apart two features must be before they count as different places. */
+  /**
+   * How far apart two features must be before they count as different places, for the ratio
+   * test.
+   *
+   * Six pixels, because this is about one corner described at two sizes: a multi scale target
+   * holds the same corner more than once, a pixel or two apart, and counting a feature's own
+   * copy as its rival rejects exactly the matches most certainly right. The repetition
+   * measure uses 24 for a different question, whether a look-alike is somewhere else on the
+   * artwork, and the two sentences read alike while asking different things.
+   */
   distinctRadius?: number;
 }
 
@@ -44,9 +53,64 @@ function pack(descriptors: Uint32Array[]): Uint32Array {
   const flat = new Uint32Array(descriptors.length * WORDS);
   for (let i = 0; i < descriptors.length; i++) {
     const descriptor = descriptors[i];
-    if (descriptor) flat.set(descriptor.subarray(0, WORDS), i * WORDS);
+    if (!descriptor) continue;
+    // Refused rather than padded. A short descriptor was copied as far as it went and the rest
+    // left zero, which is a real descriptor the matcher then compares in good faith.
+    if (descriptor.length !== WORDS) {
+      throw new RangeError(`descriptor ${i} is ${descriptor.length} words long, and every one is ${WORDS}`);
+    }
+    flat.set(descriptor, i * WORDS);
   }
   return flat;
+}
+
+/**
+ * The target's shared-spot table, kept for as long as the positions it came from still hold.
+ *
+ * It is a property of the target and was rebuilt on every call, which is every camera frame,
+ * and it is a pairwise sweep, so a frame's cost grew with the square of the target. Kept per
+ * positions array, and checked against what that array holds before it is used: keyed on the
+ * array alone, a caller refilling one array with another target's positions was answered from
+ * the first target's table. The check is one pass over the positions, which is nothing beside
+ * the sweep it saves.
+ *
+ * The packed descriptors are not kept. Packing is one pass, and a cache of it was the same
+ * hazard for a smaller saving: an array refilled with other descriptors, or a descriptor edited
+ * in place, was matched as the descriptors it used to hold.
+ */
+const sharedTargets = new WeakMap<
+  Position[],
+  { radiusSquared: number; xs: Float64Array; ys: Float64Array; shared: Uint8Array | undefined }
+>();
+
+function sharedOnce(positions: Position[] | undefined, radiusSquared: number): Uint8Array | undefined {
+  if (!positions) return undefined;
+  const held = sharedTargets.get(positions);
+  if (held !== undefined && held.radiusSquared === radiusSquared && samePositions(held, positions))
+    return held.shared;
+  const xs = new Float64Array(positions.length);
+  const ys = new Float64Array(positions.length);
+  for (let i = 0; i < positions.length; i++) {
+    xs[i] = positions[i]?.x ?? Number.NaN;
+    ys[i] = positions[i]?.y ?? Number.NaN;
+  }
+  const shared = sharedPositions(positions, radiusSquared);
+  sharedTargets.set(positions, { radiusSquared, xs, ys, shared });
+  return shared;
+}
+
+function samePositions(held: { xs: Float64Array; ys: Float64Array }, positions: Position[]): boolean {
+  if (held.xs.length !== positions.length) return false;
+  for (let i = 0; i < positions.length; i++) {
+    // Object.is, so a hole read back as NaN matches the NaN it was stored as.
+    if (
+      !Object.is(held.xs[i], positions[i]?.x ?? Number.NaN) ||
+      !Object.is(held.ys[i], positions[i]?.y ?? Number.NaN)
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** Bits that differ between two descriptors held in flat buffers. */
@@ -164,7 +228,7 @@ export function matchDescriptors(
 
   const queries = pack(query);
   const targets = pack(target);
-  const targetShared = sharedPositions(positions, radiusSquared);
+  const targetShared = sharedOnce(positions, radiusSquared);
   const queryShared = sharedPositions(options.queryPositions, radiusSquared);
 
   const forward: Match[] = [];

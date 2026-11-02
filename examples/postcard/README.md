@@ -24,8 +24,9 @@ Then point it at the artwork. Print `artwork.png` at 148 mm wide, or show it on 
   size                  640 x 454 px
   tracking quality      100 / 100
   features              248, reaching 16 of 16 areas
-  minimum print width   147 mm to be read from 190 mm away, being 320 px across the artwork
-  repeated detail       29% of features have a look-alike, which is normal
+  minimum print width   147 mm to be read from 190 mm away, putting at least 320 px across the artwork from left to right
+  maps onto itself      no: the most one move carries onto look-alikes is 5 of its 548 places, and the lines are 20 places and 20 per cent of them
+  recognised            at that size, every turn found it with 20 or more points agreeing at 5 of 5 widths, and with at least 50 at three of them, and no look put it in the wrong place
   verdict               ready for press
 ```
 
@@ -35,7 +36,9 @@ That width is a resolution requirement, not a judgement of the artwork. It is th
 
 The size line reads 640 by 454 where the file is 592 by 420, because every piece of artwork is analysed at the same raster whatever size it was exported at. Otherwise the same design sent as a bigger file would be measured differently and told to print larger, which rewards exporting small.
 
-`repeated detail` is the share of features that have a look-alike somewhere else on the piece. It matters because nothing else in the report notices a design that repeats, and a repeated design gives a tracker no way to know which copy it is looking at: the same artwork printed twice scores full marks on features and spread, and then places content a whole tile away.
+`maps onto itself` is asked first. The compiler looks for one move of the whole artwork, a shift with any turn or change of size, that carries its features onto features that look like them, and the most this postcard manages is 5 of its 548 places, a coincidence. Printed twice, one above the other, it is 230 of 624, more than a third of its places, by a shift of exactly one postcard down: a camera can settle on that shift and draw the content on the other copy, so the sheet is refused there, before the recogniser is asked anything. The line is twenty places and a fifth of them, and a sheet of copies sits far above both. Beside a copy of itself at 60 per cent of its size it is 61 of 458, past twenty places and well under a fifth of them, because a copy at another size pairs only at the sizes whose ratio is its own; that one is refused by pointing the recogniser at the small copy from close up, where it settles on the postcard.
+
+`recognised` is what decides the width. The compiler shows the artwork to the recogniser at five widths around the size above, one per cent apart, each turned four ways, and the width stands only if at most of those widths every turn finds it with twenty points agreeing on where it is, and no look puts it anywhere else. For this postcard all five widths do, and at three of them every turn finds at least 50.
 
 ## The files
 
@@ -47,7 +50,7 @@ The size line reads 640 by 454 where the file is 592 by 420, because every piece
 | `index.html` | the page that runs it |
 | `front.target.json` | produced by the compile step above, not checked in |
 
-`physicalWidthMm` in the manifest is the real width of the printed piece. It is what turns a pose in pixels into a pose in millimetres, so it is worth measuring rather than guessing.
+`physicalWidthMm` in the manifest is the real width of the printed artwork, measured left to right as its file is oriented: the same edge the compiler's minimum width is for. It is what turns a pose in pixels into a pose in millimetres, so it is worth measuring rather than guessing.
 
 ## If the camera will not open
 

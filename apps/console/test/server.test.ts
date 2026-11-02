@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -50,8 +50,12 @@ let workspace: Workspace;
 let publishRoot = "";
 let linkTable = "";
 
+/** Every folder this file makes, removed when it finishes. */
+const made: string[] = [];
+
 beforeAll(async () => {
   const root = await mkdtemp(join(tmpdir(), "console-http-"));
+  made.push(root);
   publishRoot = join(root, "bundles");
   linkTable = join(root, "links.json");
   workspace = createWorkspace(join(root, "workspace"));
@@ -62,6 +66,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await new Promise<void>((done) => server.close(() => done()));
+  // Best effort: a folder Windows has not let go of yet is not a test failure.
+  for (const folder of made.splice(0)) {
+    await rm(folder, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+  }
 });
 
 /** A form post from the console's own pages, which is what the browser sends. */
@@ -124,7 +132,15 @@ describe("the whole path, driven the way the pages drive it", () => {
 
     const content = new FormData();
     content.append("type", "video");
-    content.append("file", new Blob([Buffer.from("not really a video")], { type: "video/mp4" }), "pour.mp4");
+    // The bytes say MP4, which is what the bundler reads to decide what ships; a stand-in
+    // is refused by name and the publish below would then write nothing. Nothing plays it.
+    const mp4 = Buffer.concat([
+      Buffer.from([0, 0, 0, 0x18]),
+      Buffer.from("ftypisom"),
+      Buffer.from([0, 0, 0, 0]),
+      Buffer.from("isommp41"),
+    ]);
+    content.append("file", new Blob([mp4], { type: "video/mp4" }), "pour.mp4");
     expect((await post("/e/botanica-500/targets/front-panel/content", content)).status).toBe(303);
 
     page = await pageAt("/e/botanica-500");
@@ -196,7 +212,9 @@ describe("what it refuses", () => {
   });
 
   it("will not write over a link table it cannot read, because that would lose every other code", async () => {
-    const broken = join(await mkdtemp(join(tmpdir(), "console-table-")), "links.json");
+    const tableFolder = await mkdtemp(join(tmpdir(), "console-table-"));
+    made.push(tableFolder);
+    const broken = join(tableFolder, "links.json");
     await writeFile(broken, "{ this is not json");
     const other = createConsole({
       workspace,
@@ -264,6 +282,223 @@ not finished`;
     expect(await said.text()).toContain("is not a printed width in millimetres");
   });
 
+  it("survives publishing a drawing built to take the renderer down with it", async () => {
+    // There are two documents the renderer
+    // cannot survive: a dilate filter that held it for four and a half minutes, and a
+    // convolution matrix that killed the process with an illegal instruction. The bundler
+    // renders in a child process for exactly this reason, and the security policy said the
+    // server answering the upload is still there to say so, citing a test that called the
+    // bundler inside the test runner and never involved a console. This is that claim
+    // driven where it is made: an operator uploads such a drawing, presses publish, and
+    // the console has to come back with a message and go on serving.
+    await post("/experiences", new URLSearchParams({ id: "hostile-art", title: "Hostile art" }));
+    const target = new FormData();
+    target.append("targetId", "front");
+    target.append("physicalWidthMm", "120");
+    target.append("artwork", new Blob([await artwork()], { type: "image/png" }), "front.png");
+    expect((await post("/e/hostile-art/targets", target)).status).toBe(303);
+    await post("/e/hostile-art/targets/front/compile", new URLSearchParams({ scanDistanceMm: "150" }));
+
+    const taps = Array.from({ length: 900 }, () => "1").join(" ");
+    const hostile = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><filter id="f"><feConvolveMatrix order="30" kernelMatrix="${taps}"/></filter><rect width="100" height="100" fill="#c33" filter="url(#f)"/></svg>`;
+    const content = new FormData();
+    content.append("type", "image");
+    content.append("file", new Blob([hostile], { type: "image/svg+xml" }), "overlay.svg");
+    expect((await post("/e/hostile-art/targets/front/content", content)).status).toBe(303);
+
+    // The upload is accepted, because nothing has looked at it yet: the renderer is what
+    // reads an SVG and it runs at publish.
+    const published = await post("/e/hostile-art/publish", new URLSearchParams());
+    expect(published.status).toBe(303);
+    const said = await fetch(`${origin}${published.headers.get("location")}`);
+    expect(said.status).toBe(200);
+    expect(await said.text()).toMatch(/overlay\.svg/);
+
+    // And the console is still answering, which is the whole point.
+    expect((await fetch(`${origin}/`)).status).toBe(200);
+    expect(await pageAt("/e/hostile-art")).toContain("front");
+  }, 120_000);
+
+  it("holds both ceilings under two requests at once, and orphans neither upload", async () => {
+    // The check that matters is the one inside the turn that writes, and it had no test:
+    // with it deleted the suite stayed green, and two forms submitted
+    // at once at one below each ceiling were both accepted, with the loser's upload
+    // left on disk named by nothing while its operator was told the ceiling was reached.
+    // Two requests, no timing work, because the read and the store both sit outside the
+    // per-experience queue.
+    const { manifestSchema } = await import("@taggant/manifest");
+    const mostTargets = manifestSchema.properties.targets.maxItems;
+    const mostContent = manifestSchema.$defs.target.properties.content.maxItems;
+    const png = await artwork();
+
+    await post("/experiences", new URLSearchParams({ id: "at-the-edge", title: "At the edge" }));
+    const room = await workspace.read("at-the-edge");
+    const lastIndex = mostTargets - 2;
+    await workspace.save("at-the-edge", {
+      ...room.manifest,
+      // One short of the target ceiling, and the last target one short of its own.
+      targets: Array.from({ length: mostTargets - 1 }, (_, index) => ({
+        id: `t-${String(index).padStart(3, "0")}`,
+        source: "artwork/a.png",
+        physicalWidthMm: 120,
+        content: Array.from({ length: index === lastIndex ? mostContent - 1 : 1 }, () => ({
+          type: "image" as const,
+          src: "media/o.png",
+        })),
+      })),
+    });
+
+    const addTarget = (name: string) => {
+      const form = new FormData();
+      form.append("targetId", name);
+      form.append("physicalWidthMm", "120");
+      form.append("artwork", new Blob([png], { type: "image/png" }), `${name}.png`);
+      return post("/e/at-the-edge/targets", form);
+    };
+    await Promise.all([addTarget("race-one"), addTarget("race-two")]);
+
+    const afterTargets = await workspace.read("at-the-edge");
+    expect(afterTargets.manifest.targets).toHaveLength(mostTargets);
+    // Whichever won, the loser's artwork is not left on disk under a name nothing names.
+    const named = new Set(afterTargets.manifest.targets.map((target) => target.source));
+    const stored = await readdir(join(afterTargets.directory, "artwork"));
+    const orphans = stored.filter((file) => !named.has(`artwork/${file}`));
+    expect(orphans, `artwork nothing names: ${orphans.join(", ")}`).toEqual([]);
+
+    // The same for content, on the target that was left one short.
+    const full = `t-${String(lastIndex).padStart(3, "0")}`;
+    const addContent = (name: string) => {
+      const form = new FormData();
+      form.append("type", "image");
+      form.append("file", new Blob([png], { type: "image/png" }), `${name}.png`);
+      return post(`/e/at-the-edge/targets/${full}/content`, form);
+    };
+    await Promise.all([addContent("media-one"), addContent("media-two")]);
+
+    const afterContent = await workspace.read("at-the-edge");
+    const target = afterContent.manifest.targets.find((candidate) => candidate.id === full);
+    expect(target?.content).toHaveLength(mostContent);
+    const sources = new Set(
+      afterContent.manifest.targets.flatMap((each) => each.content.map((item) => item.src)),
+    );
+    const media = await readdir(join(afterContent.directory, "media"));
+    const spare = media.filter((file) => !sources.has(`media/${file}`));
+    expect(spare, `media nothing names: ${spare.join(", ")}`).toEqual([]);
+  }, 120_000);
+
+  it("refuses content past the ceiling, does not offer the form, and stores nothing", async () => {
+    // The content ceiling had no test at all, in any of its places.
+    const { manifestSchema } = await import("@taggant/manifest");
+    const most = manifestSchema.$defs.target.properties.content.maxItems;
+    await post("/experiences", new URLSearchParams({ id: "content-full", title: "Content full" }));
+    const saved = await workspace.read("content-full");
+    await workspace.save("content-full", {
+      ...saved.manifest,
+      targets: [
+        {
+          id: "front",
+          source: "artwork/a.png",
+          physicalWidthMm: 120,
+          content: Array.from({ length: most }, () => ({ type: "image" as const, src: "media/o.png" })),
+        },
+      ],
+    });
+
+    const shown = await pageAt("/e/content-full");
+    expect(shown).toContain(`shows ${most} pieces of content`);
+    expect(shown).not.toContain('action="/e/content-full/targets/front/content"');
+
+    const form = new FormData();
+    form.append("type", "image");
+    form.append("file", new Blob([await artwork()], { type: "image/png" }), "one-more.png");
+    const response = await post("/e/content-full/targets/front/content", form);
+    const said = await fetch(`${origin}${response.headers.get("location")}`);
+    expect(await said.text()).toContain(`already shows ${most} pieces of content`);
+
+    const after = await workspace.read("content-full");
+    expect(after.manifest.targets[0]?.content).toHaveLength(most);
+    const media = await readdir(join(after.directory, "media")).catch(() => [] as string[]);
+    expect(media).not.toContain("one-more.png");
+  }, 60_000);
+
+  it("says a ceiling in a manifest already on disk as a sentence, on the page and at publish", async () => {
+    // A manifest can be past a ceiling without any form having been used: hand edited,
+    // copied in, or written by a console built before the ceilings existed. That reached
+    // the operator as "/targets must NOT have more than 64 items" and, from the publish
+    // route, as "/targets/64/content", which is the form these checks exist to replace.
+    const { manifestSchema } = await import("@taggant/manifest");
+    const mostTargets = manifestSchema.properties.targets.maxItems;
+    const mostContent = manifestSchema.$defs.target.properties.content.maxItems;
+    await post("/experiences", new URLSearchParams({ id: "over-the-top", title: "Over the top" }));
+    const saved = await workspace.read("over-the-top");
+    await workspace.save("over-the-top", {
+      ...saved.manifest,
+      targets: Array.from({ length: mostTargets + 1 }, (_, index) => ({
+        id: `t-${String(index).padStart(3, "0")}`,
+        source: "artwork/a.png",
+        physicalWidthMm: 120,
+        content: Array.from({ length: index === 0 ? mostContent + 1 : 1 }, () => ({
+          type: "image" as const,
+          src: "media/o.png",
+        })),
+      })),
+    });
+
+    const shown = await pageAt("/e/over-the-top");
+    expect(shown).toContain(`more than ${mostTargets} targets`);
+    expect(shown).toContain(`shows more than ${mostContent} pieces of content`);
+    expect(shown).not.toContain("must NOT have more than");
+
+    const response = await post("/e/over-the-top/publish", new URLSearchParams());
+    const said = await fetch(`${origin}${response.headers.get("location")}`);
+    const text = await said.text();
+    expect(text).toContain(`more than ${mostTargets} targets`);
+    expect(text).not.toContain("must NOT have more than");
+  }, 60_000);
+
+  it("says the ceiling in a sentence rather than as a validation error, and stores nothing", async () => {
+    // The manifest format caps an experience at 64 targets and a target at 32 pieces of
+    // content, because every one is compiled, published and held in a browser at once, and
+    // every SVG among them costs a render at publish. Without this the operator meets that
+    // cap as a schema error naming a JSON path, after their upload is already on disk.
+    // The numbers come from the schema in both places, so there is one of each.
+    const { manifestSchema } = await import("@taggant/manifest");
+    const most = manifestSchema.properties.targets.maxItems;
+    await post("/experiences", new URLSearchParams({ id: "full-up", title: "Full up" }));
+    const saved = await workspace.read("full-up");
+    await workspace.save("full-up", {
+      ...saved.manifest,
+      targets: Array.from({ length: most }, (_, index) => ({
+        id: `t-${String(index).padStart(3, "0")}`,
+        source: "artwork/a.png",
+        physicalWidthMm: 120,
+        content: [{ type: "image" as const, src: "media/o.png" }],
+      })),
+    });
+
+    // The page does not offer the form at all, which is the first place the ceiling should
+    // appear: a button whose only outcome is a refusal is worse than no button.
+    const full = await pageAt("/e/full-up");
+    expect(full).toContain(`holds ${most} targets`);
+    expect(full).not.toContain('action="/e/full-up/targets"');
+
+    // And the request is refused anyway, because a page is not a control.
+    const form = new FormData();
+    form.append("targetId", "one-too-many");
+    form.append("physicalWidthMm", "120");
+    form.append("artwork", new Blob([await artwork()], { type: "image/png" }), "extra.png");
+    const response = await post("/e/full-up/targets", form);
+    const said = await fetch(`${origin}${response.headers.get("location")}`);
+    expect(await said.text()).toContain(`already has ${most} targets`);
+
+    // And the refusal came before the upload was stored, so nothing is left on disk that
+    // no manifest names.
+    const after = await workspace.read("full-up");
+    expect(after.manifest.targets).toHaveLength(most);
+    const artworkFolder = await readdir(join(after.directory, "artwork")).catch(() => [] as string[]);
+    expect(artworkFolder).not.toContain("extra.png");
+  }, 60_000);
+
   it("keeps every target when several are added at the same moment", async () => {
     await post("/experiences", new URLSearchParams({ id: "at-once", title: "At once" }));
     const png = await artwork();
@@ -317,7 +552,7 @@ describe("what it says", () => {
       id: "front",
       width: 640,
       height: 452,
-      features: [],
+      features: [{ x: 50, y: 50, strength: 1, angle: 0, scale: 1, descriptor: [0, 1, 2, 3, 4, 5, 6, 7] }],
       report: {
         score: 100,
         pass: true,
@@ -350,5 +585,83 @@ describe("what it says", () => {
     await post("/e/too-small/targets/front/compile", new URLSearchParams({ scanDistanceMm: "500" }));
     const page = await pageAt("/e/too-small");
     expect(page).toContain("Printed as it stands it will not be recognised");
+  });
+
+  it("says when the link a plain scan followed gives up the default to the one registered", async () => {
+    // The code's default was another kind of link, which keeps its place and loses the mark: told
+    // only that the other links were left alone, the operator would not know a scan now goes here.
+    await post("/experiences", new URLSearchParams({ id: "moved-default", title: "Moved default" }));
+    const before = JSON.parse(await readFile(linkTable, "utf8").catch(() => '{"version":1,"entries":{}}'));
+    before.entries["/01/09520123456702"] = [
+      { href: "https://a.example/cert", linkType: "gs1:certificationInfo", title: "Cert", default: true },
+    ];
+    await writeFile(linkTable, JSON.stringify(before));
+    const response = await post(
+      "/e/moved-default/code",
+      new URLSearchParams({ path: "/01/09520123456702", href: "https://example.com/m/" }),
+    );
+    expect(response.status).toBe(303);
+    const page = await pageAt(response.headers.get("location") ?? "/");
+    expect(page).toContain(
+      "points here. The link a plain scan of it followed before keeps its place and is no longer the default.",
+    );
+    expect(page).not.toContain("left alone");
+  });
+
+  it("says the table is still refused when another code in it holds two defaults", async () => {
+    // Registering one code of two that each hold two defaults repairs that one; the resolver still
+    // refuses the table for the other, and the notice says which, rather than that the code points
+    // here as though scans now reached it.
+    await post("/experiences", new URLSearchParams({ id: "still-refused", title: "Still refused" }));
+    const cert = {
+      href: "https://a.example/cert",
+      linkType: "gs1:certificationInfo",
+      title: "Cert",
+      default: true,
+    };
+    const pip = { href: "https://a.example/pip", linkType: "gs1:pip", title: "Pip", default: true };
+    await writeFile(
+      linkTable,
+      JSON.stringify({
+        version: 1,
+        entries: { "/01/09520123456788": [cert, pip], "/01/09520123456702": [cert, pip] },
+      }),
+    );
+    const response = await post(
+      "/e/still-refused/code",
+      new URLSearchParams({ path: "/01/09520123456788", href: "https://example.com/s/" }),
+    );
+    expect(response.status).toBe(303);
+    const page = await pageAt(response.headers.get("location") ?? "/");
+    // What became of this code's own links comes before the other code's reason, so "it" in those
+    // sentences is this code.
+    expect(page).toContain(
+      "/01/09520123456788 points here in the link table. 1 product link of that kind was replaced. The link a plain scan of it followed before keeps its place and is no longer the default. The resolver still refuses the table, for another code: /01/09520123456702 has two default links",
+    );
+    // Not to register it here, which would point that code at this experience.
+    expect(page).toContain(
+      "mark only the link it should follow. If that code holds two defaults, registering it from the experience it should point at leaves it one, the link to that experience; otherwise correct it by hand.",
+    );
+    expect(page).not.toContain("/01/09520123456788 points here.");
+    // As a warning, neither good nor bad: the code is written, and scans still do not reach it.
+    expect(page).toMatch(
+      /<div class="notice [^"]*" role="status">\s*<p>\/01\/09520123456788 points here in the link table/,
+    );
+    expect(page).not.toMatch(/class="notice (good|bad)"/);
+    // A reason that ends in a full stop of its own is followed by one, not two.
+    await writeFile(
+      linkTable,
+      JSON.stringify({ version: 1, entries: { "/01/9520123456702": [{ ...pip, default: true }] } }),
+    );
+    const spelled = await post(
+      "/e/still-refused/code",
+      new URLSearchParams({ path: "/01/09520123456788", href: "https://example.com/s/" }),
+    );
+    const spelledPage = await pageAt(spelled.headers.get("location") ?? "/");
+    expect(spelledPage).toContain(
+      "Write it as &quot;/01/09520123456702&quot;. If that code holds two defaults",
+    );
+    // Put back to an empty table, so nothing after this starts from a table the resolver refuses.
+    await writeFile(linkTable, JSON.stringify({ version: 1, entries: {} }));
   });
 });

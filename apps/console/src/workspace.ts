@@ -3,7 +3,7 @@
  *
  * An experience is a manifest plus the files it names. That is already what the bundler
  * consumes and what every other package in this repository speaks, so there is nothing
- * here translating between a database and the format (D-018). One folder per experience:
+ * here translating between a database and the format. One folder per experience:
  *
  *     <root>/<id>/manifest.json      the experience
  *     <root>/<id>/artwork/           artwork a target is compiled from
@@ -17,9 +17,11 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, extname, join, resolve, sep } from "node:path";
+import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, extname, join, posix, resolve, sep } from "node:path";
+import process from "node:process";
 import { type ManifestError, type TaggantExperienceManifest, validateManifest } from "@taggant/manifest";
+import { inTurn as inTurnFor, queueKey } from "./in-turn.js";
 
 /**
  * What an experience id may be.
@@ -46,6 +48,22 @@ export class WorkspaceError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "WorkspaceError";
+  }
+}
+
+/**
+ * A compiled target file that could not be read at all, with the reason the system gave, and
+ * whether nothing is in its place any more: gone since it was looked for, as when another program
+ * is replacing it.
+ */
+export class TargetNotReadError extends WorkspaceError {
+  constructor(
+    message: string,
+    readonly reason: string,
+    readonly gone = false,
+  ) {
+    super(message);
+    this.name = "TargetNotReadError";
   }
 }
 
@@ -208,12 +226,20 @@ export function targetFilename(targetId: string): string {
  *
  * Two uploaded names that reduce to one safe name is ordinary, and writing over the first
  * left a manifest entry pointing at a different target's image.
+ *
+ * Taken means named by the manifest as well as present on disk. A file the manifest names can
+ * be missing, moved or tidied away, and with only the disk asked, the next upload of that name
+ * became the artwork of the target still naming it: two targets on one image, and a refused
+ * re-upload kept as the original's replacement because the cleanup will not delete a file the
+ * manifest names. The console's own message for a missing file says to upload it again, which
+ * led straight there.
  */
-async function freeName(directory: string, wanted: string): Promise<string> {
+async function freeName(directory: string, wanted: string, named: ReadonlySet<string>): Promise<string> {
   const extension = extname(wanted);
   const stem = wanted.slice(0, wanted.length - extension.length);
   for (let attempt = 0; attempt < 1000; attempt++) {
     const candidate = attempt === 0 ? wanted : `${stem}-${attempt + 1}${extension}`;
+    if (named.has(foldedName(candidate))) continue;
     try {
       await stat(join(directory, candidate));
     } catch {
@@ -221,6 +247,25 @@ async function freeName(directory: string, wanted: string): Promise<string> {
     }
   }
   throw new WorkspaceError(`there are already a thousand files called something like ${wanted}`);
+}
+
+/**
+ * A name as the filesystem compares it: one spelling per file where letter case is folded. A
+ * manifest edited by hand can name `Logo.png` where an upload is stored as `logo.png`, and on
+ * Windows and macOS those are one file.
+ */
+function foldedName(name: string): string {
+  return process.platform === "win32" || process.platform === "darwin" ? name.toLowerCase() : name;
+}
+
+/** A manifest path with its percent escapes decoded, as the bundler reads it, or as written. */
+function decodedPath(path: string): string {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    // The bundler refuses a path it cannot decode, so this spelling names no file it would read.
+    return path;
+  }
 }
 
 function reasonFor(error: unknown): string {
@@ -238,10 +283,99 @@ async function writeAtomic(path: string, contents: string | Uint8Array): Promise
   const staging = `${path}.writing-${randomBytes(4).toString("hex")}`;
   try {
     await writeFile(staging, contents);
-    await rename(staging, path);
+    await replaceFile(staging, path);
   } catch (error) {
-    await rm(staging, { force: true });
+    // Its failure must not replace the reason the write failed.
+    await rm(staging, { force: true }).catch(() => undefined);
     throw error;
+  }
+}
+
+/**
+ * How many times a rename onto a file someone is reading is tried, waiting twice as long each
+ * time from 5 ms: about 1.3 seconds in all.
+ */
+const RENAME_ATTEMPTS = 9;
+
+/** A compiled target's text parsed, a byte-order mark in front read as though it were not there. */
+function parseTarget(text: string, targetId: string): unknown {
+  try {
+    // As the link table is: a target file an editor saved with a mark could not be read, and its
+    // report with it.
+    return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
+  } catch (error) {
+    throw new WorkspaceError(
+      `the compiled target for ${targetId} does not parse: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+/**
+ * What is in a file's place when reading it failed for something that is not a file there: a
+ * folder, a link to one, a link to nothing, or a link that leads round in a loop. The read's own
+ * code says "illegal operation on a directory", "no such file" or ELOOP, which names none of them
+ * and tells nobody to move it aside.
+ */
+export async function inPlaceOf(path: string, error: unknown): Promise<string | undefined> {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  if (code !== "EISDIR" && code !== "ENOENT" && code !== "ELOOP") return undefined;
+  const there = await lstat(path).catch(() => undefined);
+  if (there?.isSymbolicLink()) {
+    return code === "EISDIR"
+      ? "a link to a folder"
+      : code === "ELOOP"
+        ? "a link that leads round in a loop"
+        : "a link to nothing";
+  }
+  if (there?.isDirectory()) return "a folder";
+  return undefined;
+}
+
+/**
+ * Move a finished file over the one it replaces, waiting out a reader that has it open.
+ *
+ * On Windows a rename onto a file another handle holds open is refused, even when the holder is
+ * only reading it, and a page view reads the manifest and every compiled target. With three
+ * clients viewing the page, 10 of 15 compiles and 16 of 30 additions came back as a 500 with an
+ * EPERM stack. Readers let go within milliseconds, so the rename is
+ * tried again before it gives up, and then it says so in a sentence. Elsewhere a rename replaces
+ * an open file, and a refusal there is not something waiting would change.
+ */
+export async function replaceFile(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      // A folder or a link where the file goes is refused with the same codes, and no wait changes
+      // that, so it is said: taken for a file held, a link to nothing was "held open for over a
+      // second", and a folder, or a link to one, failed as nothing the operator could act on.
+      const there = await lstat(to).catch(() => undefined);
+      const what = there?.isDirectory() ? "a folder" : there?.isSymbolicLink() ? "a link" : undefined;
+      if (what !== undefined && there !== undefined) {
+        throw new WorkspaceError(
+          `${to} is ${what}, which a file cannot replace: move it aside, then try again.`,
+        );
+      }
+      // On Windows a read-only file refuses the rename with the code a reader holding it does, and
+      // waiting does not change it: it was said to be held open for over a second, and trying
+      // again never worked.
+      if (process.platform === "win32" && there?.isFile() && (there.mode & 0o200) === 0) {
+        throw new WorkspaceError(
+          `${to} is read-only, which a write cannot replace: make it writable, then try again.`,
+        );
+      }
+      const held =
+        process.platform === "win32" && (code === "EPERM" || code === "EACCES" || code === "EBUSY");
+      if (!held) throw error;
+      if (attempt >= RENAME_ATTEMPTS - 1) {
+        throw new WorkspaceError(
+          `${to} could not be replaced, because another program held it open for over a second (${code}). Nothing was changed; try again.`,
+        );
+      }
+      await new Promise((settle) => setTimeout(settle, 5 * 2 ** attempt));
+    }
   }
 }
 
@@ -265,39 +399,59 @@ export interface Workspace {
   update(id: string, change: (manifest: DraftManifest) => DraftManifest): Promise<Experience>;
   /** Store an upload under `artwork/` or `media/` and return its manifest-relative path. */
   storeFile(id: string, folder: "artwork" | "media", name: string, bytes: Uint8Array): Promise<string>;
+  /**
+   * Take a stored upload away again, by the path `storeFile` returned.
+   *
+   * An upload has to be on disk before the manifest can name it, and the write that names
+   * it can still be refused: a target id that turns out to be taken, a ceiling reached by
+   * another request in between. Without this the file stays, named by nothing, and the
+   * operator is told the opposite of what happened. Silent when the file is already gone,
+   * because this is a cleanup path and a failure in it must not replace the real reason.
+   */
+  forgetFile(id: string, path: string): Promise<void>;
   writeTarget(id: string, targetId: string, target: unknown): Promise<string>;
   readTarget(id: string, targetId: string): Promise<unknown>;
   hasTarget(id: string, targetId: string): Promise<boolean>;
 }
 
-export function createWorkspace(root: string): Workspace {
+/**
+ * One queue per experience, so a read and the write that follows it are not separated.
+ *
+ * This is a self-hosted tool for the people who own the artwork, so the process is the
+ * boundary and an in-process queue is the right size of answer. It is not a lock file
+ * and it orders this console's writes only. One console per workspace is what makes
+ * that enough, and `claim` in `one-console.ts` is what checks it: a lock inside the
+ * workspace, taken at startup, refusing a workspace another live console holds.
+ *
+ * Held here rather than by each workspace object, and keyed by the experience's folder as
+ * the filesystem names it. It belonged to the object, so two `createWorkspace` calls on one
+ * folder had a queue each: two creates of one id both succeeded in eighteen rounds of twenty,
+ * where one object refused the second in all twenty. The command line makes one object, and
+ * `createWorkspace` is exported, so this was reachable by anything embedding the console.
+ */
+const experienceQueues = new Map<string, Promise<void>>();
+
+export interface WorkspaceOptions {
+  /**
+   * Asked immediately before every write: null to go ahead, or the sentence a write is refused
+   * with. The command line answers it from the lock, so a console whose lock was taken over by
+   * another writes nothing more; it went on writing, and of forty codes registered through two
+   * consoles that both believed they held the table, twenty were kept.
+   */
+  holds?: () => string | null;
+}
+
+export function createWorkspace(root: string, options: WorkspaceOptions = {}): Workspace {
   const base = resolve(root);
 
-  /**
-   * One queue per experience, so a read and the write that follows it are not separated.
-   *
-   * This is a self-hosted tool for the people who own the artwork, so the process is the
-   * boundary and an in-process queue is the right size of answer. It is not a lock file
-   * and it does not defend against two consoles pointed at one directory, which is a thing
-   * the documentation says not to do rather than a thing this pretends to survive.
-   */
-  const queues = new Map<string, Promise<void>>();
-  const inTurn = <T>(id: string, work: () => Promise<T>): Promise<T> => {
-    const previous = queues.get(id) ?? Promise.resolve();
-    // Run on either outcome of the one before, so a failed operation does not wedge the
-    // queue behind it.
-    const result = previous.then(work, work);
-    const settled = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    queues.set(id, settled);
-    // Dropped only when nothing queued behind it, so an idle workspace holds nothing.
-    void settled.then(() => {
-      if (queues.get(id) === settled) queues.delete(id);
-    });
-    return result;
+  /** Refuse the write about to happen when this console no longer holds the workspace. */
+  const mayWrite = (): void => {
+    const refusal = options.holds?.() ?? null;
+    if (refusal !== null) throw new WorkspaceError(refusal);
   };
+
+  const inTurn = <T>(id: string, work: () => Promise<T>): Promise<T> =>
+    inTurnFor(experienceQueues, queueKey(directoryFor(id)), work);
 
   const directoryFor = (id: string): string => {
     const directory = resolve(base, assertId(id));
@@ -313,8 +467,16 @@ export function createWorkspace(root: string): Workspace {
   const readManifestFile = async (id: string): Promise<unknown> => {
     const path = join(directoryFor(id), "manifest.json");
     try {
-      return JSON.parse(await readFile(path, "utf8"));
+      // Read as though a byte-order mark in front were not there, as a target file is.
+      const text = await readFile(path, "utf8");
+      return JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
     } catch (error) {
+      const what = await inPlaceOf(path, error);
+      if (what !== undefined) {
+        throw new WorkspaceError(
+          `${path} is ${what}, which a manifest cannot be: move it aside, then try again.`,
+        );
+      }
       throw new WorkspaceError(
         `${id} could not be read: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -327,8 +489,8 @@ export function createWorkspace(root: string): Workspace {
    *
    * `directoryFor` compares paths as text, which cannot see a symbolic link or a Windows
    * junction: the operator's own store is a directory they can put anything in, and an
-   * upload written through a link goes wherever the link points. The bundler shipped
-   * exactly this defect and it took an adversarial pass to find it.
+   * upload written through a link goes wherever the link points. The bundler once shipped
+   * exactly this defect.
    */
   const inside = async (lexical: string, what: string): Promise<string> => {
     await mkdir(lexical, { recursive: true });
@@ -353,6 +515,7 @@ export function createWorkspace(root: string): Workspace {
     if (manifest.id !== id) {
       throw new WorkspaceError(`the manifest says its id is ${manifest.id}, and it is stored as ${id}`);
     }
+    mayWrite();
     const directory = await realDirectory(id);
     await writeAtomic(join(directory, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     return interpret(id, manifest);
@@ -407,6 +570,29 @@ export function createWorkspace(root: string): Workspace {
 
   const read = async (id: string): Promise<Experience> => interpret(id, await readManifestFile(id));
 
+  /**
+   * Every path the manifest names, spelled the way the filesystem compares names. Empty when
+   * the manifest cannot be read.
+   */
+  const namedBy = async (id: string): Promise<Set<string>> =>
+    await read(id)
+      .then((experience) => {
+        const sources = experience.manifest.targets.map((target) => target.source);
+        const content = experience.manifest.targets.flatMap((target) =>
+          target.content.map((item) => item.src),
+        );
+        // A hand-edited manifest may spell a path `./artwork/x.png`, or `artwork/x%2Epng`; each
+        // is the same file, and the bundler reads both that way, decoding before it resolves.
+        // Undecoded here, an upload was stored under the name a manifest entry already held in
+        // escaped form, and the bundler then gave that entry the new upload.
+        return new Set(
+          [...sources, ...content]
+            .filter((path): path is string => typeof path === "string")
+            .map((path) => foldedName(posix.normalize(decodedPath(path)))),
+        );
+      })
+      .catch(() => new Set<string>());
+
   return {
     root: base,
     directoryFor,
@@ -426,9 +612,16 @@ export function createWorkspace(root: string): Workspace {
         let raw: unknown;
         try {
           raw = await readManifestFile(id);
-        } catch {
-          // A directory with no readable manifest is not an experience. It may be anything
-          // the operator put there, and the console does not claim it.
+        } catch (error) {
+          // A directory with no manifest is not an experience. It may be anything the operator put
+          // there, and the console does not claim it. One whose manifest's place holds something
+          // that cannot be read as one, a folder or a link among them, is listed with what is
+          // wrong: dropped, its message was reached only by typing its address.
+          const there = await lstat(join(directoryFor(id), "manifest.json")).then(
+            () => true,
+            () => false,
+          );
+          if (there) listed.push({ ok: false, id, directory: directoryFor(id), reason: reasonFor(error) });
           continue;
         }
         try {
@@ -447,19 +640,26 @@ export function createWorkspace(root: string): Workspace {
     exists,
 
     async create(id: string, title: string): Promise<Experience> {
-      const directory = directoryFor(id);
-      if (await exists(id)) {
-        throw new WorkspaceError(`${id} already exists`);
-      }
-      // Through `realFolder`, so a link left in the workspace cannot put the manifest and
-      // its folders somewhere else. That check was written for uploads and guarded only
-      // those, so a junction named after an experience took the manifest write with it.
-      await realFolder(id, "artwork");
-      await realFolder(id, "media");
-      await realFolder(id, "targets");
-      const draft: DraftManifest = { schemaVersion: "1.0.0", id, title, targets: [] };
-      await writeAtomic(join(directory, "manifest.json"), `${JSON.stringify(draft, null, 2)}\n`);
-      return interpret(id, draft);
+      // In the queue, which it was alone among the writers in not being. It asks whether
+      // the experience exists and then writes the manifest, so two creates of one id
+      // arriving together both found it absent and both wrote: two operators were told
+      // they had created an experience, one existed, and it carried the other's title.
+      return await inTurn(id, async () => {
+        const directory = directoryFor(id);
+        if (await exists(id)) {
+          throw new WorkspaceError(`${id} already exists`);
+        }
+        mayWrite();
+        // Through `realFolder`, so a link left in the workspace cannot put the manifest and
+        // its folders somewhere else. That check was written for uploads and guarded only
+        // those, so a junction named after an experience took the manifest write with it.
+        await realFolder(id, "artwork");
+        await realFolder(id, "media");
+        await realFolder(id, "targets");
+        const draft: DraftManifest = { schemaVersion: "1.0.0", id, title, targets: [] };
+        await writeAtomic(join(directory, "manifest.json"), `${JSON.stringify(draft, null, 2)}\n`);
+        return interpret(id, draft);
+      });
     },
 
     async save(id: string, manifest: DraftManifest): Promise<Experience> {
@@ -479,33 +679,101 @@ export function createWorkspace(root: string): Workspace {
       name: string,
       bytes: Uint8Array,
     ): Promise<string> {
-      const directory = await realFolder(id, folder);
-      // Two names that reduce to one is the ordinary case, not a corner: `logo.png` and
-      // `LOGO.PNG`, or `photo one.png` and `photo-one.png`. Writing the safe name blind
-      // deleted the first file and left the first target's manifest entry pointing at the
-      // second target's image, with nothing saying so.
-      const filename = await freeName(directory, safeFilename(name));
-      await writeAtomic(join(directory, filename), bytes);
-      return `${folder}/${filename}`;
+      // In the queue, because choosing a free name and writing it are two steps and the
+      // gap between them is the whole defect. `freeName` asks whether a name is taken and
+      // `storeFile` then takes it; two uploads arriving together both saw the same name
+      // free, both wrote it, and the second won the file while both manifest entries named
+      // it. Measured: two add-target forms posted in one `Promise.all` with the same
+      // filename left one file and two targets pointing at it, both operators told theirs
+      // was added. The sequential case `freeName` was written for is the case its test
+      // drives, which is why nothing caught this.
+      return await inTurn(id, async () => {
+        mayWrite();
+        const directory = await realFolder(id, folder);
+        // Two names that reduce to one is the ordinary case, not a corner: `logo.png` and
+        // `LOGO.PNG`, or `photo one.png` and `photo-one.png`. Writing the safe name blind
+        // deleted the first file and left the first target's manifest entry pointing at the
+        // second target's image, with nothing saying so.
+        const inFolder = `${folder}/`;
+        const named = new Set(
+          [...(await namedBy(id))]
+            .filter((path) => path.startsWith(inFolder))
+            .map((path) => path.slice(inFolder.length)),
+        );
+        const filename = await freeName(directory, safeFilename(name), named);
+        await writeAtomic(join(directory, filename), bytes);
+        return `${folder}/${filename}`;
+      });
+    },
+
+    async forgetFile(id: string, path: string): Promise<void> {
+      const folder = path.startsWith("media/") ? "media" : "artwork";
+      const name = path.slice(folder.length + 1);
+      // Rebuilt from the folder and the basename rather than joined from the path given,
+      // so nothing here can be walked out of the experience's own directory.
+      if (name === "" || name.includes("/") || name.includes("\\")) return;
+      // In the queue, and refusing to remove anything the manifest names. This deleted by
+      // name: when two concurrent uploads had been handed the same name, the refused one's
+      // cleanup took the accepted one's artwork, and that operator was told their target
+      // was added while the manifest named a file that was not there. The first defect is
+      // closed where names are chosen, and this is the second lock, because a cleanup that
+      // can delete a named file is one rename away from doing it again.
+      await inTurn(id, async () => {
+        // Left where it is by a console that no longer holds the workspace, silently, because a
+        // refusal here would replace the reason the upload is being taken back.
+        if ((options.holds?.() ?? null) !== null) return;
+        if ((await namedBy(id)).has(foldedName(`${folder}/${name}`))) return;
+        await rm(join(directoryFor(id), folder, name), { force: true }).catch(() => undefined);
+      });
     },
 
     async writeTarget(id: string, targetId: string, target: unknown): Promise<string> {
-      const directory = await realFolder(id, "targets");
-      const filename = targetFilename(targetId);
-      await writeAtomic(join(directory, filename), `${JSON.stringify(target)}\n`);
-      return `targets/${filename}`;
+      // In the queue, which it was alone among the writers in not being. Two compiles of one
+      // target at once, which is a double click on Compile, both renamed onto one file, and on
+      // Windows the second rename is refused: the operator got a 500 with an EPERM stack. The
+      // compile itself stays outside, because it takes seconds and the experience's other
+      // writes have no reason to wait for it; only the write is ordered, and the later of the
+      // two is the one kept.
+      return await inTurn(id, async () => {
+        mayWrite();
+        const directory = await realFolder(id, "targets");
+        const filename = targetFilename(targetId);
+        await writeAtomic(join(directory, filename), `${JSON.stringify(target)}\n`);
+        return `targets/${filename}`;
+      });
     },
 
     async readTarget(id: string, targetId: string): Promise<unknown> {
       const filename = targetFilename(targetId);
       const path = join(directoryFor(id), "targets", filename);
+      // Read and parsed apart, because the two are said apart: a file that does not parse, and one
+      // that cannot be read, a folder or a link in its place, reading denied or another program
+      // holding it, whose reason the system gives. One gone since it was looked for is neither. A
+      // file being replaced is gone for a moment and then back, so a read that finds nothing reads
+      // once more: taken for gone at once, a publish compiled it again at a guess over the file put
+      // back; taken for unread after a second look found it, its card asked for a distance on disk.
+      let text: string;
       try {
-        return JSON.parse(await readFile(path, "utf8"));
-      } catch (error) {
-        throw new WorkspaceError(
-          `the compiled target for ${targetId} could not be read: ${error instanceof Error ? error.message : String(error)}`,
+        text = await readFile(path, "utf8");
+      } catch (first) {
+        const again =
+          (first as NodeJS.ErrnoException).code === "ENOENT"
+            ? await readFile(path, "utf8").then(
+                (value) => ({ value }),
+                (error: unknown) => ({ error }),
+              )
+            : { error: first };
+        if ("value" in again) return parseTarget(again.value, targetId);
+        const error = again.error;
+        const reason = error instanceof Error ? error.message : String(error);
+        const gone = (error as NodeJS.ErrnoException).code === "ENOENT";
+        throw new TargetNotReadError(
+          `the compiled target for ${targetId} could not be read: ${reason}`,
+          reason,
+          gone,
         );
       }
+      return parseTarget(text, targetId);
     },
 
     async hasTarget(id: string, targetId: string): Promise<boolean> {

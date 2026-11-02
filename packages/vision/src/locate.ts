@@ -38,7 +38,88 @@ export interface LocateResult {
   matches: number;
 }
 
-const NOT_FOUND: LocateResult = { found: false, homography: null, inliers: 0, matches: 0 };
+/**
+ * A fresh result each time.
+ *
+ * It was one object shared by every call, and nothing about the result type says not to write
+ * to it: a caller that set `found` on one not-found result made every later one report found,
+ * with a null pose, which is the hallucination the inlier floor exists to prevent arriving by
+ * a route that skips the floor entirely.
+ */
+function notFound(): LocateResult {
+  return { found: false, homography: null, inliers: 0, matches: 0 };
+}
+
+/**
+ * What matching needs from a target, worked out once per target rather than once per frame.
+ *
+ * The descriptors and positions were mapped out of the target on every call, so the matcher
+ * saw new arrays every frame and could not keep the table of which features share a spot,
+ * which is quadratic in the target's size. Measured on one harness with and without this: no
+ * difference at the sizes the compiler writes (53 ms either way at 749 features, 69 against 59
+ * at 1111), and a third of each frame at 12 000 features (463 ms against 308 after the first),
+ * which a target file can hold because nothing caps its feature count. So this bounds what a
+ * large target costs per frame rather than speeding up an ordinary one.
+ *
+ * Keyed on the target object and checked against its features before each use, in one pass
+ * that costs nothing beside a frame. It was trusted once made, and the pose was then fitted from
+ * the live features with indices into the kept copy: a target whose features were reordered
+ * after one locate was not found, 6 points where a fresh object gave 58.
+ */
+interface Prepared {
+  /** The features this was made from, so a change to the list or to any one of them shows. */
+  source: TargetFeature[];
+  /** How long the list was, holes included. */
+  length: number;
+  xs: Float64Array;
+  ys: Float64Array;
+  descriptors: Uint32Array[];
+  positions: { x: number; y: number }[];
+}
+
+const prepared = new WeakMap<TrackingTarget, Prepared>();
+
+/**
+ * Whether an entry in a target's list is a feature at all.
+ *
+ * A list with a hole in it reached `Float64Array.from`, which reads a hole as undefined and threw
+ * on `.x`; the build before stepped over it and found the target with 119 points. A hole cannot
+ * come out of a JSON file, but a target built in code can hold one.
+ */
+function present(feature: TargetFeature | undefined | null): feature is TargetFeature {
+  return typeof feature === "object" && feature !== null;
+}
+
+function stillDescribes(held: Prepared, features: TargetFeature[]): boolean {
+  if (held.source !== features || held.length !== features.length) return false;
+  let k = 0;
+  for (let i = 0; i < features.length; i++) {
+    const feature = features[i];
+    if (!present(feature)) continue;
+    if (feature.descriptor !== held.descriptors[k] || feature.x !== held.xs[k] || feature.y !== held.ys[k]) {
+      return false;
+    }
+    k++;
+  }
+  return k === held.descriptors.length;
+}
+
+function preparedFor(target: TrackingTarget): Prepared {
+  let held = prepared.get(target);
+  if (held === undefined || !stillDescribes(held, target.features)) {
+    const features = target.features.filter(present);
+    held = {
+      source: target.features,
+      length: target.features.length,
+      xs: Float64Array.from(features, (c) => c.x),
+      ys: Float64Array.from(features, (c) => c.y),
+      descriptors: features.map((c) => c.descriptor),
+      positions: features.map((c) => ({ x: c.x, y: c.y })),
+    };
+    prepared.set(target, held);
+  }
+  return held;
+}
 
 /**
  * Sizes a frame is described at, in the order they are tried.
@@ -62,7 +143,7 @@ export function locate(
 ): LocateResult {
   const minInliers = options.minInliers ?? 10;
   const perScale = options.maxCorners ?? 400;
-  if (frame.width < 1 || frame.height < 1 || target.features.length === 0) return NOT_FOUND;
+  if (frame.width < 1 || frame.height < 1 || target.features.length === 0) return notFound();
 
   const scales = options.scales ?? DEFAULT_FRAME_SCALES;
   // The first size is tried on its own before the rest are paid for. Describing a frame is
@@ -86,13 +167,14 @@ function attemptAt(
   minInliers: number,
 ): LocateResult {
   const described = buildTrackingFeatures(frame, { scales, perScale });
-  if (described.length < 4) return NOT_FOUND;
+  if (described.length < 4) return notFound();
 
+  const side = preparedFor(target);
   const matches = matchDescriptors(
     described.map((c) => c.descriptor),
-    target.features.map((c) => c.descriptor),
+    side.descriptors,
     {
-      targetPositions: target.features.map((c) => ({ x: c.x, y: c.y })),
+      targetPositions: side.positions,
       queryPositions: described.map((c) => ({ x: c.x, y: c.y })),
     },
   );
@@ -103,7 +185,8 @@ function attemptAt(
   const estimate = estimateHomography(
     matches.map((match) => {
       const frameCorner = described[match.query];
-      const targetCorner = target.features[match.target];
+      // From the copy the matches index into, never from the live features.
+      const targetCorner = side.positions[match.target];
       return {
         fromX: targetCorner?.x ?? 0,
         fromY: targetCorner?.y ?? 0,

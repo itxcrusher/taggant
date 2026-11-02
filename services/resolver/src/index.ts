@@ -16,8 +16,12 @@ export {
   chooseLink,
   emptyTable,
   expandLinkType,
+  languageChoices,
+  languageMatch,
   parseAcceptLanguage,
   parseTable,
+  parseTableText,
+  readTableText,
   sameLinkType,
 } from "./links.js";
 export type { Candidate, ChoiceRequest, LinkTable, StoredLink } from "./links.js";
