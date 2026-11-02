@@ -216,6 +216,24 @@ describe("main", () => {
       expect(await main(["--wat\nforged"])).toBe(EXIT.usage);
       expect(said.join("")).toContain("unknown option --wat\\u{a}forged");
       expect(said.join("").split("\n")).not.toContain("forged");
+      // So is a file it cannot read, named in front of the system's reason, which names it again.
+      said.length = 0;
+      expect(
+        await main([
+          join(dir, "gone\nforged.json"),
+          "--target",
+          `front=${join(dir, "front.target.json")}`,
+          "--out",
+          join(dir, "out-gone"),
+        ]),
+      ).toBe(EXIT.cannotRead);
+      expect(said.join("")).toContain("gone\\u{a}forged.json could not be read");
+      expect(
+        said
+          .join("")
+          .split("\n")
+          .filter((line) => line.startsWith("forged")),
+      ).toEqual([]);
       // And on success, where the folder written to was printed as given.
       const printed: string[] = [];
       const out = process.stdout.write;

@@ -163,7 +163,9 @@ function readJson(text: string): unknown {
 /**
  * A file given on the command line, read and parsed, any failure naming it: with two targets given,
  * "EISDIR: illegal operation on a directory, read" did not say which of the three files was a
- * folder, and a parser's message names no file at all.
+ * folder, and a parser's message names no file at all. For a file that could not be read, the name
+ * and the system's reason, which names it again, are written by their code points before `said`
+ * splits the message into lines: a line feed in the name printed a line of its own.
  */
 async function readJsonFile(path: string): Promise<unknown> {
   let text: string;
@@ -172,7 +174,8 @@ async function readJsonFile(path: string): Promise<unknown> {
   } catch (error) {
     const code = (error as NodeJS.ErrnoException)?.code;
     if (code === "EISDIR") throw new Error(`${path} is a folder, not a file.`);
-    throw new Error(`${path} could not be read: ${error instanceof Error ? error.message : String(error)}`);
+    const reason = printable(error instanceof Error ? error.message : String(error));
+    throw new Error(`${printable(path)} could not be read: ${reason}`);
   }
   try {
     return readJson(text);
