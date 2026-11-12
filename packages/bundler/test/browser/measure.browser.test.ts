@@ -458,4 +458,83 @@ describe("the measurement page", () => {
       "the closest distance offered is already past where an A6 postcard can be read",
     ).toBeLessThanOrEqual(150);
   }, 60_000);
+
+  it("measures the long axis of a portrait stream when the phone is turned on its side with rotation locked", async () => {
+    if (!browser) throw new Error(`chromium could not be launched: ${launchFailure}`);
+    // When OS auto-rotate is off, turning the phone horizontally to face a horizontal print
+    // leaves the camera stream at 480 by 640 while the artwork's printed width runs along
+    // the 640 px axis. Dividing by 480 reported the short-axis field a second time.
+    const distance = 140;
+    const printed = 107;
+    const acrossPx = 405;
+
+    const runOrientation = async (turned: boolean) => {
+      const page = await browser?.newPage({ viewport: { width: 420, height: 900 } });
+      if (!page) throw new Error("no page");
+      await page.addInitScript(
+        ({ artworkUrl, across, rotated }) => {
+          const fake = {
+            async getUserMedia() {
+              const canvas = document.createElement("canvas");
+              canvas.width = 480;
+              canvas.height = 640;
+              const context = canvas.getContext("2d");
+              const image = new Image();
+              image.src = artworkUrl;
+              await image.decode();
+              const w = across;
+              const h = (image.height / image.width) * w;
+              const draw = () => {
+                if (!context) return;
+                context.fillStyle = "#969696";
+                context.fillRect(0, 0, canvas.width, canvas.height);
+                context.save();
+                context.translate(canvas.width / 2, canvas.height / 2);
+                if (rotated) context.rotate(Math.PI / 2);
+                context.drawImage(image, -w / 2, -h / 2, w, h);
+                context.restore();
+                requestAnimationFrame(draw);
+              };
+              draw();
+              return (
+                canvas as HTMLCanvasElement & { captureStream(fps: number): MediaStream }
+              ).captureStream(30);
+            },
+            async enumerateDevices() {
+              return [];
+            },
+          };
+          Object.defineProperty(navigator, "mediaDevices", { configurable: true, get: () => fake });
+          Object.defineProperty(Navigator.prototype, "mediaDevices", { configurable: true, get: () => fake });
+        },
+        { artworkUrl: `${origin}/artwork.png`, across: acrossPx, rotated: turned },
+      );
+      await page.goto(`${origin}/measure/`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(() => document.getElementById("found")?.dataset.found === "yes", undefined, {
+        timeout: 60_000,
+      });
+      await page.fill("#printed", String(printed));
+      await page.fill("#distance", String(distance));
+      await page.waitForTimeout(400);
+      await page.click("#record");
+      const reading = await page.evaluate(() => {
+        const heads = Array.from(document.querySelectorAll("#results thead th")).map(
+          (c) => c.textContent?.trim() ?? "",
+        );
+        const cells = Array.from(document.querySelectorAll("#results tbody tr td")).map(
+          (c) => c.textContent?.trim() ?? "",
+        );
+        const at = (name: string) => Number(cells[heads.indexOf(name)]);
+        return { field: at("field deg"), atOneMetre: at("picture mm at 1 m") };
+      });
+      await page.close();
+      return reading;
+    };
+
+    const upright = await runOrientation(false);
+    const sideways = await runOrientation(true);
+    expect(upright.field).toBe(49);
+    expect(sideways.field).toBe(62);
+    expect(sideways.atOneMetre).toBeGreaterThan(upright.atOneMetre * 1.3);
+  }, 120_000);
 });
