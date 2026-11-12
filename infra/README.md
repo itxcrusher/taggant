@@ -86,3 +86,12 @@ One JSON object per line on standard output, which is the format every log colle
 **What a scan is** is written down in `services/resolver/src/events.ts` and pinned by tests. Everyone selling this kind of system counts scans and almost nobody says what one is, which is how two reports of the same week disagree by a factor of three. Briefly: an answer about an identifier is a scan, including a linkset, and including an identifier nothing is linked to; a request that never named an identifier is not one, because there is nothing to count it against.
 
 Nothing about whoever scanned is recorded: no address, no user agent, no cookie. The identifier is the code's own, though, and a code can name a person, as `SECURITY.md` says, so a log of scans holds whatever its codes name. The language is kept, because it decides which link is chosen and a report that cannot explain its own redirects is not much of a report.
+
+## Putting it in front of the public
+
+`compose.yaml` binds plain HTTP ports for local verification. Before routing real scans to it:
+
+- Terminate HTTPS at a reverse proxy or CDN in front of both `resolver` (`:8080`) and `bundles` (`:8081`). Browsers refuse camera access (`navigator.mediaDevices.getUserMedia`) on plain HTTP origins outside `localhost`, so a bundle served over HTTP cannot open a camera on a phone.
+- Keep `console` (`127.0.0.1:4000`) off the public network. It has no authentication and writes both the published bundles and the link table; reach it over SSH port forwarding or a private network, or run it on an authoring machine and copy `infra/bundles/` and `infra/links/links.json` to the host.
+- Gate upstream routing to `resolver` on `/readyz` returning `200`, and apply request rate-limiting at the reverse proxy.
+- Back up `infra/links/links.json` and `infra/bundles/` as ordinary files; they hold the entire state of the deployment.

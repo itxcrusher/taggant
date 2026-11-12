@@ -237,7 +237,7 @@
 
     <h2>What has and has not been verified</h2>
     <p class="deck">The runtime is driven in a real browser against a synthetic camera, and a published bundle is driven the same way from a static folder with every service switched off. Descriptors are compared across engines, because the compiler runs in Node and the runtime runs in a browser and the whole thing rests on them agreeing.</p>
-    <p class="deck"><b>Not verified: any real camera, and any real print.</b> Everything above is synthetic. The device matrix is empty and stays empty until it can be filled in with measurements, and the field of view the print report assumes is an assumption until then.</p>
+    <p class="deck"><b>Measured on one real phone camera; physical paper prints and a wider device matrix are not verified yet.</b> Camera field of view has been measured through <code>/measure/</code> on one Android phone in Chrome, against the example artwork on a laptop screen rather than a print: 49 to 51 degrees across the short axis held upright, against the print report's 60-degree model, and 62 to 65 degrees on the long axis worked out from the 4:3 frame. Physical paper prints across stocks and lighting, iOS Safari on hardware, and a wider device matrix remain unverified, and a print readiness verdict is a geometric check against that camera model rather than a certification of press output.</p>
 
     <footer>
       <span class="lbl">MIT licence</span>
