@@ -85,6 +85,16 @@ function video(item: Content, resolve: (src: string) => string): HTMLElement {
   // Autoplay with sound is refused by every mobile browser, so a video that asks for both
   // is muted rather than left not playing at all.
   if (element.autoplay && !element.muted) element.muted = true;
+  // A video that waits for the viewer has to receive their tap and offer a control:
+  // the stage and the target sit under pointer-events: none so they do not cover the
+  // page, which left a manual video with nothing a finger or a keyboard could reach.
+  if (!element.autoplay) {
+    element.controls = true;
+    element.style.pointerEvents = "auto";
+    element.addEventListener("click", () => {
+      if (element.paused) void element.play().catch(() => undefined);
+    });
+  }
   fill(element);
   return element;
 }

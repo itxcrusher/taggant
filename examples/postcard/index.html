@@ -105,10 +105,13 @@
           onStateChange: (state) => {
             // A problem outlives the state that follows it, or the sentence written for a
             // viewer replaces it in the same task: an author whose manifest names a target
-            // nothing was built for was told to point the camera at it instead. Finding the
-            // artwork clears it, since that is worth saying.
-            if (state === "tracking") showing = null;
-            status.textContent = showing ?? (say[state] ?? state);
+            // nothing was built for was told to point the camera at it instead. When the
+            // artwork is found, both facts are shown together so a manifest problem is not
+            // hidden by tracking.
+            status.textContent =
+              showing && state === "tracking"
+                ? say.tracking + " (" + showing + ")"
+                : (showing ?? (say[state] ?? state));
           },
           onProblem: (message, kind) => {
             // By what sort of problem it is, not by the state at the time: most of the

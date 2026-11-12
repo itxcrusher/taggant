@@ -332,8 +332,8 @@ export function experiencePage(view: ExperienceView): string {
           <select id="ct-${shown(target.id)}" name="type">
             <option value="video">video</option>
             <option value="image">image</option>
-            <option value="model">model</option>
-            <option value="audio">audio</option>
+            <option value="model">model (in format, not rendered yet)</option>
+            <option value="audio">audio (in format, not rendered yet)</option>
           </select>
         </div>
         <div class="field">

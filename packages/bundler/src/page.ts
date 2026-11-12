@@ -84,10 +84,13 @@ export function entryPage(options: { title: string; targets: string[] }): string
               // makes about the manifest or about recognition is immediately followed by a
               // state, and a state sentence written for a viewer would replace it in the same
               // task: the author was told that nothing is built for one of their targets and
-              // then told to point a camera at it. Found artwork is the one thing that
-              // supersedes it, because that is news worth having.
-              if (state === "tracking") showing = null;
-              status.textContent = showing ?? (say[state] ?? state);
+              // then told to point a camera at it. When artwork is found, both facts are kept
+              // together so an author who asked for content this runtime does not render yet
+              // still sees why the stage is empty.
+              status.textContent =
+                showing && state === "tracking"
+                  ? say.tracking + " (" + showing + ")"
+                  : (showing ?? (say[state] ?? state));
             },
             onProblem: (message, kind) => {
               // Decided by what sort of problem it is, not by the state at the time. The
