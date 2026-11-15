@@ -104,11 +104,12 @@ export function entryPage(options: { title: string; targets: string[] }): string
               // playing within 10000 ms" is not it. Everything else is shown: the person
               // reading a manifest problem is usually the person who published it.
               if (kind === "camera") {
+                showing = null;
                 console.warn(message);
                 return;
               }
-              showing = message;
-              status.textContent = message;
+              showing = showing && !showing.includes(message) ? showing + "; " + message : message;
+              status.textContent = showing;
             },
           },
         });

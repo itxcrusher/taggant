@@ -91,9 +91,13 @@ function video(item: Content, resolve: (src: string) => string): HTMLElement {
   if (!element.autoplay) {
     element.controls = true;
     element.style.pointerEvents = "auto";
-    element.addEventListener("click", () => {
-      if (element.paused) void element.play().catch(() => undefined);
-    });
+    element.addEventListener(
+      "click",
+      () => {
+        if (element.paused) void element.play().catch(() => undefined);
+      },
+      { once: true },
+    );
   }
   fill(element);
   return element;

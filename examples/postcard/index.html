@@ -120,11 +120,12 @@
             // chosen to tell a person; anything about the manifest is shown, because the
             // person reading it is usually the one who wrote it.
             if (kind === "camera") {
+              showing = null;
               console.warn(message);
               return;
             }
-            showing = message;
-            status.textContent = message;
+            showing = showing && !showing.includes(message) ? showing + "; " + message : message;
+            status.textContent = showing;
           },
         },
       });
