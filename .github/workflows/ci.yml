@@ -20,6 +20,10 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # What runs for a user, checked against the registry's advisories on every push, so a
+      # known hole in sharp's image libraries or in the manifest validator stops the job
+      # rather than waiting for someone to look.
+      - run: pnpm audit --prod
       - run: pnpm -r typecheck
       - run: pnpm check
       # Two packages drive a real browser against a synthetic camera, and the descriptor

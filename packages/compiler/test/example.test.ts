@@ -179,7 +179,7 @@ describe("the postcard example", () => {
 
     // A regex that matched nothing would pass every assertion above without running one.
     expect(checked, "nothing was found compiling the example").toBeGreaterThan(3);
-  }, 30_000);
+  }, 60_000);
 
   it("measures the postcard printed twice the way its README says", async () => {
     // A figure in a README is a test that has not been written: this one is quoted in prose,

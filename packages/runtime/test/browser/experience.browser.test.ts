@@ -435,7 +435,7 @@ describe("the runtime in a browser, against a camera", () => {
     await context.close();
   }, 60_000);
 
-  it("reports a refused camera as denied rather than failing silently", async () => {
+  it("reports a refused camera as denied rather than stopping silently", async () => {
     if (!browser) throw new Error("no browser");
     const context = await browser.newContext({ permissions: [] });
     await context.grantPermissions([]);
@@ -456,6 +456,124 @@ describe("the runtime in a browser, against a camera", () => {
       { timeout: 30_000 },
     );
     expect(await page.locator("#stage").getAttribute("data-state")).toBe("denied");
+    await context.close();
+  }, 60_000);
+
+  it("lets a viewer start a video that was set not to play on its own", async () => {
+    if (!browser) throw new Error("no browser");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.addInitScript(installCanvasCamera, {
+      encoded: frame64,
+      width: FRAME.width,
+      height: FRAME.height,
+    });
+    await page.goto(`${origin}/bare.html`);
+    await page.waitForFunction(() => window.taggantReady === true);
+
+    await page.evaluate(async () => {
+      const target = await (await fetch("/target.json")).json();
+      await window.mountExperience?.({
+        manifest: {
+          schemaVersion: "1.0.0",
+          id: "manual-video",
+          targets: [
+            {
+              id: "front",
+              source: "artwork.png",
+              physicalWidthMm: 148,
+              content: [{ type: "video", src: "clip.mp4", autoplay: false, muted: false }],
+            },
+          ],
+        },
+        targets: [window.fromTargetFile?.(target)],
+        container: document.getElementById("scene"),
+      });
+      const media = document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement | null;
+      if (media) {
+        (window as unknown as { startedUnmuted?: boolean }).startedUnmuted = false;
+        media.play = async () => {
+          (window as unknown as { startedUnmuted?: boolean }).startedUnmuted = !media.muted;
+        };
+      }
+    });
+
+    await page.waitForFunction(
+      () => document.querySelector("#scene")?.getAttribute("data-state") === "tracking",
+      undefined,
+      { timeout: 60_000 },
+    );
+
+    const beforeClick = await page.evaluate(() => {
+      const media = document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement | null;
+      return {
+        controls: media?.controls ?? false,
+        autoplay: media?.autoplay ?? true,
+        muted: media?.muted ?? true,
+        pointerEvents: media ? getComputedStyle(media).pointerEvents : "none",
+        startedUnmuted: (window as unknown as { startedUnmuted?: boolean }).startedUnmuted ?? false,
+      };
+    });
+    expect(beforeClick).toEqual({
+      controls: true,
+      autoplay: false,
+      muted: false,
+      pointerEvents: "auto",
+      startedUnmuted: false,
+    });
+
+    // A real pointer click on the placed video, which the stage's pointer-events: none used
+    // to block unless the video itself opted back in.
+    await page.locator('[data-taggant-target="front"] video').click();
+    expect(
+      await page.evaluate(() => (window as unknown as { startedUnmuted?: boolean }).startedUnmuted),
+    ).toBe(true);
+    await context.close();
+  }, 60_000);
+
+  it("reports content types that are in the format and not rendered by this build yet", async () => {
+    if (!browser) throw new Error("no browser");
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.addInitScript(installCanvasCamera, {
+      encoded: frame64,
+      width: FRAME.width,
+      height: FRAME.height,
+    });
+    await page.goto(`${origin}/bare.html`);
+    await page.waitForFunction(() => window.taggantReady === true);
+
+    const outcome = await page.evaluate(async () => {
+      const target = await (await fetch("/target.json")).json();
+      const mounted = await window.mountExperience?.({
+        manifest: {
+          schemaVersion: "1.0.0",
+          id: "future-types",
+          targets: [
+            {
+              id: "front",
+              source: "artwork.png",
+              physicalWidthMm: 148,
+              content: [
+                { type: "model", src: "pack.glb" },
+                { type: "audio", src: "note.mp3" },
+              ],
+            },
+          ],
+        },
+        targets: [window.fromTargetFile?.(target)],
+        container: document.getElementById("scene"),
+        options: { onProblem: (message: string) => window.taggantProblems?.push(message) },
+      });
+      return {
+        unsupported: (mounted as unknown as { unsupported?: string[] })?.unsupported ?? [],
+        problems: window.taggantProblems ?? [],
+      };
+    });
+
+    expect(outcome.unsupported).toEqual(["model", "audio"]);
+    expect(outcome.problems.some((line) => line.includes("model content"))).toBe(true);
+    expect(outcome.problems.some((line) => line.includes("audio content"))).toBe(true);
     await context.close();
   }, 60_000);
 });

@@ -88,9 +88,10 @@
       horizontal edge and stretches the other, which cancels in the width this reads; turning
       shortens both together and nothing cancels. Past about fifteen degrees the reading says
       TILTED and will not record, because a tilted reading is wrong rather than merely noisy.
-      The figure is measured across the picture's <em>width</em>, so it depends on which way
-      up the phone is: the camera line says which, and a phone held upright gives the narrower
-      of its two fields.
+      The figure is measured along the axis of the picture that the artwork's width lies across,
+      so it depends on which way the phone is held relative to the artwork: a phone held upright
+      against a horizontal print gives the narrower of its two fields, and turning the phone
+      sideways to match the print gives the wider one even when screen rotation is locked.
     </p>
     <p class="note">Nothing is uploaded. The rows stay in this page until you copy them.</p>
 
@@ -286,7 +287,7 @@
        *   error in the reading              -0.13%  -1.26%  -2.53%  -3.39%  -4.43%
        */
       const SQUARE_ENOUGH = 0.86;
-      /** How far the mark's centre may sit from the picture's, as a share of the half width. */
+      /** How far the mark's centre may sit from the picture's, as a share of the half width or half height. */
       const CENTRED_ENOUGH = 0.1;
 
       const foundLine = document.getElementById("found");
@@ -349,7 +350,12 @@
         const evenness = (p, q) => (p > 0 && q > 0 ? Math.min(p, q) / Math.max(p, q) : 0);
         const squareness = Math.min(evenness(top, bottom), evenness(left, right));
         // Where the mark sits, which the evenness above is blind to. See SQUARE_ENOUGH.
-        const offCentre = Math.abs((ax + bx + cx + dx) / 4 - width / 2) / (width / 2);
+        // Checked on both axes, because turning the phone without the stream rotating swaps
+        // which axis of the picture lies across the mark.
+        const offCentre = Math.max(
+          Math.abs((ax + bx + cx + dx) / 4 - width / 2) / (width / 2),
+          Math.abs((ay + by + cy + dy) / 4 - height / 2) / (height / 2),
+        );
         // How much of the world the picture covers, which is the one thing the compiler
         // assumes and the only reason this page exists.
         //
@@ -376,7 +382,13 @@
         if (printed === null || distance === null) {
           return { needsNumbers: true, squareness, offCentre, corners: outline, scale: { width, height } };
         }
-        const frameWidthMm = (printed * width) / acrossProcessed;
+        // Which axis of the camera frame the artwork's printed width lies along. When OS
+        // auto-rotate is off and the phone is turned on its side to face the artwork, the
+        // stream stays portrait (480 by 640) while the artwork's horizontal edge runs along
+        // the 640 px axis; dividing by 480 reported the short-axis field a second time.
+        const turned = Math.abs(by - ay) + Math.abs(cy - dy) > Math.abs(bx - ax) + Math.abs(cx - dx);
+        const span = turned ? height : width;
+        const frameWidthMm = (printed * span) / acrossProcessed;
         const atOneMetre = (frameWidthMm * 1000) / distance;
         return {
           acrossProcessed,

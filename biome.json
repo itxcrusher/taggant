@@ -23,6 +23,7 @@
       "infra/bundles",
       "infra/workspace",
       "examples/**/*.target.json",
+      "front.target.json",
       "site/measure/runtime",
       "site/measure/front.target.json"
     ]

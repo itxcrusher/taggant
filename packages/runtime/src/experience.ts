@@ -187,6 +187,12 @@ export async function mountExperience(options: {
       "manifest",
     );
   }
+  for (const type of unsupported) {
+    settings.onProblem?.(
+      `the manifest asks for ${type} content, which this runtime does not render yet`,
+      "manifest",
+    );
+  }
 
   setState("searching");
   let running = true;
