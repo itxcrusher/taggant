@@ -309,6 +309,53 @@ describe("the example, opened the way its README says to open it", () => {
     }
   }, 60_000);
 
+  it("keeps every manifest notice beside Found it, and gives them up for the camera's own sentence", async () => {
+    if (!browser) throw new Error("no browser");
+    const manifest = JSON.parse(await readFile(join(EXAMPLE, "manifest.json"), "utf8"));
+    manifest.targets[0].content = [
+      ...manifest.targets[0].content,
+      { type: "model", src: "bottle.glb" },
+      { type: "audio", src: "jingle.mp3" },
+    ];
+    const page = await browser.newPage({ viewport: FRAME });
+    try {
+      swap = { "/examples/postcard/manifest.json": JSON.stringify(manifest) };
+      await page.addInitScript(installCanvasCamera, {
+        encoded: frame64,
+        width: FRAME.width,
+        height: FRAME.height,
+      });
+      await page.goto(`${origin}/examples/postcard/`);
+      await page.waitForFunction(
+        () => document.getElementById("scene")?.dataset.state === "tracking",
+        undefined,
+        {
+          timeout: 60_000,
+        },
+      );
+      expect(await page.textContent("#status")).toBe(
+        "Found it. (the manifest asks for model content, which this runtime does not render yet; the manifest asks for audio content, which this runtime does not render yet)",
+      );
+      // What a browser does when another application claims the camera: the track ends.
+      await page.evaluate(() => {
+        const camera = document.querySelector("#scene > video") as HTMLVideoElement;
+        for (const track of (camera.srcObject as MediaStream).getTracks())
+          track.dispatchEvent(new Event("ended"));
+      });
+      await page.waitForFunction(
+        () => document.getElementById("scene")?.dataset.state === "error",
+        undefined,
+        {
+          timeout: 30_000,
+        },
+      );
+      expect(await page.textContent("#status")).toBe("The camera could not be opened.");
+    } finally {
+      swap = {};
+      await page.close();
+    }
+  }, 90_000);
+
   it("says so and stays where it is when there is no camera", async () => {
     if (!browser) throw new Error("no browser");
     const page = await browser.newPage({ viewport: FRAME });

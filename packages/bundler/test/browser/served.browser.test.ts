@@ -542,3 +542,56 @@ describe("a bundle that cannot start", () => {
     }
   }, 60_000);
 });
+
+describe("what the published page says", () => {
+  it("keeps every manifest notice beside Found it, and gives them up for the camera's own sentence", async () => {
+    // Two kinds of content the viewer does not draw, each reported once and both kept, and a
+    // camera that goes away takes them with it, the page's own sentence saying what happened.
+    const manifestPath = join(outDir, "manifest.json");
+    const good = await readFile(manifestPath, "utf8");
+    const manifest = JSON.parse(good);
+    manifest.targets[0].content = [
+      ...manifest.targets[0].content,
+      { type: "model", src: "assets/bottle.glb" },
+      { type: "audio", src: "assets/jingle.mp3" },
+    ];
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    const page = await anyBrowser().newPage();
+    await page.addInitScript(installCanvasCamera, {
+      encoded: frame64,
+      width: FRAME.width,
+      height: FRAME.height,
+    });
+    try {
+      await page.goto(`${origin}/index.html`, { waitUntil: "domcontentloaded" });
+      await page.waitForFunction(
+        () => document.getElementById("scene")?.dataset.state === "tracking",
+        undefined,
+        {
+          timeout: 60_000,
+        },
+      );
+      expect(await page.textContent("#status")).toBe(
+        "Found it. (the manifest asks for model content, which this runtime does not render yet; the manifest asks for audio content, which this runtime does not render yet)",
+      );
+
+      // What a browser does when another application claims the camera: the track ends.
+      await page.evaluate(() => {
+        const camera = document.querySelector("#scene > video") as HTMLVideoElement;
+        for (const track of (camera.srcObject as MediaStream).getTracks())
+          track.dispatchEvent(new Event("ended"));
+      });
+      await page.waitForFunction(
+        () => document.getElementById("scene")?.dataset.state === "error",
+        undefined,
+        {
+          timeout: 30_000,
+        },
+      );
+      expect(await page.textContent("#status")).toBe("The camera could not be opened.");
+    } finally {
+      await page.close().catch(() => undefined);
+      await writeFile(manifestPath, good);
+    }
+  }, 120_000);
+});
