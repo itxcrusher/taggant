@@ -214,6 +214,35 @@ describe("bundle", () => {
     ).resolves.toBeDefined();
   });
 
+  it("names the content it carries and the viewer does not show yet", async () => {
+    const { sourceDir, outDir } = await scratch();
+    await writeFile(
+      join(sourceDir, "bottle.glb"),
+      Buffer.concat([Buffer.from("glTF"), Buffer.from([2, 0, 0, 0, 12, 0, 0, 0])]),
+    );
+    const shown = await bundle({
+      manifest: MANIFEST,
+      targets: { front: TARGET },
+      sourceDir,
+      outDir,
+      runtimeDir: RUNTIME_DIST,
+    });
+    expect(shown.notShown).toEqual([]);
+    const target = MANIFEST.targets[0];
+    const withModel = {
+      ...MANIFEST,
+      targets: [{ ...target, content: [...(target?.content ?? []), { type: "model", src: "bottle.glb" }] }],
+    };
+    const result = await bundle({
+      manifest: withModel,
+      targets: { front: TARGET },
+      sourceDir,
+      outDir,
+      runtimeDir: RUNTIME_DIST,
+    });
+    expect(result.notShown).toEqual([{ target: "front", type: "model", src: "bottle.glb" }]);
+  });
+
   it("refuses to publish an experience whose targets were never compiled", async () => {
     const { sourceDir, outDir } = await scratch();
     await expect(

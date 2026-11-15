@@ -109,6 +109,12 @@ export async function main(args: string[]): Promise<number> {
     for (const asset of result.assets) {
       stdout.write(`  ${printable(asset.from)} -> ${asset.to} (${asset.bytes} bytes)\n`);
     }
+    if (result.notShown.length > 0) {
+      stdout.write("\n  Published, and not shown by the viewer yet:\n");
+      for (const item of result.notShown) {
+        stdout.write(`  ${printable(item.target)}: ${item.type} ${printable(item.src)}\n`);
+      }
+    }
     stdout.write("\n  Serve that folder over HTTPS or from localhost. It needs nothing else.\n\n");
     return EXIT.ok;
   } catch (error) {

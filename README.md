@@ -23,7 +23,7 @@ Serve `dist/postcard` over HTTPS or from `http://localhost` and point a camera a
 
 | Area | Built today | In the format or standard, not built yet |
 |---|---|---|
-| Browser overlay content | `image` (PNG, JPEG, WebP, AVIF, GIF, and SVG rasterised at publish) and `video` (autoplay muted, or viewer-started with sound and controls when `autoplay` is `false`) | `model` (`.glb`) and `audio` are validated by `@taggant/manifest` and copied by `@taggant/bundler`, and the runtime reports them on screen as not rendered yet |
+| Browser overlay content | `image` (PNG, JPEG, WebP, AVIF, GIF, and SVG rasterised at publish) and `video` (autoplay muted, or viewer-started with sound and controls when `autoplay` is `false`) | `model` (`.glb`) and `audio` are validated by `@taggant/manifest` and copied by `@taggant/bundler`, which names them when it publishes, and the runtime reports them on screen as not rendered yet |
 | GS1 Digital Link resolver | Canonical numeric paths, alphabetic key synonyms (`gtin`, `lot`, `ser`), `Accept-Language` negotiation, `linkType=linkset`, and query passthrough | Compressed Digital Link URIs are not supported, and `/.well-known/gs1resolver` lists them under `notSupported` |
 
 ## Judging artwork before it goes to press

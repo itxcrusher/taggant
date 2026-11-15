@@ -160,6 +160,19 @@ describe("the whole path, driven the way the pages drive it", () => {
     const table = JSON.parse(await readFile(linkTable, "utf8"));
     expect(Object.keys(table.entries)).toEqual(["/01/09520123456788"]);
     expect(table.entries["/01/09520123456788"][0].href).toBe("https://example.com/b/botanica-500/");
+
+    // A model ships in the bundle and the viewer does not draw it yet, which the publish says
+    // on the page it lands on rather than leaving a reader to find a target that shows nothing.
+    const model = new FormData();
+    model.append("type", "model");
+    const glb = Buffer.concat([Buffer.from("glTF"), Buffer.from([2, 0, 0, 0, 12, 0, 0, 0])]);
+    model.append("file", new Blob([glb], { type: "model/gltf-binary" }), "bottle.glb");
+    expect((await post("/e/botanica-500/targets/front-panel/content", model)).status).toBe(303);
+    const again = await post("/e/botanica-500/publish", new URLSearchParams());
+    expect(again.status).toBe(303);
+    expect(await pageAt(again.headers.get("location") ?? "")).toContain(
+      "The viewer does not show model on front-panel yet.",
+    );
   });
 });
 

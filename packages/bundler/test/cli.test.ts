@@ -262,6 +262,73 @@ describe("main", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("says which content it published that the viewer does not show yet", async () => {
+    const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "bundle-not-shown-"));
+    await writeFile(
+      join(dir, "manifest.json"),
+      JSON.stringify({
+        schemaVersion: "1.0.0",
+        id: "postcard",
+        title: "Postcard",
+        targets: [
+          {
+            id: "front",
+            source: "artwork.png",
+            physicalWidthMm: 148,
+            content: [
+              { type: "image", src: "overlay.svg" },
+              { type: "model", src: "bottle.glb" },
+            ],
+          },
+        ],
+      }),
+    );
+    await writeFile(
+      join(dir, "front.target.json"),
+      JSON.stringify({
+        formatVersion: 2,
+        id: "front",
+        width: 640,
+        height: 452,
+        features: currentFeatures(),
+        report: await currentReport(),
+      }),
+    );
+    await writeFile(
+      join(dir, "overlay.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#c33" /></svg>',
+    );
+    await writeFile(
+      join(dir, "bottle.glb"),
+      Buffer.concat([Buffer.from("glTF"), Buffer.from([2, 0, 0, 0, 12, 0, 0, 0])]),
+    );
+    const printed: string[] = [];
+    const write = process.stdout.write;
+    process.stdout.write = ((chunk: unknown) => {
+      printed.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      const code = await main([
+        join(dir, "manifest.json"),
+        "--target",
+        `front=${join(dir, "front.target.json")}`,
+        "--out",
+        join(dir, "out"),
+      ]);
+      expect(code, printed.join("")).toBe(EXIT.ok);
+      expect(printed.join("")).toContain(
+        "Published, and not shown by the viewer yet:\n  front: model bottle.glb\n",
+      );
+    } finally {
+      process.stdout.write = write;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("the command line reached through a link", () => {
