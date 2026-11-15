@@ -88,16 +88,12 @@ function video(item: Content, resolve: (src: string) => string): HTMLElement {
   // A video that waits for the viewer has to receive their tap and offer a control:
   // the stage and the target sit under pointer-events: none so they do not cover the
   // page, which left a manual video with nothing a finger or a keyboard could reach.
+  // The browser's controls start and pause it, a click on the picture included, so
+  // nothing here listens for that click: a second handler playing the video on it meets
+  // the controls' own toggle on the same click, which pauses it again.
   if (!element.autoplay) {
     element.controls = true;
     element.style.pointerEvents = "auto";
-    element.addEventListener(
-      "click",
-      () => {
-        if (element.paused) void element.play().catch(() => undefined);
-      },
-      { once: true },
-    );
   }
   fill(element);
   return element;

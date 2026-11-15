@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildTrackingFeatures, toTargetFile } from "@taggant/vision";
-import { type Browser, chromium } from "playwright";
+import { type Browser, type BrowserContext, type Page, chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 declare global {
@@ -57,6 +57,127 @@ const BARE = `<!doctype html><html><head><meta charset="utf-8"><title>bare</titl
 /** A one pixel SVG, so the page has real content to place without shipping a binary. */
 const OVERLAY =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 2"><rect width="2" height="2" fill="#e2402a"/></svg>';
+
+/** A clip of a few seconds, recorded once in a page and served to every test that plays one. */
+let clip: Buffer | undefined;
+
+/**
+ * Record a clip from a canvas, in the page, and return it as base64, so the tests that play
+ * a video play a real one without the repository shipping a binary.
+ */
+async function recordClip(seconds: number): Promise<string> {
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 48;
+  const paint = canvas.getContext("2d");
+  if (!paint) throw new Error("no 2d context");
+  const recorder = new MediaRecorder(canvas.captureStream(30), { mimeType: "video/webm" });
+  const chunks: Blob[] = [];
+  recorder.ondataavailable = (event) => chunks.push(event.data);
+  const stopped = new Promise((resolve) => {
+    recorder.onstop = resolve;
+  });
+  const until = performance.now() + seconds * 1000;
+  recorder.start();
+  await new Promise<void>((resolve) => {
+    const again = () => {
+      paint.fillStyle = `hsl(${Math.round(performance.now() / 10) % 360} 80% 50%)`;
+      paint.fillRect(0, 0, canvas.width, canvas.height);
+      if (performance.now() < until) requestAnimationFrame(again);
+      else resolve();
+    };
+    again();
+  });
+  recorder.stop();
+  await stopped;
+  const bytes = new Uint8Array(await new Blob(chunks).arrayBuffer());
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+/** A page with the canvas camera, the bare runtime and the clip served at `clip.webm`. */
+async function openWithClip(context: BrowserContext): Promise<Page> {
+  const page = await context.newPage();
+  await page.addInitScript(installCanvasCamera, {
+    encoded: frame64,
+    width: FRAME.width,
+    height: FRAME.height,
+  });
+  await page.goto(`${origin}/bare.html`);
+  await page.waitForFunction(() => window.taggantReady === true);
+  clip ??= Buffer.from(await page.evaluate(recordClip, 4), "base64");
+  if (clip.length === 0) throw new Error("the browser recorded an empty clip");
+  const body = clip;
+  await page.route(`${origin}/clip.webm`, (route) => route.fulfill({ contentType: "video/webm", body }));
+  return page;
+}
+
+/**
+ * Mount a target whose video waits for the viewer, keep the experience as `experience`,
+ * record the video's play and pause events, and wait for the target to be tracked.
+ */
+async function mountManualVideo(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const target = await (await fetch("/target.json")).json();
+    (window as unknown as { experience: unknown }).experience = await window.mountExperience?.({
+      manifest: {
+        schemaVersion: "1.0.0",
+        id: "manual-video",
+        targets: [
+          {
+            id: "front",
+            source: "artwork.png",
+            physicalWidthMm: 148,
+            content: [{ type: "video", src: "clip.webm", autoplay: false, muted: false }],
+          },
+        ],
+      },
+      targets: [window.fromTargetFile?.(target)],
+      container: document.getElementById("scene"),
+    });
+    const events: string[] = [];
+    (window as unknown as { mediaEvents: string[] }).mediaEvents = events;
+    const media = document.querySelector('[data-taggant-target="front"] video');
+    for (const name of ["play", "pause"]) media?.addEventListener(name, () => events.push(name));
+  });
+  await page.waitForFunction(
+    () => document.querySelector("#scene")?.getAttribute("data-state") === "tracking",
+    undefined,
+    { timeout: 60_000 },
+  );
+  await page.waitForFunction(
+    () =>
+      ((document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement | null)
+        ?.readyState ?? 0) >= 1,
+    undefined,
+    { timeout: 30_000 },
+  );
+}
+
+/**
+ * What the video is doing once it has had time to play. Chromium's controls answer a click
+ * on the picture about 300 ms after it, to tell it from a double click, so a pause they add
+ * comes after the click has returned; the state is read a second after the clip has moved.
+ */
+async function playback(
+  page: Page,
+): Promise<{ paused: boolean; muted: boolean; advanced: boolean; events: string }> {
+  return page.evaluate(async () => {
+    const media = document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement;
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const deadline = performance.now() + 10_000;
+    while (media.currentTime < 0.3 && performance.now() < deadline) await wait(50);
+    const advanced = media.currentTime >= 0.3;
+    await wait(1000);
+    return {
+      paused: media.paused,
+      muted: media.muted,
+      advanced,
+      events: (window as unknown as { mediaEvents: string[] }).mediaEvents.join(","),
+    };
+  });
+}
 
 let browser: Browser | undefined;
 let close: (() => Promise<void>) | undefined;
@@ -459,50 +580,11 @@ describe("the runtime in a browser, against a camera", () => {
     await context.close();
   }, 60_000);
 
-  it("lets a viewer start a video that was set not to play on its own", async () => {
+  it("plays a video that was set not to play on its own at the viewer's first click", async () => {
     if (!browser) throw new Error("no browser");
     const context = await browser.newContext();
-    const page = await context.newPage();
-    await page.addInitScript(installCanvasCamera, {
-      encoded: frame64,
-      width: FRAME.width,
-      height: FRAME.height,
-    });
-    await page.goto(`${origin}/bare.html`);
-    await page.waitForFunction(() => window.taggantReady === true);
-
-    await page.evaluate(async () => {
-      const target = await (await fetch("/target.json")).json();
-      await window.mountExperience?.({
-        manifest: {
-          schemaVersion: "1.0.0",
-          id: "manual-video",
-          targets: [
-            {
-              id: "front",
-              source: "artwork.png",
-              physicalWidthMm: 148,
-              content: [{ type: "video", src: "clip.mp4", autoplay: false, muted: false }],
-            },
-          ],
-        },
-        targets: [window.fromTargetFile?.(target)],
-        container: document.getElementById("scene"),
-      });
-      const media = document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement | null;
-      if (media) {
-        (window as unknown as { startedUnmuted?: boolean }).startedUnmuted = false;
-        media.play = async () => {
-          (window as unknown as { startedUnmuted?: boolean }).startedUnmuted = !media.muted;
-        };
-      }
-    });
-
-    await page.waitForFunction(
-      () => document.querySelector("#scene")?.getAttribute("data-state") === "tracking",
-      undefined,
-      { timeout: 60_000 },
-    );
+    const page = await openWithClip(context);
+    await mountManualVideo(page);
 
     const beforeClick = await page.evaluate(() => {
       const media = document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement | null;
@@ -510,26 +592,26 @@ describe("the runtime in a browser, against a camera", () => {
         controls: media?.controls ?? false,
         autoplay: media?.autoplay ?? true,
         muted: media?.muted ?? true,
+        paused: media?.paused ?? false,
         pointerEvents: media ? getComputedStyle(media).pointerEvents : "none",
-        startedUnmuted: (window as unknown as { startedUnmuted?: boolean }).startedUnmuted ?? false,
       };
     });
     expect(beforeClick).toEqual({
       controls: true,
       autoplay: false,
       muted: false,
+      paused: true,
       pointerEvents: "auto",
-      startedUnmuted: false,
     });
 
-    // A real pointer click on the placed video, which the stage's pointer-events: none used
-    // to block unless the video itself opted back in.
+    // A real pointer click on the placed video, which the stage's pointer-events: none
+    // would block unless the video itself opted back in, played by the browser's own
+    // controls. One click has to leave it playing, with sound, and never paused on the way.
     await page.locator('[data-taggant-target="front"] video').click();
-    expect(
-      await page.evaluate(() => (window as unknown as { startedUnmuted?: boolean }).startedUnmuted),
-    ).toBe(true);
+    expect(await playback(page)).toEqual({ paused: false, muted: false, advanced: true, events: "play" });
+
     await context.close();
-  }, 60_000);
+  }, 90_000);
 
   it("reports content types that are in the format and not rendered by this build yet", async () => {
     if (!browser) throw new Error("no browser");
