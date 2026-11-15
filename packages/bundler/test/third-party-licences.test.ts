@@ -180,7 +180,7 @@ describe("the third-party licence inventory", () => {
 /**
  * The inventory row a platform package belongs to. Everything else is its own row.
  *
- * `@img/sharp-libvips-linux-arm` is one patch release ahead of its siblings and has a row of
+ * `@img/sharp-libvips-linux-arm` has been a patch release apart from its siblings and has a row of
  * its own; the rest of the libvips packages share one; the Windows prebuilts share one,
  * because theirs carry libvips inside and so name both licences; every other prebuilt
  * shares the last.

@@ -24,6 +24,6 @@
     "@taggant/vision": "workspace:*"
   },
   "devDependencies": {
-    "sharp": "0.33.5"
+    "sharp": "0.35.5"
   }
 }

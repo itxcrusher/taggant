@@ -15,20 +15,20 @@ Nothing from outside this repository. The runtime a bundle carries is built from
 | `@taggant/vision` | nothing | | in the browser, inside a bundle, and in the compiler |
 | `@taggant/runtime` | workspace packages only | | in the browser, inside a bundle |
 | `@taggant/resolver` | nothing | | as a service, in a container or on a host |
-| `@taggant/manifest` | `ajv` 8.17.1 | MIT | wherever a manifest is validated: the compiler, the bundler and the console. Not the runtime, which reads a manifest the bundler already validated |
+| `@taggant/manifest` | `ajv` 8.20.0 | MIT | wherever a manifest is validated: the compiler, the bundler and the console. Not the runtime, which reads a manifest the bundler already validated |
 | | `ajv-formats` 3.0.1 | MIT | with `ajv` |
-| `@taggant/compiler` | `sharp` 0.33.5 | Apache-2.0 | on the machine that compiles artwork, and nowhere else. Decodes and rescales print files |
-| `@taggant/bundler` | `sharp` 0.33.5 | Apache-2.0 | on the machine that publishes. Renders every SVG asset to a PNG, so no document ever ships; the same `sharp` the compiler uses, one install |
+| `@taggant/compiler` | `sharp` 0.35.5 | Apache-2.0 | on the machine that compiles artwork, and nowhere else. Decodes and rescales print files |
+| `@taggant/bundler` | `sharp` 0.35.5 | Apache-2.0 | on the machine that publishes. Renders every SVG asset to a PNG, so no document ever ships; the same `sharp` the compiler uses, one install |
 | `@taggant/console` | workspace packages only | | on the operator's machine or in their container |
 
 ## Everything `ajv` brings with it
 
 | Dependency | Licence | Brought in by |
 |---|---|---|
-| `ajv` 8.17.1 | MIT | manifest |
+| `ajv` 8.20.0 | MIT | manifest |
 | `ajv-formats` 3.0.1 | MIT | manifest |
 | `fast-deep-equal` 3.1.3 | MIT | ajv |
-| `fast-uri` 3.1.7 | BSD-3-Clause | ajv |
+| `fast-uri` 3.1.9 | BSD-3-Clause | ajv |
 | `json-schema-traverse` 1.0.0 | MIT | ajv |
 | `require-from-string` 2.0.2 | MIT | ajv |
 
@@ -36,28 +36,25 @@ Nothing from outside this repository. The runtime a bundle carries is built from
 
 | Dependency | Licence | Brought in by |
 |---|---|---|
-| `sharp` 0.33.5 | Apache-2.0 | compiler |
-| `color` 4.2.3 | MIT | sharp |
-| `color-convert` 2.0.1 | MIT | color |
-| `color-name` 1.1.4 | MIT | color-convert |
-| `color-string` 1.9.1 | MIT | color |
-| `simple-swizzle` 0.2.4 | MIT | color-string |
-| `is-arrayish` 0.3.4 | MIT | simple-swizzle |
+| `sharp` 0.35.5 | Apache-2.0 | compiler |
+| `@img/colour` 1.1.0 | MIT | sharp |
 | `detect-libc` 2.1.2 | Apache-2.0 | sharp |
 | `semver` 7.8.5 | ISC | sharp |
+| `@types/node` 22.10.2 | MIT | sharp, as an optional peer for its type definitions, met by the workspace's own copy. Type definitions only: nothing in it runs |
+| `undici-types` 6.20.0 | MIT | @types/node, type definitions only |
 
 ### The platform packages, which differ by machine
 
-`sharp` declares one optional package per platform and the package manager installs only the ones for the machine it is on. So the installed tree is different on the Linux runner, on a Windows laptop and on a Mac, and the first version of this file listed only the Windows one and was caught by its own test on the first push. These rows describe every platform `sharp` 0.33.5 can resolve to; the test matches an installed platform package against its family here, with the version and the licence checked exactly and only the operating system and architecture left free.
+`sharp` declares one optional package per platform and the package manager installs only the ones for the machine it is on. So the installed tree is different on the Linux runner, on a Windows laptop and on a Mac, and the first version of this file listed only the Windows one and was caught by its own test on the first push. These rows describe every platform `sharp` 0.35.5 can resolve to; the test matches an installed platform package against its family here, with the version and the licence checked exactly and only the operating system and architecture left free.
 
 | Family | Version | Licence | Which platforms |
 |---|---|---|---|
-| `@img/sharp-<os>-<arch>` | 0.33.5 | Apache-2.0 | darwin-arm64, darwin-x64, linux-arm, linux-arm64, linux-s390x, linux-x64, linuxmusl-arm64, linuxmusl-x64, wasm32 |
-| `@img/sharp-win32-<arch>` | 0.33.5 | Apache-2.0 AND LGPL-3.0-or-later | win32-ia32, win32-x64. The Windows prebuilt carries `libvips` inside it, which is why its licence names both |
-| `@img/sharp-libvips-<os>-<arch>` | 1.0.4 | LGPL-3.0-or-later | darwin-arm64, darwin-x64, linux-arm64, linux-s390x, linux-x64, linuxmusl-arm64, linuxmusl-x64 |
-| `@img/sharp-libvips-linux-arm` | 1.0.5 | LGPL-3.0-or-later | linux-arm only, one patch release ahead of the others |
+| `@img/sharp-<os>-<arch>` | 0.35.5 | Apache-2.0 | darwin-arm64, darwin-x64, freebsd-wasm32, linux-arm, linux-arm64, linux-ppc64, linux-riscv64, linux-s390x, linux-x64, linuxmusl-arm64, linuxmusl-x64, webcontainers-wasm32, and wasm32, whose own manifest declares Apache-2.0 AND LGPL-3.0-or-later AND MIT because it carries `libvips` compiled in |
+| `@img/sharp-win32-<arch>` | 0.35.5 | Apache-2.0 AND LGPL-3.0-or-later | win32-arm64, win32-ia32, win32-x64. The Windows prebuilt carries `libvips` inside it, which is why its licence names both |
+| `@img/sharp-libvips-<os>-<arch>` | 1.3.4 | LGPL-3.0-or-later | darwin-arm64, darwin-x64, linux-arm64, linux-ppc64, linux-riscv64, linux-s390x, linux-x64, linuxmusl-arm64, linuxmusl-x64 |
+| `@img/sharp-libvips-linux-arm` | 1.3.4 | LGPL-3.0-or-later | linux-arm only, kept as a row of its own because it has been a patch release apart from the others before |
 
-Read from the runner (Linux x64) and this machine (Windows x64). The Mac rows follow the same families and versions in `sharp`'s own manifest and have not been read from an installed Mac here.
+Read from the runner (Linux x64) and this machine (Windows x64), and the licences of the rest from the registry's manifests for these versions. The Mac rows follow the same families and versions and have not been read from an installed Mac here.
 
 ## The one licence worth a sentence
 

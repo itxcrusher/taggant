@@ -300,7 +300,7 @@ async function postcardWithCopy(
   factor: number,
   layout: { on: [number, number] } | { margin: number },
 ): Promise<Buffer> {
-  const read = async (pipeline: sharp.Sharp) => {
+  const read = async (pipeline: ReturnType<typeof sharp>) => {
     const { data, info } = await pipeline.raw().toBuffer({ resolveWithObject: true });
     const one = Buffer.alloc(info.width * info.height);
     for (let i = 0; i < one.length; i++) one[i] = data[i * info.channels] ?? 255;

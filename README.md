@@ -154,7 +154,7 @@ A printed thing can last decades. The service that served its experience does no
 $ node packages/bundler/dist/cli.js examples/postcard/manifest.json     --target front=front.target.json --out dist/postcard
 
   8 files written to dist/postcard
-  overlay.svg -> assets/076e843f4723dc1c.png (47447 bytes)
+  overlay.svg -> assets/0e297f714a126464.png (79636 bytes)
 
   Serve that folder over HTTPS or from localhost. It needs nothing else.
 ```
