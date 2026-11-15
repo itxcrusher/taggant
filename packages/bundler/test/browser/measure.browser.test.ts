@@ -459,82 +459,114 @@ describe("the measurement page", () => {
     ).toBeLessThanOrEqual(150);
   }, 60_000);
 
+  /**
+   * Open the page with a canvas camera of a given shape, the artwork drawn `across` px wide in
+   * its middle, a quarter turn round if `rotated` and `shiftY` px below the middle; record a
+   * reading of the example's 107 mm copy from 140 mm if the page allows one, and read back
+   * the field, the picture at a metre, whether it could be recorded and what the page said.
+   */
+  async function askOnStream(frame: { width: number; height: number; rotated?: boolean; shiftY?: number }) {
+    const page = await browser?.newPage({ viewport: { width: 420, height: 900 } });
+    if (!page) throw new Error(`chromium could not be launched: ${launchFailure}`);
+    await page.addInitScript(
+      ({ artworkUrl, across, width, height, rotated, shiftY }) => {
+        const fake = {
+          async getUserMedia() {
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+            const context = canvas.getContext("2d");
+            const image = new Image();
+            image.src = artworkUrl;
+            await image.decode();
+            const w = across;
+            const h = (image.height / image.width) * w;
+            const draw = () => {
+              if (!context) return;
+              context.fillStyle = "#969696";
+              context.fillRect(0, 0, canvas.width, canvas.height);
+              context.save();
+              context.translate(canvas.width / 2, canvas.height / 2 + shiftY);
+              if (rotated) context.rotate(Math.PI / 2);
+              context.drawImage(image, -w / 2, -h / 2, w, h);
+              context.restore();
+              requestAnimationFrame(draw);
+            };
+            draw();
+            return (canvas as HTMLCanvasElement & { captureStream(fps: number): MediaStream }).captureStream(
+              30,
+            );
+          },
+          async enumerateDevices() {
+            return [];
+          },
+        };
+        Object.defineProperty(navigator, "mediaDevices", { configurable: true, get: () => fake });
+        Object.defineProperty(Navigator.prototype, "mediaDevices", { configurable: true, get: () => fake });
+      },
+      {
+        artworkUrl: `${origin}/artwork.png`,
+        across: 405,
+        width: frame.width,
+        height: frame.height,
+        rotated: frame.rotated ?? false,
+        shiftY: frame.shiftY ?? 0,
+      },
+    );
+    await page.goto(`${origin}/measure/`, { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => document.getElementById("found")?.dataset.found === "yes", undefined, {
+      timeout: 60_000,
+    });
+    await page.fill("#printed", "107");
+    await page.fill("#distance", "140");
+    await page.waitForTimeout(400);
+    const recordable = !(await page.isDisabled("#record"));
+    if (recordable) await page.click("#record");
+    const reading = await page.evaluate(() => {
+      const heads = Array.from(document.querySelectorAll("#results thead th")).map(
+        (c) => c.textContent?.trim() ?? "",
+      );
+      const cells = Array.from(document.querySelectorAll("#results tbody tr td")).map(
+        (c) => c.textContent?.trim() ?? "",
+      );
+      const at = (name: string) => Number(cells[heads.indexOf(name)]);
+      return { field: at("field deg"), atOneMetre: at("picture mm at 1 m") };
+    });
+    const line = (await page.textContent("#found"))?.trim() ?? "";
+    await page.close();
+    return { ...reading, recordable, line };
+  }
+
   it("measures the long axis of a portrait stream when the phone is turned on its side with rotation locked", async () => {
     if (!browser) throw new Error(`chromium could not be launched: ${launchFailure}`);
     // When OS auto-rotate is off, turning the phone horizontally to face a horizontal print
     // leaves the camera stream at 480 by 640 while the artwork's printed width runs along
     // the 640 px axis. Dividing by 480 reported the short-axis field a second time.
-    const distance = 140;
-    const printed = 107;
-    const acrossPx = 405;
 
-    const runOrientation = async (turned: boolean) => {
-      const page = await browser?.newPage({ viewport: { width: 420, height: 900 } });
-      if (!page) throw new Error("no page");
-      await page.addInitScript(
-        ({ artworkUrl, across, rotated }) => {
-          const fake = {
-            async getUserMedia() {
-              const canvas = document.createElement("canvas");
-              canvas.width = 480;
-              canvas.height = 640;
-              const context = canvas.getContext("2d");
-              const image = new Image();
-              image.src = artworkUrl;
-              await image.decode();
-              const w = across;
-              const h = (image.height / image.width) * w;
-              const draw = () => {
-                if (!context) return;
-                context.fillStyle = "#969696";
-                context.fillRect(0, 0, canvas.width, canvas.height);
-                context.save();
-                context.translate(canvas.width / 2, canvas.height / 2);
-                if (rotated) context.rotate(Math.PI / 2);
-                context.drawImage(image, -w / 2, -h / 2, w, h);
-                context.restore();
-                requestAnimationFrame(draw);
-              };
-              draw();
-              return (
-                canvas as HTMLCanvasElement & { captureStream(fps: number): MediaStream }
-              ).captureStream(30);
-            },
-            async enumerateDevices() {
-              return [];
-            },
-          };
-          Object.defineProperty(navigator, "mediaDevices", { configurable: true, get: () => fake });
-          Object.defineProperty(Navigator.prototype, "mediaDevices", { configurable: true, get: () => fake });
-        },
-        { artworkUrl: `${origin}/artwork.png`, across: acrossPx, rotated: turned },
-      );
-      await page.goto(`${origin}/measure/`, { waitUntil: "domcontentloaded" });
-      await page.waitForFunction(() => document.getElementById("found")?.dataset.found === "yes", undefined, {
-        timeout: 60_000,
-      });
-      await page.fill("#printed", String(printed));
-      await page.fill("#distance", String(distance));
-      await page.waitForTimeout(400);
-      await page.click("#record");
-      const reading = await page.evaluate(() => {
-        const heads = Array.from(document.querySelectorAll("#results thead th")).map(
-          (c) => c.textContent?.trim() ?? "",
-        );
-        const cells = Array.from(document.querySelectorAll("#results tbody tr td")).map(
-          (c) => c.textContent?.trim() ?? "",
-        );
-        const at = (name: string) => Number(cells[heads.indexOf(name)]);
-        return { field: at("field deg"), atOneMetre: at("picture mm at 1 m") };
-      });
-      await page.close();
-      return reading;
-    };
+    const runOrientation = (turned: boolean) => askOnStream({ width: 480, height: 640, rotated: turned });
 
     const upright = await runOrientation(false);
     const sideways = await runOrientation(true);
     expect(upright.field).toBe(49);
     expect(sideways.field).toBe(62);
     expect(sideways.atOneMetre).toBeGreaterThan(upright.atOneMetre * 1.3);
+  }, 120_000);
+
+  it("measures the long axis of a landscape stream, as a phone with rotation on sends it", async () => {
+    // Rotation on, a phone held on its side sends 640 by 480, and the artwork's width runs
+    // along the 640 px axis without being turned in the picture.
+    const landscape = await askOnStream({ width: 640, height: 480 });
+    expect(landscape.recordable, landscape.line).toBe(true);
+    expect(landscape.field).toBe(62);
+  }, 120_000);
+
+  it("refuses a reading with the mark centred across the picture and low in it", async () => {
+    // The check that the mark is centred looks both ways. Off centre in height alone, 100 px
+    // below the middle of a 640 px tall picture, which is 31 per cent of its half height.
+    const low = await askOnStream({ width: 480, height: 640, shiftY: 100 });
+    expect(low.line, `a reading low in the picture was not called out: ${low.line}`).toContain(
+      "OFF TO ONE SIDE",
+    );
+    expect(low.recordable, "a reading taken from below could still be recorded").toBe(false);
   }, 120_000);
 });
