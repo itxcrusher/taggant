@@ -97,8 +97,7 @@ async function main(): Promise<void> {
     // Without a viewBox, the renderer converts a physical unit on the root element at
     // `density` while user units inside the drawing stay at 96 to the inch, so changing
     // `density` moves the box away from the drawing; `resize` scales the render at 96 instead.
-    const density =
-      size === "viewBox" ? Math.min(100_000, Math.max(1, (DPI * edge) / longest)) : DPI;
+    const density = size === "viewBox" ? Math.min(100_000, Math.max(1, (DPI * edge) / longest)) : DPI;
     const png = await sharp(bytes, { density, limitInputPixels: false })
       .resize({ width: edge, height: edge, fit: "inside", withoutEnlargement: false })
       .png()
