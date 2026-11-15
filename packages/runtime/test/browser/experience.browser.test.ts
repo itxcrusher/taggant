@@ -619,7 +619,7 @@ describe("the runtime in a browser, against a camera", () => {
     await context.close();
   }, 90_000);
 
-  it("pauses a video the viewer started when its target is lost", async () => {
+  it("pauses a playing video while its target is lost and plays it again when the target is back", async () => {
     if (!browser) throw new Error("no browser");
     const context = await browser.newContext();
     const page = await openWithClip(context);
@@ -627,37 +627,72 @@ describe("the runtime in a browser, against a camera", () => {
     await page.locator('[data-taggant-target="front"] video').click();
     expect(await playback(page)).toMatchObject({ paused: false, advanced: true });
 
-    // The viewer turns away: the camera keeps running and the artwork leaves the frame.
-    await page.evaluate(() => {
-      const camera = document.querySelector("#scene > video") as HTMLVideoElement;
-      const blank = document.createElement("canvas");
-      blank.width = 640;
-      blank.height = 480;
-      const paint = blank.getContext("2d");
-      const again = () => {
-        if (!paint) return;
-        paint.fillStyle = "#808080";
-        paint.fillRect(0, 0, blank.width, blank.height);
-        requestAnimationFrame(again);
-      };
-      again();
-      camera.srcObject = blank.captureStream(30);
-      void camera.play();
-    });
-    await page.waitForFunction(
-      () => (document.querySelector('[data-taggant-target="front"]') as HTMLElement | null)?.hidden === true,
-      undefined,
-      { timeout: 60_000 },
-    );
+    // The viewer turns away and back: the camera keeps running, and the artwork leaves the
+    // frame and returns. The camera's own stream is kept to be put back.
+    const away = () =>
+      page.evaluate(() => {
+        const camera = document.querySelector("#scene > video") as HTMLVideoElement;
+        const kept = window as unknown as { cameraStream?: MediaProvider | null };
+        kept.cameraStream ??= camera.srcObject;
+        const blank = document.createElement("canvas");
+        blank.width = 640;
+        blank.height = 480;
+        const paint = blank.getContext("2d");
+        const again = () => {
+          if (!paint || camera.srcObject !== stream) return;
+          paint.fillStyle = "#808080";
+          paint.fillRect(0, 0, blank.width, blank.height);
+          requestAnimationFrame(again);
+        };
+        const stream = blank.captureStream(30);
+        camera.srcObject = stream;
+        again();
+        void camera.play();
+      });
+    const back = () =>
+      page.evaluate(() => {
+        const camera = document.querySelector("#scene > video") as HTMLVideoElement;
+        camera.srcObject = (window as unknown as { cameraStream: MediaProvider | null }).cameraStream;
+        void camera.play();
+      });
+    const shown = (hidden: boolean) =>
+      page.waitForFunction(
+        (expected) =>
+          (document.querySelector('[data-taggant-target="front"]') as HTMLElement | null)?.hidden ===
+          expected,
+        hidden,
+        { timeout: 60_000 },
+      );
+    // Read a second after the change, for the same reason `playback` waits.
+    const now = () =>
+      page.evaluate(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        return {
+          state: document.querySelector("#scene")?.getAttribute("data-state"),
+          paused: (document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement).paused,
+          events: (window as unknown as { mediaEvents: string[] }).mediaEvents.join(","),
+        };
+      });
+
     // Searching, not an error: the target was lost from a running camera.
-    expect(
-      await page.evaluate(() => ({
-        state: document.querySelector("#scene")?.getAttribute("data-state"),
-        paused: (document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement).paused,
-      })),
-    ).toEqual({ state: "searching", paused: true });
+    await away();
+    await shown(true);
+    expect(await now()).toEqual({ state: "searching", paused: true, events: "play,pause" });
+
+    await back();
+    await shown(false);
+    expect(await now()).toEqual({ state: "tracking", paused: false, events: "play,pause,play" });
+
+    // Paused by the viewer, it stays paused across the next loss and return.
+    await page.locator('[data-taggant-target="front"] video').click();
+    expect(await now()).toMatchObject({ paused: true, events: "play,pause,play,pause" });
+    await away();
+    await shown(true);
+    await back();
+    await shown(false);
+    expect(await now()).toEqual({ state: "tracking", paused: true, events: "play,pause,play,pause" });
     await context.close();
-  }, 90_000);
+  }, 180_000);
 
   it("reports content types that are in the format and not rendered by this build yet", async () => {
     if (!browser) throw new Error("no browser");

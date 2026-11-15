@@ -260,7 +260,7 @@ export async function mountExperience(options: {
           overlay.missed = 0;
           overlay.pose = pose.homography;
           overlay.processed = { width: frame.width, height: frame.height };
-          overlay.element.hidden = false;
+          show(overlay);
           anyFound = true;
         } else if (++overlay.missed >= patience) {
           hide(overlay);
@@ -291,25 +291,45 @@ export async function mountExperience(options: {
       recogniser.stop();
       camera.stop();
       for (const overlay of overlays.values()) {
-        for (const media of Array.from(overlay.element.querySelectorAll("video"))) media.pause();
+        for (const media of Array.from(overlay.element.querySelectorAll("video"))) {
+          media.pause();
+          pausedWithTarget.delete(media);
+        }
       }
     },
   };
 }
 
+/** Videos paused because their target went out of view, to be played again when it is back. */
+const pausedWithTarget = new WeakSet<HTMLVideoElement>();
+
 /**
- * Take a target's content away when the target is gone. A video the viewer started is
- * paused with it, because hiding an element does not silence it: a viewer who turns away
- * from the print would go on hearing content they can no longer see or reach to pause.
- * Only a manual video is paused: it is the only kind that can have sound, since one that
- * plays on its own is muted, and the viewer starts it again from its controls when the
- * target is back.
+ * Take a target's content away when the target is gone, and pause every video in it that
+ * is playing. Hiding an element does not silence it, so a viewer who turns away from the
+ * print would otherwise go on hearing content they can no longer see or reach to pause.
  */
 function hide(overlay: { element: HTMLElement; pose: Float64Array | null }): void {
   overlay.element.hidden = true;
   overlay.pose = null;
   for (const media of Array.from(overlay.element.querySelectorAll("video"))) {
-    if (!media.autoplay) media.pause();
+    if (media.paused) continue;
+    media.pause();
+    pausedWithTarget.add(media);
+  }
+}
+
+/**
+ * Put a target's content back when the target is found, and play again each video that
+ * `hide` paused, so a target lost for a moment, to a shaking hand or a passing shadow,
+ * costs the viewer only that moment. A video the viewer paused was not playing when the
+ * target went and stays paused. A browser that refuses to play a video again leaves it
+ * paused, and one that waits for the viewer still has its controls.
+ */
+function show(overlay: { element: HTMLElement }): void {
+  if (!overlay.element.hidden) return;
+  overlay.element.hidden = false;
+  for (const media of Array.from(overlay.element.querySelectorAll("video"))) {
+    if (pausedWithTarget.delete(media)) void media.play().catch(() => undefined);
   }
 }
 
