@@ -40,16 +40,17 @@ describe("the render process", () => {
   }, 30_000);
 
   it("takes a crash with it, and the asset is refused rather than the publisher lost", async () => {
-    // Order thirty crashed the renderer outright on the machine this was written on. On a
-    // machine where it merely takes long, the clock refuses it instead. Either way the
-    // process running this test is still here to see the refusal, which is the point.
-    const taps = Array.from({ length: 900 }, () => "1").join(" ");
+    // Order thirty crashed the renderer outright on the machine this was written on; newer
+    // builds ignore an order past twenty and run order twenty for nearly three minutes.
+    // Either way the clock or the exit refuses it and the process running this test is
+    // still here to see the refusal, which is the point.
+    const taps = Array.from({ length: 400 }, () => "1").join(" ");
     await expect(
       prepareAsset(
         "crash.svg",
-        Buffer.from(filtered(`<feConvolveMatrix order="30" kernelMatrix="${taps}"/>`)),
+        Buffer.from(filtered(`<feConvolveMatrix order="20" kernelMatrix="${taps}"/>`)),
         {
-          renderTimeoutMs: 5000,
+          renderTimeoutMs: 1500,
         },
       ),
     ).rejects.toThrow(/could not be rendered|was stopped/);

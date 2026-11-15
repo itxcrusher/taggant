@@ -38,7 +38,7 @@ const DPI = 96;
  * tag here and refused by name. Nothing else in the document is looked at, and nothing
  * here decides what is safe; it decides only whether there is a size to render at.
  */
-function declaredSize(bytes: Buffer): "sized" | "none" | "zero" | "unknown" {
+function declaredSize(bytes: Buffer): "viewBox" | "sized" | "none" | "zero" | "unknown" {
   const head = bytes.subarray(0, 1024 * 1024).toString("utf8");
   const root = head.match(/<(?:[\w.-]+:)?svg((?:\s+[\w:.-]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*\/?>/);
   if (root === null) return "unknown";
@@ -51,7 +51,7 @@ function declaredSize(bytes: Buffer): "sized" | "none" | "zero" | "unknown" {
   if (viewBox !== null) {
     const parts = viewBox.split(/[\s,]+/).map(Number);
     if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part))) return "unknown";
-    return (parts[2] ?? 0) > 0 && (parts[3] ?? 0) > 0 ? "sized" : "zero";
+    return (parts[2] ?? 0) > 0 && (parts[3] ?? 0) > 0 ? "viewBox" : "zero";
   }
   const width = value("width");
   const height = value("height");
@@ -94,8 +94,12 @@ async function main(): Promise<void> {
     }).metadata();
     const longest = Math.max(width, height);
     if (longest > ceiling) return fail(2, `${width} by ${height} px`);
-    const density = Math.min(100_000, Math.max(1, (DPI * edge) / longest));
-    const png = await sharp(bytes, { density })
+    // Without a viewBox, the renderer converts a physical unit on the root element at
+    // `density` while user units inside the drawing stay at 96 to the inch, so changing
+    // `density` moves the box away from the drawing; `resize` scales the render at 96 instead.
+    const density =
+      size === "viewBox" ? Math.min(100_000, Math.max(1, (DPI * edge) / longest)) : DPI;
+    const png = await sharp(bytes, { density, limitInputPixels: false })
       .resize({ width: edge, height: edge, fit: "inside", withoutEnlargement: false })
       .png()
       .toBuffer();
