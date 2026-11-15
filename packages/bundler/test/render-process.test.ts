@@ -39,11 +39,12 @@ describe("the render process", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
   }, 30_000);
 
-  it("takes a crash with it, and the asset is refused rather than the publisher lost", async () => {
+  it("refuses an order-20 convolution in time, however this build of the renderer ends it", async () => {
     // Order thirty crashed the renderer outright on the machine this was written on; newer
     // builds ignore an order past twenty and run order twenty for nearly three minutes.
     // Either way the clock or the exit refuses it and the process running this test is
-    // still here to see the refusal, which is the point.
+    // still here to see the refusal, which is the point. Which of the two happens depends
+    // on the library's build, so a renderer that dies is made to die in render-crash.test.ts.
     const taps = Array.from({ length: 400 }, () => "1").join(" ");
     await expect(
       prepareAsset(

@@ -60,6 +60,7 @@ export interface MountedExperience {
    * stutter, and can become false after mounting if the worker is lost.
    */
   readonly threaded: boolean;
+  /** Stop the camera and recognition, and take every target's content away, its videos paused. */
   stop(): void;
 }
 
@@ -222,10 +223,7 @@ export async function mountExperience(options: {
   const recognise = async () => {
     while (running) {
       if (camera.lost) {
-        for (const overlay of overlays.values()) {
-          overlay.element.hidden = true;
-          overlay.pose = null;
-        }
+        for (const overlay of overlays.values()) hide(overlay);
         settings.onProblem?.("the camera stopped, which usually means another app took it", "camera");
         setState("error");
         running = false;
@@ -242,10 +240,7 @@ export async function mountExperience(options: {
       } catch (error) {
         // Recognition has stopped and is not coming back. Say so, take the content away
         // rather than leaving it welded to a pose the camera has moved off, and stop.
-        for (const overlay of overlays.values()) {
-          overlay.element.hidden = true;
-          overlay.pose = null;
-        }
+        for (const overlay of overlays.values()) hide(overlay);
         settings.onProblem?.(
           `recognition stopped: ${error instanceof Error ? error.message : String(error)}`,
           "recognition",
@@ -266,11 +261,10 @@ export async function mountExperience(options: {
           overlay.missed = 0;
           overlay.pose = pose.homography;
           overlay.processed = { width: frame.width, height: frame.height };
-          overlay.element.hidden = false;
+          show(overlay);
           anyFound = true;
         } else if (++overlay.missed >= patience) {
-          overlay.element.hidden = true;
-          overlay.pose = null;
+          hide(overlay);
         } else {
           anyFound = true;
         }
@@ -297,8 +291,45 @@ export async function mountExperience(options: {
       running = false;
       recogniser.stop();
       camera.stop();
+      // Nothing is left on a camera that has stopped, as on every other way out of the
+      // loop: content welded to the last pose would go on taking clicks, and a click
+      // would start a video again with nothing to show it against.
+      for (const overlay of overlays.values()) hide(overlay);
     },
   };
+}
+
+/** Videos paused because their target went out of view, to be played again when it is back. */
+const pausedWithTarget = new WeakSet<HTMLVideoElement>();
+
+/**
+ * Take a target's content away when the target is gone, and pause every video in it that
+ * is playing. Hiding an element does not silence it, so a viewer who turns away from the
+ * print would otherwise go on hearing content they can no longer see or reach to pause.
+ */
+function hide(overlay: { element: HTMLElement; pose: Float64Array | null }): void {
+  overlay.element.hidden = true;
+  overlay.pose = null;
+  for (const media of Array.from(overlay.element.querySelectorAll("video"))) {
+    if (media.paused) continue;
+    media.pause();
+    pausedWithTarget.add(media);
+  }
+}
+
+/**
+ * Put a target's content back when the target is found, and play again each video that
+ * `hide` paused, so a target lost for a moment, to a shaking hand or a passing shadow,
+ * costs the viewer only that moment. A video the viewer paused was not playing when the
+ * target went and stays paused. A browser that refuses to play a video again leaves it
+ * paused, and one that waits for the viewer still has its controls.
+ */
+function show(overlay: { element: HTMLElement }): void {
+  if (!overlay.element.hidden) return;
+  overlay.element.hidden = false;
+  for (const media of Array.from(overlay.element.querySelectorAll("video"))) {
+    if (pausedWithTarget.delete(media)) void media.play().catch(() => undefined);
+  }
 }
 
 /** Yield to the browser, so recognition never starves painting or input. */
