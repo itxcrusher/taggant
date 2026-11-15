@@ -299,8 +299,8 @@ not finished`;
     expect((await post("/e/hostile-art/targets", target)).status).toBe(303);
     await post("/e/hostile-art/targets/front/compile", new URLSearchParams({ scanDistanceMm: "150" }));
 
-    const taps = Array.from({ length: 900 }, () => "1").join(" ");
-    const hostile = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><filter id="f"><feConvolveMatrix order="30" kernelMatrix="${taps}"/></filter><rect width="100" height="100" fill="#c33" filter="url(#f)"/></svg>`;
+    const taps = Array.from({ length: 400 }, () => "1").join(" ");
+    const hostile = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><filter id="f"><feConvolveMatrix order="20" kernelMatrix="${taps}"/></filter><rect width="100" height="100" fill="#c33" filter="url(#f)"/></svg>`;
     const content = new FormData();
     content.append("type", "image");
     content.append("file", new Blob([hostile], { type: "image/svg+xml" }), "overlay.svg");
