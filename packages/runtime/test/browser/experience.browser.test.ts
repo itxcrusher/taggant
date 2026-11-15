@@ -3,8 +3,10 @@ import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildTrackingFeatures, toTargetFile } from "@taggant/vision";
-import { type Browser, type BrowserContext, type Page, chromium } from "playwright";
+import { type Browser, type BrowserContext, type Page, chromium, firefox } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+type BuildContent = typeof BuildContentFunction;
 
 declare global {
   interface Window {
@@ -20,8 +22,10 @@ declare global {
     fromTargetFile?: (stored: unknown) => unknown;
   }
 }
+import type { buildContent as BuildContentFunction } from "../../src/index.js";
 import { installCanvasCamera } from "./camera-stub.js";
 import { artwork, inView } from "./feed.js";
+import { requiredEngines } from "./required.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNTIME = join(here, "../../dist/index.js");
@@ -47,9 +51,10 @@ const MANIFEST = {
 const BARE = `<!doctype html><html><head><meta charset="utf-8"><title>bare</title></head>
 <body><div id="scene" style="width:640px;height:480px"></div>
 <script type="module">
-  import { mountExperience, fromTargetFile } from "/runtime.js";
+  import { mountExperience, fromTargetFile, buildContent } from "/runtime.js";
   window.taggantProblems = [];
   window.mountExperience = mountExperience;
+  window.buildContent = buildContent;
   window.fromTargetFile = fromTargetFile;
   window.taggantReady = true;
 </script></body></html>`;
@@ -163,9 +168,10 @@ async function mountManualVideo(page: Page, alongside: unknown[] = []): Promise<
  */
 async function playback(
   page: Page,
+  selector = '[data-taggant-target="front"] video',
 ): Promise<{ paused: boolean; muted: boolean; advanced: boolean; events: string }> {
-  return page.evaluate(async () => {
-    const media = document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement;
+  return page.evaluate(async (which) => {
+    const media = document.querySelector(which) as HTMLVideoElement;
     const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const deadline = performance.now() + 10_000;
     while (media.currentTime < 0.3 && performance.now() < deadline) await wait(50);
@@ -177,7 +183,7 @@ async function playback(
       advanced,
       events: (window as unknown as { mediaEvents: string[] }).mediaEvents.join(","),
     };
-  });
+  }, selector);
 }
 
 /**
@@ -820,6 +826,65 @@ describe("the runtime in a browser, against a camera", () => {
     ).toEqual({ hidden: true, paused: true });
     await context.close();
   }, 180_000);
+
+  it("plays a video that waits for the viewer at the first click in Firefox too", async () => {
+    // The video the runtime builds, placed under a stage that takes no pointer events as the
+    // runtime places it, and clicked once. No camera is needed for what a click does to it.
+    let other: Browser;
+    try {
+      other = await firefox.launch();
+    } catch (error) {
+      if (requiredEngines().includes("firefox")) throw error;
+      console.warn(
+        `firefox could not be launched, so the click was not tried in it: ${String(error).slice(0, 300)}`,
+      );
+      return;
+    }
+    try {
+      const page = await other.newPage();
+      await page.goto(`${origin}/bare.html`);
+      await page.waitForFunction(() => window.taggantReady === true);
+      const recorded = Buffer.from(await page.evaluate(recordClip, 4), "base64");
+      expect(recorded.length, "Firefox recorded an empty clip").toBeGreaterThan(0);
+      await page.route(`${origin}/clip.webm`, (route) =>
+        route.fulfill({ contentType: "video/webm", body: recorded }),
+      );
+      await page.evaluate(async () => {
+        const { buildContent } = window as unknown as { buildContent: BuildContent };
+        const stage = document.createElement("div");
+        stage.style.cssText = "position:absolute;inset:0;pointer-events:none";
+        document.body.append(stage);
+        const built = buildContent(
+          {
+            id: "front",
+            source: "artwork.png",
+            physicalWidthMm: 148,
+            content: [{ type: "video", src: "clip.webm", autoplay: false, muted: false }],
+          },
+          (src) => `/${src}`,
+        );
+        built.element.style.cssText = "position:absolute;left:0;top:0;width:320px;height:240px";
+        built.element.hidden = false;
+        stage.append(built.element);
+        const media = built.element.querySelector("video") as HTMLVideoElement;
+        const events: string[] = [];
+        (window as unknown as { mediaEvents: string[] }).mediaEvents = events;
+        for (const name of ["play", "pause"]) media.addEventListener(name, () => events.push(name));
+      });
+      await page.waitForFunction(() => (document.querySelector("video")?.readyState ?? 0) >= 1, undefined, {
+        timeout: 30_000,
+      });
+      await page.locator("video").click();
+      expect(await playback(page, "video")).toEqual({
+        paused: false,
+        muted: false,
+        advanced: true,
+        events: "play",
+      });
+    } finally {
+      await other.close();
+    }
+  }, 120_000);
 
   it("reports content types that are in the format and not rendered by this build yet", async () => {
     if (!browser) throw new Error("no browser");
