@@ -114,11 +114,12 @@ async function openWithClip(context: BrowserContext): Promise<Page> {
 }
 
 /**
- * Mount a target whose video waits for the viewer, keep the experience as `experience`,
- * record the video's play and pause events, and wait for the target to be tracked.
+ * Mount a target whose video waits for the viewer, with any other content given after it,
+ * keep the experience as `experience`, record that video's play and pause events, and wait
+ * for the target to be tracked.
  */
-async function mountManualVideo(page: Page): Promise<void> {
-  await page.evaluate(async () => {
+async function mountManualVideo(page: Page, alongside: unknown[] = []): Promise<void> {
+  await page.evaluate(async (others) => {
     const target = await (await fetch("/target.json")).json();
     (window as unknown as { experience: unknown }).experience = await window.mountExperience?.({
       manifest: {
@@ -129,7 +130,7 @@ async function mountManualVideo(page: Page): Promise<void> {
             id: "front",
             source: "artwork.png",
             physicalWidthMm: 148,
-            content: [{ type: "video", src: "clip.webm", autoplay: false, muted: false }],
+            content: [{ type: "video", src: "clip.webm", autoplay: false, muted: false }, ...others],
           },
         ],
       },
@@ -140,7 +141,7 @@ async function mountManualVideo(page: Page): Promise<void> {
     (window as unknown as { mediaEvents: string[] }).mediaEvents = events;
     const media = document.querySelector('[data-taggant-target="front"] video');
     for (const name of ["play", "pause"]) media?.addEventListener(name, () => events.push(name));
-  });
+  }, alongside);
   await page.waitForFunction(
     () => document.querySelector("#scene")?.getAttribute("data-state") === "tracking",
     undefined,
@@ -580,7 +581,7 @@ describe("the runtime in a browser, against a camera", () => {
     await context.close();
   }, 60_000);
 
-  it("plays a video that was set not to play on its own at the viewer's first click, and pauses it on stop", async () => {
+  it("plays a video that was set not to play on its own at the viewer's first click, and takes it away paused on stop", async () => {
     if (!browser) throw new Error("no browser");
     const context = await browser.newContext();
     const page = await openWithClip(context);
@@ -610,12 +611,44 @@ describe("the runtime in a browser, against a camera", () => {
     await page.locator('[data-taggant-target="front"] video').click();
     expect(await playback(page)).toEqual({ paused: false, muted: false, advanced: true, events: "play" });
 
+    // Stopped, the content is taken away with its video paused, so nothing is left to click.
     await page.evaluate(() => (window as unknown as { experience: { stop(): void } }).experience.stop());
     expect(
-      await page.evaluate(
-        () => (document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement).paused,
-      ),
-    ).toBe(true);
+      await page.evaluate(() => ({
+        hidden: (document.querySelector('[data-taggant-target="front"]') as HTMLElement).hidden,
+        paused: (document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement).paused,
+      })),
+    ).toEqual({ hidden: true, paused: true });
+    await context.close();
+  }, 90_000);
+
+  it("takes the content away and pauses a playing video when the camera is taken away", async () => {
+    if (!browser) throw new Error("no browser");
+    const context = await browser.newContext();
+    const page = await openWithClip(context);
+    await mountManualVideo(page);
+    await page.locator('[data-taggant-target="front"] video').click();
+    expect(await playback(page)).toMatchObject({ paused: false, advanced: true });
+
+    // What a browser does when another application claims the camera: the track ends.
+    await page.evaluate(() => {
+      const camera = document.querySelector("#scene > video") as HTMLVideoElement;
+      for (const track of (camera.srcObject as MediaStream).getTracks())
+        track.dispatchEvent(new Event("ended"));
+    });
+    await page.waitForFunction(
+      () => document.querySelector("#scene")?.getAttribute("data-state") === "error",
+      undefined,
+      {
+        timeout: 30_000,
+      },
+    );
+    expect(
+      await page.evaluate(() => ({
+        hidden: (document.querySelector('[data-taggant-target="front"]') as HTMLElement).hidden,
+        paused: (document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement).paused,
+      })),
+    ).toEqual({ hidden: true, paused: true });
     await context.close();
   }, 90_000);
 
@@ -623,9 +656,27 @@ describe("the runtime in a browser, against a camera", () => {
     if (!browser) throw new Error("no browser");
     const context = await browser.newContext();
     const page = await openWithClip(context);
-    await mountManualVideo(page);
-    await page.locator('[data-taggant-target="front"] video').click();
+    // A second video, playing on its own and muted, in a corner of the same target.
+    await mountManualVideo(page, [
+      { type: "video", src: "clip.webm", placement: { scale: 0.25, offsetX: 0.35, offsetY: 0.35 } },
+    ]);
+    await page.locator('[data-taggant-target="front"] video:not([autoplay])').click();
     expect(await playback(page)).toMatchObject({ paused: false, advanced: true });
+    const ownPaused = () =>
+      page.evaluate(
+        () =>
+          (document.querySelector('[data-taggant-target="front"] video[autoplay]') as HTMLVideoElement)
+            .paused,
+      );
+    expect(await ownPaused()).toBe(false);
+    // Chromium pauses a muted video that started on its own whenever it is hidden, and
+    // starts it again when it is shown, whatever the page does. Unmuted, which the viewer's
+    // click allows, the second video is left to the runtime.
+    await page.evaluate(() => {
+      (document.querySelector('[data-taggant-target="front"] video[autoplay]') as HTMLVideoElement).muted =
+        false;
+    });
+    expect(await ownPaused()).toBe(false);
 
     // The viewer turns away and back: the camera keeps running, and the artwork leaves the
     // frame and returns. The camera's own stream is kept to be put back.
@@ -678,13 +729,15 @@ describe("the runtime in a browser, against a camera", () => {
     await away();
     await shown(true);
     expect(await now()).toEqual({ state: "searching", paused: true, events: "play,pause" });
+    expect(await ownPaused()).toBe(true);
 
     await back();
     await shown(false);
     expect(await now()).toEqual({ state: "tracking", paused: false, events: "play,pause,play" });
+    expect(await ownPaused()).toBe(false);
 
     // Paused by the viewer, it stays paused across the next loss and return.
-    await page.locator('[data-taggant-target="front"] video').click();
+    await page.locator('[data-taggant-target="front"] video:not([autoplay])').click();
     expect(await now()).toMatchObject({ paused: true, events: "play,pause,play,pause" });
     await away();
     await shown(true);

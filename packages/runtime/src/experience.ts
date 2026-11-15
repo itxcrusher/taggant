@@ -60,6 +60,7 @@ export interface MountedExperience {
    * stutter, and can become false after mounting if the worker is lost.
    */
   readonly threaded: boolean;
+  /** Stop the camera and recognition, and take every target's content away, its videos paused. */
   stop(): void;
 }
 
@@ -290,12 +291,10 @@ export async function mountExperience(options: {
       running = false;
       recogniser.stop();
       camera.stop();
-      for (const overlay of overlays.values()) {
-        for (const media of Array.from(overlay.element.querySelectorAll("video"))) {
-          media.pause();
-          pausedWithTarget.delete(media);
-        }
-      }
+      // Nothing is left on a camera that has stopped, as on every other way out of the
+      // loop: content welded to the last pose would go on taking clicks, and a click
+      // would start a video again with nothing to show it against.
+      for (const overlay of overlays.values()) hide(overlay);
     },
   };
 }
