@@ -139,6 +139,29 @@ describe("escaping", () => {
   });
 });
 
+describe("the kinds of content offered", () => {
+  it("offers model and audio as kinds of content the viewer does not show yet", () => {
+    // Both are in the format and published as files, and a viewer draws neither, which the
+    // person choosing one is told where they choose it.
+    const card = experiencePage({
+      id: "botanica-500",
+      manifest: MANIFEST as never,
+      problems: [],
+      targets: [{ id: "front-panel", source: "artwork/front.png", physicalWidthMm: 62, contentCount: 0 }],
+    });
+    const options = [...card.matchAll(/<option value="([a-z]+)">([^<]*)<\/option>/g)].map((m) => [
+      m[1],
+      m[2],
+    ]);
+    expect(options).toEqual([
+      ["video", "video"],
+      ["image", "image"],
+      ["model", "model (in format, not rendered yet)"],
+      ["audio", "audio (in format, not rendered yet)"],
+    ]);
+  });
+});
+
 describe("what a stored report is said to be", () => {
   const page = (staleReport: "unreadable" | "broken" | "width" | "verdict") =>
     experiencePage({
