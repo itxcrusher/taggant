@@ -223,7 +223,7 @@ export async function mountExperience(options: {
   const recognise = async () => {
     while (running) {
       if (camera.lost) {
-        for (const overlay of overlays.values()) hide(overlay);
+        for (const overlay of overlays.values()) hide(overlay, true);
         settings.onProblem?.("the camera stopped, which usually means another app took it", "camera");
         setState("error");
         running = false;
@@ -240,7 +240,7 @@ export async function mountExperience(options: {
       } catch (error) {
         // Recognition has stopped and is not coming back. Say so, take the content away
         // rather than leaving it welded to a pose the camera has moved off, and stop.
-        for (const overlay of overlays.values()) hide(overlay);
+        for (const overlay of overlays.values()) hide(overlay, true);
         settings.onProblem?.(
           `recognition stopped: ${error instanceof Error ? error.message : String(error)}`,
           "recognition",
@@ -294,7 +294,7 @@ export async function mountExperience(options: {
       // Nothing is left on a camera that has stopped, as on every other way out of the
       // loop: content welded to the last pose would go on taking clicks, and a click
       // would start a video again with nothing to show it against.
-      for (const overlay of overlays.values()) hide(overlay);
+      for (const overlay of overlays.values()) hide(overlay, true);
     },
   };
 }
@@ -306,8 +306,19 @@ const pausedWithTarget = new WeakSet<HTMLVideoElement>();
  * Take a target's content away when the target is gone, and pause every video in it that
  * is playing. Hiding an element does not silence it, so a viewer who turns away from the
  * print would otherwise go on hearing content they can no longer see or reach to pause.
+ *
+ * A video the viewer has taken full screen is watched, not placed on the print, and a
+ * viewer watching it has stopped pointing at the print, so losing the target leaves it
+ * alone until they leave full screen; the next frame without the target then takes it
+ * away. When the experience ends (`ending`), it leaves full screen first, because a
+ * hidden element is not drawn there either and the viewer would be left with nothing.
  */
-function hide(overlay: { element: HTMLElement; pose: Float64Array | null }): void {
+function hide(overlay: { element: HTMLElement; pose: Float64Array | null }, ending = false): void {
+  const full = document.fullscreenElement;
+  if (full && overlay.element.contains(full)) {
+    if (!ending) return;
+    void document.exitFullscreen().catch(() => undefined);
+  }
   overlay.element.hidden = true;
   overlay.pose = null;
   for (const media of Array.from(overlay.element.querySelectorAll("video"))) {
