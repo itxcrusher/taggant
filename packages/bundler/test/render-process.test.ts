@@ -39,7 +39,7 @@ describe("the render process", () => {
     expect(Date.now() - started).toBeLessThan(10_000);
   }, 30_000);
 
-  it("refuses a convolution too large to render, whether the renderer runs it for minutes or falls over", async () => {
+  it("refuses an order-20 convolution in time, however this build of the renderer ends it", async () => {
     // Order thirty crashed the renderer outright on the machine this was written on; newer
     // builds ignore an order past twenty and run order twenty for nearly three minutes.
     // Either way the clock or the exit refuses it and the process running this test is
