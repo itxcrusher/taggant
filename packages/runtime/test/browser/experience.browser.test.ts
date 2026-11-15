@@ -580,7 +580,7 @@ describe("the runtime in a browser, against a camera", () => {
     await context.close();
   }, 60_000);
 
-  it("plays a video that was set not to play on its own at the viewer's first click", async () => {
+  it("plays a video that was set not to play on its own at the viewer's first click, and pauses it on stop", async () => {
     if (!browser) throw new Error("no browser");
     const context = await browser.newContext();
     const page = await openWithClip(context);
@@ -610,6 +610,52 @@ describe("the runtime in a browser, against a camera", () => {
     await page.locator('[data-taggant-target="front"] video').click();
     expect(await playback(page)).toEqual({ paused: false, muted: false, advanced: true, events: "play" });
 
+    await page.evaluate(() => (window as unknown as { experience: { stop(): void } }).experience.stop());
+    expect(
+      await page.evaluate(
+        () => (document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement).paused,
+      ),
+    ).toBe(true);
+    await context.close();
+  }, 90_000);
+
+  it("pauses a video the viewer started when its target is lost", async () => {
+    if (!browser) throw new Error("no browser");
+    const context = await browser.newContext();
+    const page = await openWithClip(context);
+    await mountManualVideo(page);
+    await page.locator('[data-taggant-target="front"] video').click();
+    expect(await playback(page)).toMatchObject({ paused: false, advanced: true });
+
+    // The viewer turns away: the camera keeps running and the artwork leaves the frame.
+    await page.evaluate(() => {
+      const camera = document.querySelector("#scene > video") as HTMLVideoElement;
+      const blank = document.createElement("canvas");
+      blank.width = 640;
+      blank.height = 480;
+      const paint = blank.getContext("2d");
+      const again = () => {
+        if (!paint) return;
+        paint.fillStyle = "#808080";
+        paint.fillRect(0, 0, blank.width, blank.height);
+        requestAnimationFrame(again);
+      };
+      again();
+      camera.srcObject = blank.captureStream(30);
+      void camera.play();
+    });
+    await page.waitForFunction(
+      () => (document.querySelector('[data-taggant-target="front"]') as HTMLElement | null)?.hidden === true,
+      undefined,
+      { timeout: 60_000 },
+    );
+    // Searching, not an error: the target was lost from a running camera.
+    expect(
+      await page.evaluate(() => ({
+        state: document.querySelector("#scene")?.getAttribute("data-state"),
+        paused: (document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement).paused,
+      })),
+    ).toEqual({ state: "searching", paused: true });
     await context.close();
   }, 90_000);
 

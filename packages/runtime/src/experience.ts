@@ -222,10 +222,7 @@ export async function mountExperience(options: {
   const recognise = async () => {
     while (running) {
       if (camera.lost) {
-        for (const overlay of overlays.values()) {
-          overlay.element.hidden = true;
-          overlay.pose = null;
-        }
+        for (const overlay of overlays.values()) hide(overlay);
         settings.onProblem?.("the camera stopped, which usually means another app took it", "camera");
         setState("error");
         running = false;
@@ -242,10 +239,7 @@ export async function mountExperience(options: {
       } catch (error) {
         // Recognition has stopped and is not coming back. Say so, take the content away
         // rather than leaving it welded to a pose the camera has moved off, and stop.
-        for (const overlay of overlays.values()) {
-          overlay.element.hidden = true;
-          overlay.pose = null;
-        }
+        for (const overlay of overlays.values()) hide(overlay);
         settings.onProblem?.(
           `recognition stopped: ${error instanceof Error ? error.message : String(error)}`,
           "recognition",
@@ -269,8 +263,7 @@ export async function mountExperience(options: {
           overlay.element.hidden = false;
           anyFound = true;
         } else if (++overlay.missed >= patience) {
-          overlay.element.hidden = true;
-          overlay.pose = null;
+          hide(overlay);
         } else {
           anyFound = true;
         }
@@ -297,8 +290,27 @@ export async function mountExperience(options: {
       running = false;
       recogniser.stop();
       camera.stop();
+      for (const overlay of overlays.values()) {
+        for (const media of Array.from(overlay.element.querySelectorAll("video"))) media.pause();
+      }
     },
   };
+}
+
+/**
+ * Take a target's content away when the target is gone. A video the viewer started is
+ * paused with it, because hiding an element does not silence it: a viewer who turns away
+ * from the print would go on hearing content they can no longer see or reach to pause.
+ * Only a manual video is paused: it is the only kind that can have sound, since one that
+ * plays on its own is muted, and the viewer starts it again from its controls when the
+ * target is back.
+ */
+function hide(overlay: { element: HTMLElement; pose: Float64Array | null }): void {
+  overlay.element.hidden = true;
+  overlay.pose = null;
+  for (const media of Array.from(overlay.element.querySelectorAll("video"))) {
+    if (!media.autoplay) media.pause();
+  }
 }
 
 /** Yield to the browser, so recognition never starves painting or input. */
