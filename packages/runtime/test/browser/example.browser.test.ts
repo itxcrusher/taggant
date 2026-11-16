@@ -349,7 +349,9 @@ describe("the example, opened the way its README says to open it", () => {
           timeout: 30_000,
         },
       );
-      expect(await page.textContent("#status")).toBe("The camera could not be opened.");
+      expect(await page.textContent("#status")).toBe(
+        "The camera stopped, which usually means another app took it. Reload to start again.",
+      );
     } finally {
       swap = {};
       await page.close();

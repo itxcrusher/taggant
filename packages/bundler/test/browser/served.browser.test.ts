@@ -546,7 +546,7 @@ describe("a bundle that cannot start", () => {
 describe("what the published page says", () => {
   it("keeps every manifest notice beside Found it, and gives them up for the camera's own sentence", async () => {
     // Two kinds of content the viewer does not draw, each reported once and both kept, and a
-    // camera that goes away takes them with it, the page's own sentence saying what happened.
+    // camera that stops after it opened takes them with it, the page saying that it stopped.
     const manifestPath = join(outDir, "manifest.json");
     const good = await readFile(manifestPath, "utf8");
     const manifest = JSON.parse(good);
@@ -588,7 +588,9 @@ describe("what the published page says", () => {
           timeout: 30_000,
         },
       );
-      expect(await page.textContent("#status")).toBe("The camera could not be opened.");
+      expect(await page.textContent("#status")).toBe(
+        "The camera stopped, which usually means another app took it. Reload to start again.",
+      );
     } finally {
       await page.close().catch(() => undefined);
       await writeFile(manifestPath, good);

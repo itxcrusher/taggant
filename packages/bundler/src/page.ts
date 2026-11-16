@@ -46,6 +46,7 @@ export function entryPage(options: { title: string; targets: string[] }): string
         requesting: "Asking for the camera.",
         denied: "The camera was refused. Allow it for this page and reload.",
         error: "The camera could not be opened.",
+        stopped: "The camera stopped, which usually means another app took it. Reload to start again.",
         searching: "Point the camera at the printed artwork.",
         tracking: "Found it.",
       };
@@ -64,6 +65,8 @@ export function entryPage(options: { title: string; targets: string[] }): string
       // that can help if anything after it fails.
       let fallback = null;
       let showing = null;
+      // Whether the camera ever gave a picture, so an error after it did is said as one.
+      let opened = false;
       const start = async () => {
         const manifest = await load("./manifest.json");
         if (typeof manifest.fallback === "string") fallback = manifest.fallback;
@@ -87,10 +90,11 @@ export function entryPage(options: { title: string; targets: string[] }): string
               // then told to point a camera at it. When artwork is found, both facts are kept
               // together so an author who asked for content this runtime does not render yet
               // still sees why the stage is empty.
+              if (state === "searching" || state === "tracking") opened = true;
               status.textContent =
                 showing && state === "tracking"
                   ? say.tracking + " (" + showing + ")"
-                  : (showing ?? (say[state] ?? state));
+                  : (showing ?? (state === "error" && opened ? say.stopped : (say[state] ?? state)));
             },
             onProblem: (message, kind) => {
               // Decided by what sort of problem it is, not by the state at the time. The

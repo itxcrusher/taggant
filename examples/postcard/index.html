@@ -23,6 +23,8 @@
       const status = document.getElementById("status");
       const scene = document.getElementById("scene");
       let showing = null;
+      // Whether the camera ever gave a picture, so an error after it did is said as one.
+      let opened = false;
 
       // Said on the page, not only in a console nobody has open.
       //
@@ -65,6 +67,7 @@
         requesting: "Asking for the camera.",
         denied: "The camera was refused. Allow it for this page and reload.",
         error: "The camera could not be opened.",
+        stopped: "The camera stopped, which usually means another app took it. Reload to start again.",
         searching: "Point the camera at the printed artwork.",
         tracking: "Found it.",
       };
@@ -108,10 +111,11 @@
             // nothing was built for was told to point the camera at it instead. When the
             // artwork is found, both facts are shown together so a manifest problem is not
             // hidden by tracking.
+            if (state === "searching" || state === "tracking") opened = true;
             status.textContent =
               showing && state === "tracking"
                 ? say.tracking + " (" + showing + ")"
-                : (showing ?? (say[state] ?? state));
+                : (showing ?? (state === "error" && opened ? say.stopped : (say[state] ?? state)));
           },
           onProblem: (message, kind) => {
             // By what sort of problem it is, not by the state at the time: most of the
