@@ -5,6 +5,7 @@ import {
   esc,
   experiencePage,
   indexPage,
+  notShownSentence,
   page,
   shown,
   verdict,
@@ -159,6 +160,24 @@ describe("the kinds of content offered", () => {
       ["model", "model (in format, not rendered yet)"],
       ["audio", "audio (in format, not rendered yet)"],
     ]);
+    // Every option the page offers is one of those, whatever else it is written with.
+    expect(card.match(/<option\b/g)?.length).toBe(options.length);
+  });
+
+  it("says what a publish carried that the viewer does not show in a sentence that stays short", () => {
+    expect(notShownSentence([{ target: "front-panel", type: "model" }])).toBe(
+      "The viewer does not show 1 model item yet, on front-panel; the published manifest names each one.",
+    );
+    // The most a manifest can hold of it: 64 targets with ids of 64 characters, 32 items each.
+    const id = (n: number) => `t${String(n).padStart(63, "0")}`;
+    const most = Array.from({ length: 64 * 32 }, (_, i) => ({
+      target: id(Math.floor(i / 32)),
+      type: i % 2 === 0 ? "model" : "audio",
+    }));
+    const said = notShownSentence(most);
+    expect(said).toBe(
+      "The viewer does not show 1024 model items and 1024 audio items yet, on 64 targets; the published manifest names each one.",
+    );
   });
 });
 

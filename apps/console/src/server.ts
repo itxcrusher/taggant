@@ -31,6 +31,7 @@ import {
   errorPage,
   experiencePage,
   indexPage,
+  notShownSentence,
   page,
 } from "./views.js";
 import {
@@ -806,7 +807,7 @@ export function createConsole(options: ConsoleOptions): Server {
         // draws nothing on it is the next place anyone would find out.
         message:
           result.notShown.length > 0
-            ? `Published ${result.files.length} files. The viewer does not show ${result.notShown.map((item) => `${item.type} on ${item.target}`).join(", ")} yet.`
+            ? `Published ${result.files.length} files. ${notShownSentence(result.notShown)}`
             : `Published ${result.files.length} files.`,
         detail: rebuilt.length > 0 ? `${outDir} (compiled again on the way: ${rebuilt.join(", ")})` : outDir,
       });

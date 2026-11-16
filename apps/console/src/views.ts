@@ -44,6 +44,20 @@ export function esc(value: unknown): string {
  * them, then escaped. A right-to-left override in a name laid a whole notice out backwards, and the
  * character that ends an isolate in front of one let it run past the element meant to hold it.
  */
+/**
+ * What a publish carried that the viewer does not show, in a sentence that stays short however
+ * much there is: counted by type, with the targets named when there are three or fewer. The
+ * bundle's own manifest names every item.
+ */
+export function notShownSentence(items: readonly { target: string; type: string }[]): string {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item.type, (counts.get(item.type) ?? 0) + 1);
+  const kinds = [...counts].map(([type, count]) => `${count} ${type} item${count === 1 ? "" : "s"}`);
+  const targets = [...new Set(items.map((item) => item.target))];
+  const where = targets.length <= 3 ? targets.join(", ") : `${targets.length} targets`;
+  return `The viewer does not show ${kinds.join(" and ")} yet, on ${where}; the published manifest names each one.`;
+}
+
 export function shown(value: unknown): string {
   return esc(printable(String(value)));
 }

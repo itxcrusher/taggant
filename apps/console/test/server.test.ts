@@ -171,7 +171,7 @@ describe("the whole path, driven the way the pages drive it", () => {
     const again = await post("/e/botanica-500/publish", new URLSearchParams());
     expect(again.status).toBe(303);
     expect(await pageAt(again.headers.get("location") ?? "")).toContain(
-      "The viewer does not show model on front-panel yet.",
+      "The viewer does not show 1 model item yet, on front-panel; the published manifest names each one.",
     );
   });
 });
