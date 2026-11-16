@@ -12,7 +12,7 @@ import {
 } from "@taggant/compiler";
 import { validateManifest } from "@taggant/manifest";
 import { fromTargetFile } from "@taggant/vision";
-import { type CopiedAsset, RENDER_BUDGET_MS, copyAsset, within } from "./assets.js";
+import { type CopiedAsset, RENDER_BUDGET_MS, checkFits, copyAsset, within } from "./assets.js";
 import { entryPage } from "./page.js";
 
 export interface BundleOptions {
@@ -50,28 +50,6 @@ export interface BundleResult {
 
 /** The content types the runtime draws on a target; its own list is in `content.ts`. */
 const SHOWN = new Set(["image", "video"]);
-
-/**
- * What a file's bytes may be for each declared type, by the extension its bytes were given.
- * The type decides how the viewer treats the file, so a GLB declared as an image would ship
- * as an image the viewer cannot draw, and a publish that names what it does not show would
- * have nothing to name.
- */
-const FITS: Record<string, readonly string[]> = {
-  image: [".png", ".jpg", ".gif", ".webp", ".avif"],
-  video: [".mp4", ".webm"],
-  audio: [".m4a", ".mp3", ".wav", ".ogg", ".mp4", ".webm"],
-  model: [".glb"],
-};
-
-function checkFits(type: string, given: string, to: string): void {
-  const extension = to.slice(to.lastIndexOf("."));
-  if (FITS[type]?.includes(extension)) return;
-  const kind = extension.slice(1).toUpperCase();
-  throw new Error(
-    `${given} is given as ${type} content, and its bytes are ${kind}, which the viewer does not take as ${type}. Give it the type its file is, or the file its type needs.`,
-  );
-}
 
 /** Written into every bundle, so publishing again knows what it is allowed to replace. */
 const MARKER = ".taggant-bundle";
@@ -551,7 +529,7 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   }
 
   const assets: CopiedAsset[] = [];
-  const seen = new Map<string, string>();
+  const seen = new Map<string, { to: string; kind: string }>();
   const names: string[] = [];
   const notShown = manifest.targets.flatMap((target) =>
     target.content
@@ -636,13 +614,15 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
         const already = seen.get(key);
         if (already !== undefined) {
           // The same file under a second item is checked against that item's type too.
-          checkFits(item.type, item.src, already);
-          item.src = already;
+          checkFits(item.type, item.src, already.kind);
+          item.src = already.to;
           continue;
         }
-        const copied = await copyAsset(item.src, options.sourceDir, into, { deadline });
-        checkFits(item.type, item.src, copied.to);
-        seen.set(key, copied.to);
+        const { kind, ...copied } = await copyAsset(item.src, options.sourceDir, into, {
+          deadline,
+          type: item.type,
+        });
+        seen.set(key, { to: copied.to, kind });
         item.src = copied.to;
         // Counted by where it landed, not by what it was called. The same bytes under two
         // paths are one file in the bundle, and reporting them as two made the count the

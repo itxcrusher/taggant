@@ -258,6 +258,27 @@ describe("bundle", () => {
         runtimeDir: RUNTIME_DIST,
       }),
     ).rejects.toThrow("picture.png is given as image content, and its bytes are GLB");
+    // An SVG is judged as the SVG it is, before it is rendered into a PNG.
+    await expect(
+      bundle({
+        manifest: as([{ type: "video", src: "overlay.svg" }]),
+        targets: { front: TARGET },
+        sourceDir,
+        outDir,
+        runtimeDir: RUNTIME_DIST,
+      }),
+    ).rejects.toThrow("overlay.svg is given as video content, and its bytes are SVG");
+    // A file in no format this bundler publishes is refused as that, whatever type it is given.
+    await writeFile(join(sourceDir, "notes.txt"), "notes");
+    await expect(
+      bundle({
+        manifest: as([{ type: "image", src: "notes.txt" }]),
+        targets: { front: TARGET },
+        sourceDir,
+        outDir,
+        runtimeDir: RUNTIME_DIST,
+      }),
+    ).rejects.toThrow("notes.txt is not a format this bundler publishes");
     // The same file under a second item is held to that item's type as well.
     await expect(
       bundle({
@@ -270,7 +291,7 @@ describe("bundle", () => {
         outDir,
         runtimeDir: RUNTIME_DIST,
       }),
-    ).rejects.toThrow("overlay.svg is given as model content, and its bytes are PNG");
+    ).rejects.toThrow("overlay.svg is given as model content, and its bytes are SVG");
   });
 
   it("refuses to publish an experience whose targets were never compiled", async () => {
