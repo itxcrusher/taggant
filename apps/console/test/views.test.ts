@@ -4,7 +4,9 @@ import {
   errorPage,
   esc,
   experiencePage,
+  fewOrCount,
   indexPage,
+  notShownSentence,
   page,
   shown,
   verdict,
@@ -136,6 +138,50 @@ describe("escaping", () => {
     expect(card).toContain('<h3 class="flush">front\\u{d800}</h3>');
     expect(card).toContain('action="/e/botanica-500/targets/front%EF%BF%BD/compile"');
     expect(card).toContain('action="/e/botanica-500/targets/front%EF%BF%BD/content"');
+  });
+});
+
+describe("the kinds of content offered", () => {
+  it("offers model and audio as kinds of content the viewer does not show yet", () => {
+    // Both are in the format and published as files, and a viewer draws neither, which the
+    // person choosing one is told where they choose it.
+    const card = experiencePage({
+      id: "botanica-500",
+      manifest: MANIFEST as never,
+      problems: [],
+      targets: [{ id: "front-panel", source: "artwork/front.png", physicalWidthMm: 62, contentCount: 0 }],
+    });
+    const options = [...card.matchAll(/<option value="([a-z]+)">([^<]*)<\/option>/g)].map((m) => [
+      m[1],
+      m[2],
+    ]);
+    expect(options).toEqual([
+      ["video", "video"],
+      ["image", "image"],
+      ["model", "model (in format, not rendered yet)"],
+      ["audio", "audio (in format, not rendered yet)"],
+    ]);
+    // Every option the page offers is one of those, whatever else it is written with.
+    expect(card.match(/<option\b/g)?.length).toBe(options.length);
+  });
+
+  it("says what a publish carried that the viewer does not show in a sentence that stays short", () => {
+    expect(notShownSentence([{ target: "front-panel", type: "model" }])).toBe(
+      "The viewer does not show 1 model item yet, on front-panel; the published manifest names each one.",
+    );
+    // The most a manifest can hold of it: 64 targets with ids of 64 characters, 32 items each.
+    const id = (n: number) => `t${String(n).padStart(63, "0")}`;
+    const most = Array.from({ length: 64 * 32 }, (_, i) => ({
+      target: id(Math.floor(i / 32)),
+      type: i % 2 === 0 ? "model" : "audio",
+    }));
+    // The targets compiled again on the way are said the same way, in the publish's detail line.
+    expect(fewOrCount(["front", "back", "side"])).toBe("front, back, side");
+    expect(fewOrCount(Array.from({ length: 64 }, (_, n) => id(n)))).toBe("64 targets");
+    const said = notShownSentence(most);
+    expect(said).toBe(
+      "The viewer does not show 1024 model items and 1024 audio items yet, on 64 targets; the published manifest names each one.",
+    );
   });
 });
 

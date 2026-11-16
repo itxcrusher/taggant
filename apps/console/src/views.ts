@@ -39,6 +39,28 @@ export function esc(value: unknown): string {
 }
 
 /**
+ * A list of names, or how many there are when there are more than three, so a sentence
+ * about them stays short whatever the workspace holds.
+ */
+export function fewOrCount(names: readonly string[]): string {
+  return names.length <= 3 ? names.join(", ") : `${names.length} targets`;
+}
+
+/**
+ * What a publish carried that the viewer does not show, in a sentence that stays short however
+ * much there is: counted by type, with the targets named when there are three or fewer. The
+ * bundle's own manifest names every item.
+ */
+export function notShownSentence(items: readonly { target: string; type: string }[]): string {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item.type, (counts.get(item.type) ?? 0) + 1);
+  const kinds = [...counts].map(([type, count]) => `${count} ${type} item${count === 1 ? "" : "s"}`);
+  const targets = [...new Set(items.map((item) => item.target))];
+  const where = fewOrCount(targets);
+  return `The viewer does not show ${kinds.join(" and ")} yet, on ${where}; the published manifest names each one.`;
+}
+
+/**
  * Text from outside the console, a name a manifest gives or a message quoting one, as a page shows
  * it: each control and format character written as its code point, as the bundler's messages write
  * them, then escaped. A right-to-left override in a name laid a whole notice out backwards, and the

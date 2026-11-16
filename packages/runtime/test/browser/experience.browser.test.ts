@@ -3,8 +3,10 @@ import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildTrackingFeatures, toTargetFile } from "@taggant/vision";
-import { type Browser, type BrowserContext, type Page, chromium } from "playwright";
+import { type Browser, type BrowserContext, type Page, chromium, firefox } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+type BuildContent = typeof BuildContentFunction;
 
 declare global {
   interface Window {
@@ -20,8 +22,10 @@ declare global {
     fromTargetFile?: (stored: unknown) => unknown;
   }
 }
+import type { buildContent as BuildContentFunction } from "../../src/index.js";
 import { installCanvasCamera } from "./camera-stub.js";
 import { artwork, inView } from "./feed.js";
+import { requiredEngines } from "./required.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RUNTIME = join(here, "../../dist/index.js");
@@ -47,9 +51,10 @@ const MANIFEST = {
 const BARE = `<!doctype html><html><head><meta charset="utf-8"><title>bare</title></head>
 <body><div id="scene" style="width:640px;height:480px"></div>
 <script type="module">
-  import { mountExperience, fromTargetFile } from "/runtime.js";
+  import { mountExperience, fromTargetFile, buildContent } from "/runtime.js";
   window.taggantProblems = [];
   window.mountExperience = mountExperience;
+  window.buildContent = buildContent;
   window.fromTargetFile = fromTargetFile;
   window.taggantReady = true;
 </script></body></html>`;
@@ -163,9 +168,10 @@ async function mountManualVideo(page: Page, alongside: unknown[] = []): Promise<
  */
 async function playback(
   page: Page,
+  selector = '[data-taggant-target="front"] video',
 ): Promise<{ paused: boolean; muted: boolean; advanced: boolean; events: string }> {
-  return page.evaluate(async () => {
-    const media = document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement;
+  return page.evaluate(async (which) => {
+    const media = document.querySelector(which) as HTMLVideoElement;
     const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const deadline = performance.now() + 10_000;
     while (media.currentTime < 0.3 && performance.now() < deadline) await wait(50);
@@ -175,6 +181,65 @@ async function playback(
       paused: media.paused,
       muted: media.muted,
       advanced,
+      events: (window as unknown as { mediaEvents: string[] }).mediaEvents.join(","),
+    };
+  }, selector);
+}
+
+/**
+ * The viewer turns away: the camera keeps running and the artwork leaves the frame, by
+ * giving the runtime's camera element a blank stream. Its own stream is kept for `turnBack`.
+ */
+async function turnAway(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const camera = document.querySelector("#scene > video") as HTMLVideoElement;
+    const kept = window as unknown as { cameraStream?: MediaProvider | null };
+    kept.cameraStream ??= camera.srcObject;
+    const blank = document.createElement("canvas");
+    blank.width = 640;
+    blank.height = 480;
+    const paint = blank.getContext("2d");
+    const again = () => {
+      if (!paint || camera.srcObject !== stream) return;
+      paint.fillStyle = "#808080";
+      paint.fillRect(0, 0, blank.width, blank.height);
+      requestAnimationFrame(again);
+    };
+    const stream = blank.captureStream(30);
+    camera.srcObject = stream;
+    again();
+    void camera.play();
+  });
+}
+
+/** The viewer turns back to the artwork: the camera's own stream is put back. */
+async function turnBack(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const camera = document.querySelector("#scene > video") as HTMLVideoElement;
+    camera.srcObject = (window as unknown as { cameraStream: MediaProvider | null }).cameraStream;
+    void camera.play();
+  });
+}
+
+/** Wait for the target's content to be hidden, or shown. */
+async function targetHidden(page: Page, hidden: boolean): Promise<void> {
+  await page.waitForFunction(
+    (expected) =>
+      (document.querySelector('[data-taggant-target="front"]') as HTMLElement | null)?.hidden === expected,
+    hidden,
+    { timeout: 60_000 },
+  );
+}
+
+/** The state, the first video's pause and its events, read a second on, as `playback` waits. */
+async function afterASecond(
+  page: Page,
+): Promise<{ state: string | null | undefined; paused: boolean; events: string }> {
+  return page.evaluate(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    return {
+      state: document.querySelector("#scene")?.getAttribute("data-state"),
+      paused: (document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement).paused,
       events: (window as unknown as { mediaEvents: string[] }).mediaEvents.join(","),
     };
   });
@@ -630,6 +695,10 @@ describe("the runtime in a browser, against a camera", () => {
     await page.locator('[data-taggant-target="front"] video').click();
     expect(await playback(page)).toMatchObject({ paused: false, advanced: true });
 
+    // Full screen first: a camera that goes ends the experience, which leaves full screen.
+    await page.locator('[data-taggant-target="front"] video').dblclick();
+    await page.waitForFunction(() => document.fullscreenElement !== null, undefined, { timeout: 10_000 });
+
     // What a browser does when another application claims the camera: the track ends.
     await page.evaluate(() => {
       const camera = document.querySelector("#scene > video") as HTMLVideoElement;
@@ -643,14 +712,69 @@ describe("the runtime in a browser, against a camera", () => {
         timeout: 30_000,
       },
     );
+    await page
+      .waitForFunction(() => document.fullscreenElement === null, undefined, { timeout: 10_000 })
+      .catch(() => undefined);
     expect(
       await page.evaluate(() => ({
         hidden: (document.querySelector('[data-taggant-target="front"]') as HTMLElement).hidden,
         paused: (document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement).paused,
+        full: document.fullscreenElement?.tagName ?? null,
       })),
-    ).toEqual({ hidden: true, paused: true });
+    ).toEqual({ hidden: true, paused: true, full: null });
     await context.close();
   }, 90_000);
+
+  it("treats Safari's own full-screen player as full screen", async () => {
+    // Safari on an iPhone reports its own player on the video rather than through the
+    // Fullscreen API. No iPhone runs here, so the flag and the call it answers to are put on
+    // the video as Safari describes them, and the runtime's reading of them is what is tested.
+    if (!browser) throw new Error("no browser");
+    const context = await browser.newContext();
+    const page = await openWithClip(context);
+    await mountManualVideo(page);
+    await page.locator('[data-taggant-target="front"] video').click();
+    expect(await playback(page)).toMatchObject({ paused: false, advanced: true });
+    await page.evaluate(() => {
+      const media = document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement;
+      const player = window as unknown as { inPlayer: boolean; leftPlayer: boolean };
+      player.inPlayer = true;
+      player.leftPlayer = false;
+      Object.defineProperty(media, "webkitDisplayingFullscreen", {
+        configurable: true,
+        get: () => player.inPlayer,
+      });
+      Object.assign(media, {
+        webkitExitFullscreen: () => {
+          player.inPlayer = false;
+          player.leftPlayer = true;
+        },
+      });
+    });
+    await turnAway(page);
+    await page.waitForFunction(
+      () => document.querySelector("#scene")?.getAttribute("data-state") === "searching",
+      undefined,
+      {
+        timeout: 60_000,
+      },
+    );
+    expect(await afterASecond(page)).toMatchObject({ state: "searching", paused: false });
+    expect(
+      await page.evaluate(
+        () => (document.querySelector('[data-taggant-target="front"]') as HTMLElement).hidden,
+      ),
+    ).toBe(false);
+    await page.evaluate(() => (window as unknown as { experience: { stop(): void } }).experience.stop());
+    expect(
+      await page.evaluate(() => ({
+        left: (window as unknown as { leftPlayer: boolean }).leftPlayer,
+        hidden: (document.querySelector('[data-taggant-target="front"]') as HTMLElement).hidden,
+        paused: (document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement).paused,
+      })),
+    ).toEqual({ left: true, hidden: true, paused: true });
+    await context.close();
+  }, 120_000);
 
   it("pauses a playing video while its target is lost and plays it again when the target is back", async () => {
     if (!browser) throw new Error("no browser");
@@ -678,52 +802,10 @@ describe("the runtime in a browser, against a camera", () => {
     });
     expect(await ownPaused()).toBe(false);
 
-    // The viewer turns away and back: the camera keeps running, and the artwork leaves the
-    // frame and returns. The camera's own stream is kept to be put back.
-    const away = () =>
-      page.evaluate(() => {
-        const camera = document.querySelector("#scene > video") as HTMLVideoElement;
-        const kept = window as unknown as { cameraStream?: MediaProvider | null };
-        kept.cameraStream ??= camera.srcObject;
-        const blank = document.createElement("canvas");
-        blank.width = 640;
-        blank.height = 480;
-        const paint = blank.getContext("2d");
-        const again = () => {
-          if (!paint || camera.srcObject !== stream) return;
-          paint.fillStyle = "#808080";
-          paint.fillRect(0, 0, blank.width, blank.height);
-          requestAnimationFrame(again);
-        };
-        const stream = blank.captureStream(30);
-        camera.srcObject = stream;
-        again();
-        void camera.play();
-      });
-    const back = () =>
-      page.evaluate(() => {
-        const camera = document.querySelector("#scene > video") as HTMLVideoElement;
-        camera.srcObject = (window as unknown as { cameraStream: MediaProvider | null }).cameraStream;
-        void camera.play();
-      });
-    const shown = (hidden: boolean) =>
-      page.waitForFunction(
-        (expected) =>
-          (document.querySelector('[data-taggant-target="front"]') as HTMLElement | null)?.hidden ===
-          expected,
-        hidden,
-        { timeout: 60_000 },
-      );
-    // Read a second after the change, for the same reason `playback` waits.
-    const now = () =>
-      page.evaluate(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        return {
-          state: document.querySelector("#scene")?.getAttribute("data-state"),
-          paused: (document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement).paused,
-          events: (window as unknown as { mediaEvents: string[] }).mediaEvents.join(","),
-        };
-      });
+    const away = () => turnAway(page);
+    const back = () => turnBack(page);
+    const shown = (hidden: boolean) => targetHidden(page, hidden);
+    const now = () => afterASecond(page);
 
     // Searching, not an error: the target was lost from a running camera.
     await away();
@@ -746,6 +828,122 @@ describe("the runtime in a browser, against a camera", () => {
     expect(await now()).toEqual({ state: "tracking", paused: true, events: "play,pause,play,pause" });
     await context.close();
   }, 180_000);
+
+  it("leaves a video the viewer took full screen playing while its target is lost", async () => {
+    if (!browser) throw new Error("no browser");
+    const context = await browser.newContext();
+    const page = await openWithClip(context);
+    await mountManualVideo(page);
+    const media = page.locator('[data-taggant-target="front"] video');
+    await media.click();
+    expect(await playback(page)).toMatchObject({ paused: false, advanced: true });
+    const full = () => page.evaluate(() => document.fullscreenElement?.tagName ?? null);
+
+    // A double click takes the video full screen; the viewer then stops pointing at the print.
+    await media.dblclick();
+    await page.waitForFunction(() => document.fullscreenElement !== null, undefined, { timeout: 10_000 });
+    expect(await full()).toBe("VIDEO");
+    await turnAway(page);
+    await page.waitForFunction(
+      () => document.querySelector("#scene")?.getAttribute("data-state") === "searching",
+      undefined,
+      {
+        timeout: 60_000,
+      },
+    );
+    expect(await afterASecond(page)).toMatchObject({ state: "searching", paused: false });
+    expect(await full()).toBe("VIDEO");
+    expect(
+      await page.evaluate(
+        () => (document.querySelector('[data-taggant-target="front"]') as HTMLElement).hidden,
+      ),
+    ).toBe(false);
+
+    // Out of full screen with the target still gone, it is taken away as any other.
+    await page.evaluate(() => document.exitFullscreen());
+    await targetHidden(page, true);
+    expect(await afterASecond(page)).toMatchObject({ paused: true });
+
+    // Back, playing again, full screen again, and then the experience stops: it leaves full
+    // screen as well, since a hidden element is not drawn there.
+    await turnBack(page);
+    await targetHidden(page, false);
+    expect(await afterASecond(page)).toMatchObject({ state: "tracking", paused: false });
+    await media.dblclick();
+    await page.waitForFunction(() => document.fullscreenElement !== null, undefined, { timeout: 10_000 });
+    await page.evaluate(() => (window as unknown as { experience: { stop(): void } }).experience.stop());
+    // Waited for, and then asserted, so a page that stays full screen fails on what it shows.
+    await page
+      .waitForFunction(() => document.fullscreenElement === null, undefined, { timeout: 10_000 })
+      .catch(() => undefined);
+    expect(await full(), "the video stayed full screen after the experience stopped").toBeNull();
+    expect(
+      await page.evaluate(() => ({
+        hidden: (document.querySelector('[data-taggant-target="front"]') as HTMLElement).hidden,
+        paused: (document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement).paused,
+      })),
+    ).toEqual({ hidden: true, paused: true });
+    await context.close();
+  }, 180_000);
+
+  it("plays a video that waits for the viewer at the first click in Firefox too", async () => {
+    // The video the runtime builds, placed under a stage that takes no pointer events as the
+    // runtime places it, and clicked once. No camera is needed for what a click does to it.
+    let other: Browser;
+    try {
+      other = await firefox.launch();
+    } catch (error) {
+      if (requiredEngines().includes("firefox")) throw error;
+      console.warn(
+        `firefox could not be launched, so the click was not tried in it: ${String(error).slice(0, 300)}`,
+      );
+      return;
+    }
+    try {
+      const page = await other.newPage();
+      await page.goto(`${origin}/bare.html`);
+      await page.waitForFunction(() => window.taggantReady === true);
+      const recorded = Buffer.from(await page.evaluate(recordClip, 4), "base64");
+      expect(recorded.length, "Firefox recorded an empty clip").toBeGreaterThan(0);
+      await page.route(`${origin}/clip.webm`, (route) =>
+        route.fulfill({ contentType: "video/webm", body: recorded }),
+      );
+      await page.evaluate(async () => {
+        const { buildContent } = window as unknown as { buildContent: BuildContent };
+        const stage = document.createElement("div");
+        stage.style.cssText = "position:absolute;inset:0;pointer-events:none";
+        document.body.append(stage);
+        const built = buildContent(
+          {
+            id: "front",
+            source: "artwork.png",
+            physicalWidthMm: 148,
+            content: [{ type: "video", src: "clip.webm", autoplay: false, muted: false }],
+          },
+          (src) => `/${src}`,
+        );
+        built.element.style.cssText = "position:absolute;left:0;top:0;width:320px;height:240px";
+        built.element.hidden = false;
+        stage.append(built.element);
+        const media = built.element.querySelector("video") as HTMLVideoElement;
+        const events: string[] = [];
+        (window as unknown as { mediaEvents: string[] }).mediaEvents = events;
+        for (const name of ["play", "pause"]) media.addEventListener(name, () => events.push(name));
+      });
+      await page.waitForFunction(() => (document.querySelector("video")?.readyState ?? 0) >= 1, undefined, {
+        timeout: 30_000,
+      });
+      await page.locator("video").click();
+      expect(await playback(page, "video")).toEqual({
+        paused: false,
+        muted: false,
+        advanced: true,
+        events: "play",
+      });
+    } finally {
+      await other.close();
+    }
+  }, 120_000);
 
   it("reports content types that are in the format and not rendered by this build yet", async () => {
     if (!browser) throw new Error("no browser");

@@ -12,7 +12,7 @@ import {
 } from "@taggant/compiler";
 import { validateManifest } from "@taggant/manifest";
 import { fromTargetFile } from "@taggant/vision";
-import { type CopiedAsset, RENDER_BUDGET_MS, copyAsset, within } from "./assets.js";
+import { type CopiedAsset, RENDER_BUDGET_MS, checkFits, copyAsset, within } from "./assets.js";
 import { entryPage } from "./page.js";
 
 export interface BundleOptions {
@@ -41,7 +41,15 @@ export interface BundleResult {
   targets: string[];
   /** Every file written, relative to the bundle, so a publisher can see what shipped. */
   files: string[];
+  /**
+   * Content the bundle carries and the viewer does not show yet, so the person publishing
+   * hears it before a reader finds a target that is recognised and shows nothing.
+   */
+  notShown: { target: string; type: string; src: string }[];
 }
+
+/** The content types the runtime draws on a target; its own list is in `content.ts`. */
+const SHOWN = new Set(["image", "video"]);
 
 /** Written into every bundle, so publishing again knows what it is allowed to replace. */
 const MARKER = ".taggant-bundle";
@@ -521,9 +529,14 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
   }
 
   const assets: CopiedAsset[] = [];
-  const seen = new Map<string, string>();
+  const seen = new Map<string, { to: string; kind: string }>();
   const names: string[] = [];
-  const result: BundleResult = { outDir: options.outDir, assets, targets: names, files: [] };
+  const notShown = manifest.targets.flatMap((target) =>
+    target.content
+      .filter((item) => !SHOWN.has(item.type))
+      .map((item) => ({ target: target.id, type: item.type, src: item.src })),
+  );
+  const result: BundleResult = { outDir: options.outDir, assets, targets: names, files: [], notShown };
 
   const replacing = await mayReplace(options.outDir);
 
@@ -600,11 +613,16 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
         const key = within(options.sourceDir, item.src);
         const already = seen.get(key);
         if (already !== undefined) {
-          item.src = already;
+          // The same file under a second item is checked against that item's type too.
+          checkFits(item.type, item.src, already.kind);
+          item.src = already.to;
           continue;
         }
-        const copied = await copyAsset(item.src, options.sourceDir, into, { deadline });
-        seen.set(key, copied.to);
+        const { kind, ...copied } = await copyAsset(item.src, options.sourceDir, into, {
+          deadline,
+          type: item.type,
+        });
+        seen.set(key, { to: copied.to, kind });
         item.src = copied.to;
         // Counted by where it landed, not by what it was called. The same bytes under two
         // paths are one file in the bundle, and reporting them as two made the count the

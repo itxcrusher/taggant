@@ -29,8 +29,8 @@ export async function copyAsset(
   source: string,
   sourceDir: string,
   outDir: string,
-  options: { deadline?: number } = {},
-): Promise<CopiedAsset> {
+  options: { deadline?: number; type?: string } = {},
+): Promise<CopiedAsset & { kind: string }> {
   // A fragment used to be kept so that one symbol of an SVG sprite could be referenced. No
   // SVG ships any more, a raster has no symbols, and nothing in this repository or its
   // documents ever used one, so a fragment is refused rather than carried into a path
@@ -43,14 +43,58 @@ export async function copyAsset(
 
   const absolute = await realWithin(sourceDir, source);
   const read = await readFile(absolute);
+  // Judged on the file as it is, before an SVG is rendered into something else.
+  const { kind } = sniff(read);
+  if (options.type !== undefined) checkFits(options.type, source, kind);
   const { bytes, extension } = await prepareAsset(source, read, options);
   const digest = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
   const name = `${digest}${extension}`;
   const assets = join(outDir, "assets");
   await mkdir(assets, { recursive: true });
   await writeFile(join(assets, name), bytes);
-  return { from: source, to: `assets/${name}`, bytes: bytes.length };
+  return { from: source, to: `assets/${name}`, bytes: bytes.length, kind };
 }
+
+/**
+ * What a file may be for each declared content type, by what its bytes are. The type decides
+ * how the viewer treats the file, so a GLB declared as an image would ship as an image the
+ * viewer cannot draw, and a publish that names what it does not show would have nothing to
+ * name.
+ */
+const FITS: Record<string, readonly string[]> = {
+  image: ["png", "jpg", "gif", "webp", "avif", "svg"],
+  video: ["mp4", "webm"],
+  audio: ["m4a", "mp3", "wav", "ogg", "mp4", "webm"],
+  model: ["glb"],
+};
+
+/**
+ * Refuse a file whose bytes are a format this bundler publishes and not one its declared type
+ * takes. A format it does not publish at all is left to `prepareAsset`, which says so.
+ */
+export function checkFits(type: string, source: string, kind: string): void {
+  if (!PUBLISHED.has(kind) || FITS[type]?.includes(kind)) return;
+  throw new Error(
+    `${source} is given as ${type} content, and its bytes are ${kind.toUpperCase()}, which the viewer does not take as ${type}. Give it the type its file is, or the file its type needs.`,
+  );
+}
+
+/** The formats `prepareAsset` publishes. */
+const PUBLISHED = new Set([
+  "png",
+  "jpg",
+  "gif",
+  "webp",
+  "avif",
+  "mp4",
+  "m4a",
+  "webm",
+  "mp3",
+  "wav",
+  "ogg",
+  "glb",
+  "svg",
+]);
 
 /**
  * The longest edge, in pixels, an SVG is rendered at.

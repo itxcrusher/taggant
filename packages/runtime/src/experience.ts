@@ -223,7 +223,7 @@ export async function mountExperience(options: {
   const recognise = async () => {
     while (running) {
       if (camera.lost) {
-        for (const overlay of overlays.values()) hide(overlay);
+        for (const overlay of overlays.values()) hide(overlay, true);
         settings.onProblem?.("the camera stopped, which usually means another app took it", "camera");
         setState("error");
         running = false;
@@ -240,7 +240,7 @@ export async function mountExperience(options: {
       } catch (error) {
         // Recognition has stopped and is not coming back. Say so, take the content away
         // rather than leaving it welded to a pose the camera has moved off, and stop.
-        for (const overlay of overlays.values()) hide(overlay);
+        for (const overlay of overlays.values()) hide(overlay, true);
         settings.onProblem?.(
           `recognition stopped: ${error instanceof Error ? error.message : String(error)}`,
           "recognition",
@@ -294,10 +294,16 @@ export async function mountExperience(options: {
       // Nothing is left on a camera that has stopped, as on every other way out of the
       // loop: content welded to the last pose would go on taking clicks, and a click
       // would start a video again with nothing to show it against.
-      for (const overlay of overlays.values()) hide(overlay);
+      for (const overlay of overlays.values()) hide(overlay, true);
     },
   };
 }
+
+/** A video as Safari on an iPhone describes one playing in its own full-screen player. */
+type NativePlayer = HTMLVideoElement & {
+  webkitDisplayingFullscreen?: boolean;
+  webkitExitFullscreen?: () => void;
+};
 
 /** Videos paused because their target went out of view, to be played again when it is back. */
 const pausedWithTarget = new WeakSet<HTMLVideoElement>();
@@ -306,8 +312,27 @@ const pausedWithTarget = new WeakSet<HTMLVideoElement>();
  * Take a target's content away when the target is gone, and pause every video in it that
  * is playing. Hiding an element does not silence it, so a viewer who turns away from the
  * print would otherwise go on hearing content they can no longer see or reach to pause.
+ *
+ * A video the viewer has taken full screen is watched, not placed on the print, and a
+ * viewer watching it has stopped pointing at the print, so losing the target leaves it
+ * alone until they leave full screen; the next frame without the target then takes it
+ * away. When the experience ends (`ending`), it leaves full screen first, because a
+ * hidden element is not drawn there either and the viewer would be left with nothing.
+ *
+ * Safari on an iPhone plays a video full screen in a player of its own, which
+ * `fullscreenElement` does not report, and says so on the video instead. That flag is read
+ * the same way; it is taken from the property alone and has not been run on an iPhone.
  */
-function hide(overlay: { element: HTMLElement; pose: Float64Array | null }): void {
+function hide(overlay: { element: HTMLElement; pose: Float64Array | null }, ending = false): void {
+  const full = document.fullscreenElement;
+  const player = Array.from(overlay.element.querySelectorAll("video")).find(
+    (media) => (media as NativePlayer).webkitDisplayingFullscreen === true,
+  ) as NativePlayer | undefined;
+  if ((full && overlay.element.contains(full)) || player) {
+    if (!ending) return;
+    if (full) void document.exitFullscreen().catch(() => undefined);
+    player?.webkitExitFullscreen?.();
+  }
   overlay.element.hidden = true;
   overlay.pose = null;
   for (const media of Array.from(overlay.element.querySelectorAll("video"))) {

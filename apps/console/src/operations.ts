@@ -165,6 +165,8 @@ export interface PublishOutcome {
   files: string[];
   /** Targets that had to be compiled first, in the order they were. */
   compiled: CompileOutcome[];
+  /** Content the bundle carries and the viewer does not show yet. */
+  notShown: { target: string; type: string; src: string }[];
 }
 
 /**
@@ -399,7 +401,7 @@ async function publishOnce(
         : `publishing failed: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  return { outDir: result.outDir, files: result.files, compiled };
+  return { outDir: result.outDir, files: result.files, compiled, notShown: result.notShown };
 }
 
 /**
