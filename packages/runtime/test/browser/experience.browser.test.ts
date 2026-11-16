@@ -695,6 +695,10 @@ describe("the runtime in a browser, against a camera", () => {
     await page.locator('[data-taggant-target="front"] video').click();
     expect(await playback(page)).toMatchObject({ paused: false, advanced: true });
 
+    // Full screen first: a camera that goes ends the experience, which leaves full screen.
+    await page.locator('[data-taggant-target="front"] video').dblclick();
+    await page.waitForFunction(() => document.fullscreenElement !== null, undefined, { timeout: 10_000 });
+
     // What a browser does when another application claims the camera: the track ends.
     await page.evaluate(() => {
       const camera = document.querySelector("#scene > video") as HTMLVideoElement;
@@ -708,14 +712,69 @@ describe("the runtime in a browser, against a camera", () => {
         timeout: 30_000,
       },
     );
+    await page
+      .waitForFunction(() => document.fullscreenElement === null, undefined, { timeout: 10_000 })
+      .catch(() => undefined);
     expect(
       await page.evaluate(() => ({
         hidden: (document.querySelector('[data-taggant-target="front"]') as HTMLElement).hidden,
         paused: (document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement).paused,
+        full: document.fullscreenElement?.tagName ?? null,
       })),
-    ).toEqual({ hidden: true, paused: true });
+    ).toEqual({ hidden: true, paused: true, full: null });
     await context.close();
   }, 90_000);
+
+  it("treats Safari's own full-screen player as full screen", async () => {
+    // Safari on an iPhone reports its own player on the video rather than through the
+    // Fullscreen API. No iPhone runs here, so the flag and the call it answers to are put on
+    // the video as Safari describes them, and the runtime's reading of them is what is tested.
+    if (!browser) throw new Error("no browser");
+    const context = await browser.newContext();
+    const page = await openWithClip(context);
+    await mountManualVideo(page);
+    await page.locator('[data-taggant-target="front"] video').click();
+    expect(await playback(page)).toMatchObject({ paused: false, advanced: true });
+    await page.evaluate(() => {
+      const media = document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement;
+      const player = window as unknown as { inPlayer: boolean; leftPlayer: boolean };
+      player.inPlayer = true;
+      player.leftPlayer = false;
+      Object.defineProperty(media, "webkitDisplayingFullscreen", {
+        configurable: true,
+        get: () => player.inPlayer,
+      });
+      Object.assign(media, {
+        webkitExitFullscreen: () => {
+          player.inPlayer = false;
+          player.leftPlayer = true;
+        },
+      });
+    });
+    await turnAway(page);
+    await page.waitForFunction(
+      () => document.querySelector("#scene")?.getAttribute("data-state") === "searching",
+      undefined,
+      {
+        timeout: 60_000,
+      },
+    );
+    expect(await afterASecond(page)).toMatchObject({ state: "searching", paused: false });
+    expect(
+      await page.evaluate(
+        () => (document.querySelector('[data-taggant-target="front"]') as HTMLElement).hidden,
+      ),
+    ).toBe(false);
+    await page.evaluate(() => (window as unknown as { experience: { stop(): void } }).experience.stop());
+    expect(
+      await page.evaluate(() => ({
+        left: (window as unknown as { leftPlayer: boolean }).leftPlayer,
+        hidden: (document.querySelector('[data-taggant-target="front"]') as HTMLElement).hidden,
+        paused: (document.querySelector('[data-taggant-target="front"] video') as HTMLVideoElement).paused,
+      })),
+    ).toEqual({ left: true, hidden: true, paused: true });
+    await context.close();
+  }, 120_000);
 
   it("pauses a playing video while its target is lost and plays it again when the target is back", async () => {
     if (!browser) throw new Error("no browser");
