@@ -69,9 +69,9 @@ One console at a time per workspace and per link table, which the console checks
 
 ## Checking it
 
-`smoke.mjs` drives a bundle that was published before the containers started: fifteen checks over the whole path a scan takes. `authoring-smoke.mjs` starts from nothing instead, and needs the authoring profile up: it has the console create an experience, compile real artwork inside the container, publish, and point a code at it, then checks that the static host serves the new bundle and the resolver answers the new code without being restarted or told.
+`smoke.mjs` drives a bundle that was published before the containers started: sixteen checks over the whole path a scan takes. `authoring-smoke.mjs` starts from nothing instead, and needs the authoring profile up: it has the console create an experience, compile real artwork inside the container, publish, and point a code at it, then checks that the static host serves the new bundle and the resolver answers the new code without being restarted or told.
 
-That last check is why the file exists. The resolver looks at the link table every two seconds rather than watching it, because a watch dies the moment the file is replaced by a rename, which is how the console writes and how most things that write a file safely write it, and a bind mount often delivers no file events into a container at all; both were measured here. A resolver that missed a change would give no other sign of it: readiness says ready, the table on disk is correct, and scans go on being answered from the table the process had at boot.
+That last check is why the file exists. The resolver looks at the link table every two seconds, and watches its folder only as a quicker way to hear of a change, because a watch dies the moment the file is replaced by a rename, which is how the console writes and how most things that write a file safely write it, and a bind mount often delivers no file events into a container at all; both were measured here. A resolver that missed a change would give no other sign of it: readiness says ready, the table on disk is correct, and scans go on being answered from the table the process had at boot.
 
 ## What it tells you while it runs
 
