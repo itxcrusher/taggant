@@ -51,6 +51,28 @@ export interface BundleResult {
 /** The content types the runtime draws on a target; its own list is in `content.ts`. */
 const SHOWN = new Set(["image", "video"]);
 
+/**
+ * What a file's bytes may be for each declared type, by the extension its bytes were given.
+ * The type decides how the viewer treats the file, so a GLB declared as an image would ship
+ * as an image the viewer cannot draw, and a publish that names what it does not show would
+ * have nothing to name.
+ */
+const FITS: Record<string, readonly string[]> = {
+  image: [".png", ".jpg", ".gif", ".webp", ".avif"],
+  video: [".mp4", ".webm"],
+  audio: [".m4a", ".mp3", ".wav", ".ogg", ".mp4", ".webm"],
+  model: [".glb"],
+};
+
+function checkFits(type: string, given: string, to: string): void {
+  const extension = to.slice(to.lastIndexOf("."));
+  if (FITS[type]?.includes(extension)) return;
+  const kind = extension.slice(1).toUpperCase();
+  throw new Error(
+    `${given} is given as ${type} content, and its bytes are ${kind}, which the viewer does not take as ${type}. Give it the type its file is, or the file its type needs.`,
+  );
+}
+
 /** Written into every bundle, so publishing again knows what it is allowed to replace. */
 const MARKER = ".taggant-bundle";
 
@@ -613,10 +635,13 @@ export async function bundle(options: BundleOptions): Promise<BundleResult> {
         const key = within(options.sourceDir, item.src);
         const already = seen.get(key);
         if (already !== undefined) {
+          // The same file under a second item is checked against that item's type too.
+          checkFits(item.type, item.src, already);
           item.src = already;
           continue;
         }
         const copied = await copyAsset(item.src, options.sourceDir, into, { deadline });
+        checkFits(item.type, item.src, copied.to);
         seen.set(key, copied.to);
         item.src = copied.to;
         // Counted by where it landed, not by what it was called. The same bytes under two
