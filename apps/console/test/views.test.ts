@@ -4,6 +4,7 @@ import {
   errorPage,
   esc,
   experiencePage,
+  fewOrCount,
   indexPage,
   notShownSentence,
   page,
@@ -174,6 +175,9 @@ describe("the kinds of content offered", () => {
       target: id(Math.floor(i / 32)),
       type: i % 2 === 0 ? "model" : "audio",
     }));
+    // The targets compiled again on the way are said the same way, in the publish's detail line.
+    expect(fewOrCount(["front", "back", "side"])).toBe("front, back, side");
+    expect(fewOrCount(Array.from({ length: 64 }, (_, n) => id(n)))).toBe("64 targets");
     const said = notShownSentence(most);
     expect(said).toBe(
       "The viewer does not show 1024 model items and 1024 audio items yet, on 64 targets; the published manifest names each one.",

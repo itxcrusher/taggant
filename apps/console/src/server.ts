@@ -30,6 +30,7 @@ import {
   describeProblem,
   errorPage,
   experiencePage,
+  fewOrCount,
   indexPage,
   notShownSentence,
   page,
@@ -793,7 +794,7 @@ export function createConsole(options: ConsoleOptions): Server {
         // Without its closing stop, which the sentence after it supplies: a message that ended in
         // one was printed with two.
         const why = (error instanceof Error ? error.message : String(error)).replace(/\.+$/, "");
-        throw new WorkspaceError(`${why}. On the way there, ${rebuilt.join(", ")} was compiled again.`);
+        throw new WorkspaceError(`${why}. On the way there, ${fewOrCount(rebuilt)} was compiled again.`);
       }
       // A publish can rebuild a target on the way past: one the runtime cannot read, or one
       // from a build whose print widths were wrong. Which ones, and at what distance, since
@@ -809,7 +810,7 @@ export function createConsole(options: ConsoleOptions): Server {
           result.notShown.length > 0
             ? `Published ${result.files.length} files. ${notShownSentence(result.notShown)}`
             : `Published ${result.files.length} files.`,
-        detail: rebuilt.length > 0 ? `${outDir} (compiled again on the way: ${rebuilt.join(", ")})` : outDir,
+        detail: rebuilt.length > 0 ? `${outDir} (compiled again on the way: ${fewOrCount(rebuilt)})` : outDir,
       });
       return;
     }
